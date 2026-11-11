@@ -63,9 +63,11 @@ la distribution. Elle pourrait alors être partielle : le rendu d'abord, le rest
 
 État de la vérification : la coque a été compilée et lancée sous Linux, où elle démarre le
 moteur embarqué, affiche l'interface et arrête le moteur à la fermeture. Les installeurs macOS
-et Windows sont décrits dans `.github/workflows/installeurs.yml` mais n'ont jamais été
-fabriqués ni essayés. Ils ne sont pas signés (la signature demande un compte développeur
-Apple payant et un certificat Windows).
+(`.dmg`, environ 100 Mo) et Windows (`.exe`, environ 85 Mo) sont fabriqués par le flux
+`.github/workflows/installeurs.yml`, qui essaie aussi le moteur embarqué sur ces deux systèmes
+(analyse, suivi du compteur, export). L'application installée n'a jamais été lancée sur une
+vraie machine. Elle n'est pas signée (la signature demande un compte développeur Apple payant
+et un certificat Windows).
 
 ## Fonctions hors périmètre, presque gratuites
 

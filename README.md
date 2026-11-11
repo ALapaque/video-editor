@@ -15,9 +15,13 @@ sur une machine Linux sans carte graphique et sans vraies vidéos de moto) :
 | 1 | ligne de commande : analyse, rendu, montage minimal, mode debug, rapport | oui, sur vidéos de synthèse |
 | 2 | compteur : zone fixe, suivi à partir d'un clic | oui, sur vidéos de synthèse |
 | 3 | interface de montage et de vérification (`moto-blur ui`) | oui, dans un navigateur |
-| 4 | application de bureau Tauri | coque lancée sous Linux ; installeurs macOS et Windows jamais fabriqués |
+| 4 | application de bureau Tauri | coque lancée sous Linux ; installeurs macOS et Windows fabriqués par GitHub Actions, jamais lancés sur une vraie machine |
 
-Jamais exécutés : l'accélération CoreML et DirectML, les encodeurs matériels VideoToolbox et AMF.
+Essais faits sur les machines virtuelles de GitHub (sans carte graphique) : sur macOS, CoreML se
+charge et les encodeurs VideoToolbox H.264 et H.265 fonctionnent ; sur Windows, DirectML ne
+trouve pas de carte graphique et le moteur se replie correctement sur le processeur et sur
+l'encodeur logiciel. Restent à vérifier sur de vraies machines : la vitesse avec accélération,
+DirectML et l'encodeur AMF sur Radeon.
 
 **Pour démarrer : [TUTORIEL.md](TUTORIEL.md).** Choix techniques : [docs/CHOIX-TECHNIQUES.md](docs/CHOIX-TECHNIQUES.md).
 
@@ -210,12 +214,14 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
   coupé par le bord de l'image » est signalé.
 - Une vidéo portant une rotation dans ses métadonnées est analysée non tournée (avertissement).
 - Seule la première piste audio est conservée.
-- L'encodage matériel (VideoToolbox, AMF) et l'accélération CoreML et DirectML n'ont pas pu être
-  testés pendant le développement, fait sur une machine Linux sans carte graphique.
+- L'accélération CoreML et DirectML et l'encodeur AMF n'ont jamais tourné sur une vraie carte
+  graphique. Au début de l'analyse, le logiciel mesure l'accélération contre le processeur et
+  garde le plus rapide.
 - Les formes de flou suivent la boîte de détection (ellipse, rectangle arrondi), pas le contour
   réel de l'objet : les détecteurs utilisés ne donnent que des boîtes.
 - Le suivi du compteur donne un rectangle ; il n'a été essayé que sur des vidéos de synthèse.
-- L'application de bureau n'est pas signée et ses installeurs n'ont jamais été fabriqués.
+- L'application de bureau n'est pas signée, et ses installeurs n'ont jamais été lancés sur une
+  vraie machine.
 - Avec `--codec h264` sur une source 10 bits, la sortie est en 8 bits.
 
 ## Développement

@@ -59,6 +59,7 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
         notes.append(
             f"  {pj.KIND_LABELS[kind]} : {spec.name}, {len(d.crops)} zones par image, "
             f"exécution {d.provider.replace('ExecutionProvider', '')}"
+            + (f" ({d.note})" if d.note else "")
         )
 
     def detect(rgb: np.ndarray) -> dict[str, np.ndarray]:

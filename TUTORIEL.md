@@ -100,9 +100,10 @@ tester vite.
    passage voulu, cliquez « ✂ Couper ici ». Placez-la à la fin, « ✂ Couper ici » encore.
    Cliquez les passages à jeter puis « Supprimer le passage ».
 4. **Analyser.** Cliquez « Analyser » (bouton orange). Au premier lancement, les modèles de
-   détection sont téléchargés (environ 65 Mo). À la fin, un bandeau indique la vitesse en
-   images par seconde et si l'accélération matérielle a servi (`CoreML`, `Dml`) ou non (`CPU`).
-   **Notez cette ligne**, elle m'intéresse.
+   détection sont téléchargés (environ 65 Mo). Le logiciel mesure ensuite, pendant quelques
+   secondes, l'accélération matérielle contre le processeur et garde le plus rapide. À la fin,
+   un bandeau indique la vitesse en images par seconde, ce qui a servi (`CoreML`, `Dml` ou
+   `CPU`) et les deux temps mesurés. **Notez cette ligne**, elle m'intéresse.
 5. **Regarder.** Lancez la lecture (barre d'espace). Les zones détectées sont dessinées sur la
    vidéo avec leur score. Dans le menu « Zones », choisissez « aperçu du flou » pour voir à peu
    près le résultat.
@@ -248,18 +249,29 @@ Pour mettre à jour le logiciel : `git pull` puis `uv sync` dans le dossier `vid
 
 ## 8. L'application de bureau
 
-La même interface existe en application autonome (fenêtre propre, sans terminal ni navigateur).
-Les installeurs ne sont pas encore publiés. Pour les fabriquer :
+La même interface existe en application autonome : une fenêtre propre, sans terminal ni
+navigateur, et sans rien installer d'autre (ni uv, ni Python).
 
-- **Sur GitHub** : onglet « Actions », flux « Installeurs », « Run workflow ». Il produit un
-  `.dmg` pour Mac et un installeur `.exe` pour Windows, téléchargeables en bas de la page du
-  flux. Ce flux n'a encore jamais tourné : il peut demander une correction au premier essai.
-- **Sur votre machine** (il faut Node et Rust) :
+Les installeurs sont fabriqués automatiquement par GitHub :
 
-  ```sh
-  uv run --with pyinstaller pyinstaller desktop/engine.spec --distpath desktop/engine-dist --workpath desktop/engine-build -y
-  cd desktop && npm install && npx tauri build
-  ```
+1. Ouvrez <https://github.com/ALapaque/video-editor/actions/workflows/installeurs.yml>
+   (il faut être connecté à GitHub).
+2. Cliquez la ligne la plus récente marquée d'une coche verte.
+3. En bas de la page, section « Artifacts », téléchargez `moto-blur-macos-latest` (contient le
+   `.dmg` pour Mac Apple Silicon) ou `moto-blur-windows-latest` (contient l'installeur `.exe`).
+4. Décompressez le fichier ZIP téléchargé, puis ouvrez le `.dmg` ou lancez le `.exe`.
+
+Ces installeurs ont été fabriqués avec succès, mais l'application installée n'a jamais été
+lancée sur un vrai Mac ni un vrai PC : seule sa version Linux l'a été. Si elle ne démarre pas,
+utilisez `uv run moto-blur ui` (section 2), qui offre exactement la même interface, et
+dites-moi ce qui s'affiche.
+
+Pour les fabriquer vous-même (il faut Node et Rust) :
+
+```sh
+uv run --with pyinstaller pyinstaller desktop/engine.spec --distpath desktop/engine-dist --workpath desktop/engine-build -y
+cd desktop && npm install && npx tauri build
+```
 
 L'application n'est pas signée (la signature demande un compte développeur Apple payant et un
 certificat Windows).

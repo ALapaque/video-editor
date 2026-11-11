@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import platform
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -205,19 +206,12 @@ class Detector:
         self.crops = make_crops(width, height, spec.input_size, tile_size, tile_overlap, full_pass)
         self.batch = len(self.crops) if spec.dynamic else 1
 
-        options = ort.SessionOptions()
-        options.log_severity_level = 3
-        if spec.dynamic:
-            # Dimensions figées : CoreML et DirectML sont nettement plus rapides ainsi.
-            options.add_free_dimension_override_by_name("batch", self.batch)
-            options.add_free_dimension_override_by_name("height", spec.input_size)
-            options.add_free_dimension_override_by_name("width", spec.input_size)
         providers = _providers(device)
-        if "DmlExecutionProvider" in providers:
-            options.enable_mem_pattern = False
-            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        accelerated = "DmlExecutionProvider" in providers
         try:
-            self.session = ort.InferenceSession(str(model_path), options, providers=providers)
+            self.session = ort.InferenceSession(
+                str(model_path), self._options(accelerated), providers=providers
+            )
         except Exception as exc:  # repli processeur si le GPU refuse le modèle
             if device == "gpu":
                 raise
@@ -227,10 +221,62 @@ class Detector:
                 file=sys.stderr,
             )
             self.session = ort.InferenceSession(
-                str(model_path), options, providers=["CPUExecutionProvider"]
+                str(model_path), self._options(False), providers=["CPUExecutionProvider"]
             )
         self.provider = self.session.get_providers()[0]
         self.input_name = self.session.get_inputs()[0].name
+        self.note = ""
+        if device == "auto" and self.provider != "CPUExecutionProvider":
+            self._keep_fastest(model_path)
+
+    def _options(self, directml: bool):
+        import onnxruntime as ort
+
+        options = ort.SessionOptions()
+        options.log_severity_level = 3
+        if self.spec.dynamic:
+            # Dimensions figées : CoreML et DirectML sont nettement plus rapides ainsi.
+            options.add_free_dimension_override_by_name("batch", self.batch)
+            options.add_free_dimension_override_by_name("height", self.spec.input_size)
+            options.add_free_dimension_override_by_name("width", self.spec.input_size)
+        if directml:  # exigences documentées de DirectML
+            options.enable_mem_pattern = False
+            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        return options
+
+    def _time(self, session) -> float:
+        """Durée d'une inférence (secondes), la meilleure de deux après une mise en route."""
+        size = self.spec.input_size
+        blob = np.random.default_rng(0).random((self.batch, 3, size, size), dtype=np.float32)
+        best = float("inf")
+        for i in range(3):
+            t0 = time.perf_counter()
+            session.run(None, {self.input_name: blob})
+            if i:
+                best = min(best, time.perf_counter() - t0)
+        return best
+
+    def _keep_fastest(self, model_path: Path) -> None:
+        """Mesure l'accélération matérielle contre le processeur et garde le plus rapide.
+
+        Une accélération annoncée n'est pas toujours un gain : si le modèle est mal pris en
+        charge, une partie du calcul retombe sur le processeur avec des allers-retours coûteux.
+        """
+        import onnxruntime as ort
+
+        try:
+            cpu = ort.InferenceSession(
+                str(model_path), self._options(False), providers=["CPUExecutionProvider"]
+            )
+            fast, slow = self._time(self.session), self._time(cpu)
+        except Exception as exc:  # noqa: BLE001 - la mesure ne doit jamais empêcher l'analyse
+            self.note = f"mesure impossible ({exc})"
+            return
+        name = self.provider.replace("ExecutionProvider", "")
+        self.note = f"{name} {1000 * fast:.0f} ms, processeur {1000 * slow:.0f} ms par lot"
+        if slow < 0.9 * fast:
+            self.session, self.provider = cpu, "CPUExecutionProvider"
+            self.note += " : processeur retenu"
 
     def _blob(self, images: list[np.ndarray]) -> np.ndarray:
         batch = np.stack(images).transpose(0, 3, 1, 2)
