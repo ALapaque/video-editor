@@ -38,6 +38,20 @@ jobs:
           uv run --with pyinstaller pyinstaller desktop/engine.spec --distpath desktop/engine-dist --workpath desktop/engine-build -y
           ./desktop/engine-dist/moto-blur-engine/moto-blur-engine info
 
+      # Essai réel du moteur sur ce système : accélération (CoreML, DirectML), encodeur retenu,
+      # suivi du compteur. Informatif : un échec ici n'empêche pas de produire l'installeur.
+      - name: Essai du moteur
+        shell: bash
+        continue-on-error: true
+        run: |
+          uv run python desktop/make_sample.py essai.mp4
+          ENGINE=./desktop/engine-dist/moto-blur-engine/moto-blur-engine
+          $ENGINE probe essai.mp4
+          $ENGINE run essai.mp4 -o essai_floute.mp4 --keep 0-1
+          $ENGINE dash essai.motoblur.json --at 0.2 --box 300,400,400,120
+          $ENGINE render essai.motoblur.json -o essai_hevc.mp4 --codec hevc
+          $ENGINE probe essai_floute.mp4 essai_hevc.mp4
+
       - name: Application et installeur (Tauri)
         working-directory: desktop
         run: |
