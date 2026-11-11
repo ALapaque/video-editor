@@ -261,9 +261,15 @@ Les installeurs ne sont pas encore publiés. Pour les fabriquer :
   cd desktop && npm install && npx tauri build
   ```
 
-L'application n'est pas signée. macOS la bloquera au premier lancement : clic droit sur
-l'application, « Ouvrir », puis confirmez. Windows affichera un avertissement SmartScreen :
-« Informations complémentaires », puis « Exécuter quand même ».
+L'application n'est pas signée (la signature demande un compte développeur Apple payant et un
+certificat Windows).
+
+- **macOS** : au premier lancement, le système refuse de l'ouvrir. Ouvrez Réglages Système,
+  « Confidentialité et sécurité », descendez jusqu'au message concernant moto-blur et cliquez
+  « Ouvrir quand même ». Si le message dit que l'application est « endommagée », tapez dans le
+  Terminal : `xattr -cr /Applications/moto-blur.app`, puis relancez-la.
+- **Windows** : SmartScreen affiche un avertissement ; cliquez « Informations complémentaires »,
+  puis « Exécuter quand même ».
 
 ## 9. Ce qui m'aiderait après vos essais
 
