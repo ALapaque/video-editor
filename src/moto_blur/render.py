@@ -31,6 +31,7 @@ from av.video.frame import PictureType
 from . import project as pj
 from .analyze import needed_intervals
 from .blur import SUPPORTED_FORMATS, blur_frame
+from .dash import missing_span
 from .postprocess import ZoneIndex
 from .progress import Progress
 from .timeline import ResolvedSegment, format_time, mute_intervals, pts_to_sec, resolve_segments
@@ -68,6 +69,11 @@ def check_ready(project: pj.Project, segments: list[ResolvedSegment], output: Pa
                 f"le clip {clip.id} contient des passages gardés qui n'ont pas été analysés. "
                 "Lancez d'abord « moto-blur analyze » sur ce projet : sans cela, ces passages "
                 "sortiraient sans flou."
+            )
+        if missing_span(project, clip):
+            raise RenderError(
+                f"le suivi du compteur ne couvre pas tous les passages gardés du clip {clip.id}. "
+                "Lancez « moto-blur analyze » sur ce projet pour le prolonger."
             )
     first = used[0].video
     different = [

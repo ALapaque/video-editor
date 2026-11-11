@@ -61,6 +61,13 @@ MODELS: dict[str, ModelSpec] = {
             "2b878b38d9aa07b6ddc3ea75c4ffcb39869bc5c218e0a14002f60ab2f7b0be9a",
             27.3, 608, "end2end", False, "MIT (dépôt) — licence des poids à confirmer",
         ),
+        ModelSpec(
+            "vittrack", "dash",
+            "https://huggingface.co/opencv/object_tracking_vittrack/resolve/"
+            "868e4c941984c6363594ec34ee1c3ba0b75378a3/object_tracking_vittrack_2023sep.onnx",
+            "2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d",
+            0.7, 0, "tracker", False, "Apache-2.0",
+        ),
     ]
 }
 

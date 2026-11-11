@@ -64,6 +64,8 @@ class TrackZones:
             settings = replace(
                 settings, margin=0.0, min_margin_px=0, extend_s=0.0, temporal_pad_frames=0
             )
+        elif track.kind == "dash":
+            settings = replace(settings, margin=settings.dash_margin)
         self.settings = settings
         self.width, self.height = video.width, video.height
         obs = sorted(track.obs, key=lambda o: o[0])

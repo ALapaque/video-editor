@@ -77,7 +77,8 @@ def iter_frames(
     ne peut commencer à décoder que sur une image clé.
     """
     stream = container.streams.video[0]
-    stream.thread_type = "AUTO"
+    if not stream.codec_context.is_open:  # ne se règle qu'avant la première image décodée
+        stream.thread_type = "AUTO"
     first_pts = stream.start_time or 0
     if start_pts > first_pts:
         container.seek(int(start_pts), stream=stream, backward=True, any_frame=False)

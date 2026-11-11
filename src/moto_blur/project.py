@@ -135,6 +135,8 @@ class BlurSettings:
     face_shape: str = "ellipse"
     plate_shape: str = "rounded"
     dash_shape: str = "rounded"
+    # Marge du compteur suivi : plus faible, c'est un grand objet dont la boîte est fiable.
+    dash_margin: float = 0.08
     # Largeur du bord adouci des ellipses, en fraction de leur rayon.
     feather: float = 0.12
 

@@ -15,7 +15,7 @@ from collections.abc import Callable
 import av
 import numpy as np
 
-from . import intervals
+from . import dash, intervals
 from . import project as pj
 from .detect import Detector
 from .models import ensure_model, get_spec
@@ -128,11 +128,17 @@ def analyze_project(project: pj.Project, device: str = "auto", detect_fn: Detect
     for clip in project.clips:
         state = project.analysis.get(clip.id)
         if state is None or state.signature != signature:
-            if state is not None and state.tracks:
+            if state is not None and any(t.source == "auto" for t in state.tracks):
                 print(f"{clip.id} : réglages d'analyse modifiés, l'analyse précédente est refaite.")
-            state = pj.ClipAnalysis(signature=signature)
+            # Le compteur et les zones manuelles ne dépendent pas des réglages de détection.
+            kept = [t for t in state.tracks if t.source != "auto"] if state else []
+            state = pj.ClipAnalysis(signature=signature, tracks=kept)
             project.analysis[clip.id] = state
         todo = needed_intervals(project, clip)
+        if dash.missing_span(project, clip):
+            print(f"{clip.id} : prolongation du suivi du compteur sur les nouveaux passages.")
+            dash.extend_tracking(project, clip)
+            pj.save(project)
         if not todo:
             print(f"{clip.id} ({clip.path}) : déjà analysé, rien à faire.")
             continue
@@ -160,7 +166,7 @@ def analyze_project(project: pj.Project, device: str = "auto", detect_fn: Detect
                 state.analyzed = [list(i) for i in intervals.union(
                     [tuple(i) for i in state.analyzed], [(start, reached)]
                 )]
-            _refresh_review(project)
+            refresh_review(project)
             pj.save(project)  # sauvegarde après chaque passage : reprise possible
             if reached < end:
                 complete = False
@@ -174,12 +180,12 @@ def analyze_project(project: pj.Project, device: str = "auto", detect_fn: Detect
             )
         if not complete:
             break
-    _refresh_review(project)
+    refresh_review(project)
     pj.save(project)
     return complete
 
 
-def _refresh_review(project: pj.Project) -> None:
+def refresh_review(project: pj.Project) -> None:
     review = []
     for clip in project.clips:
         state = project.analysis.get(clip.id)
@@ -187,4 +193,5 @@ def _refresh_review(project: pj.Project) -> None:
             review.extend(
                 build_review(clip.id, state.tracks, clip.video, project.analysis_settings.detect_every)
             )
+            review.extend(dash.build_dash_review(clip, state.tracks))
     project.review = review

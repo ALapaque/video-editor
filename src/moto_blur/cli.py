@@ -3,6 +3,7 @@
     moto-blur analyze VIDEO [VIDEO…]   analyse et écrit le fichier projet
     moto-blur render  PROJET -o SORTIE produit la vidéo finale
     moto-blur run     VIDEO… -o SORTIE enchaîne les deux
+    moto-blur dash    PROJET --box …   floute le compteur (zone fixe ou suivi)
     moto-blur report  PROJET           affiche les passages à vérifier
     moto-blur probe   VIDEO            affiche les caractéristiques d'une vidéo
     moto-blur info                     affiche l'accélération disponible sur cette machine
@@ -169,6 +170,53 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_box(text: str, video: pj.VideoInfo) -> tuple[int, int, int, int]:
+    try:
+        x, y, w, h = (float(v) for v in text.split(","))
+    except ValueError:
+        raise SystemExit(f"Erreur : --box attend X,Y,LARGEUR,HAUTEUR en pixels, reçu {text!r}") from None
+    if w <= 0 or h <= 0:
+        raise SystemExit("Erreur : --box : la largeur et la hauteur doivent être positives.")
+    return (
+        int(max(0, x)), int(max(0, y)), int(min(video.width, x + w)), int(min(video.height, y + h))
+    )
+
+
+def cmd_dash(args: argparse.Namespace) -> int:
+    from . import dash
+    from .analyze import refresh_review
+    from .progress import Progress
+    from .timeline import sec_to_pts
+
+    project = pj.load(Path(args.project_file))
+    clip = project.clip(args.clip) if args.clip else project.clips[0]
+    if args.clear:
+        n = dash.clear_dash(project, clip)
+        print(f"{n} zone(s) de compteur supprimée(s) sur {clip.id}.")
+    elif not args.box:
+        raise SystemExit("Erreur : indiquez --box X,Y,LARGEUR,HAUTEUR (ou --clear).")
+    elif args.fixed:
+        box = _parse_box(args.box, clip.video)
+        dash.set_fixed_zone(project, clip, box)
+        print(f"Zone fixe du compteur enregistrée sur {clip.id} : {box}")
+    else:
+        box = _parse_box(args.box, clip.video)
+        seed = sec_to_pts(args.at or 0.0, clip.video)
+        span = dash.dash_span(project, clip)
+        if span is None:
+            raise SystemExit(f"Erreur : le clip {clip.id} n'a aucun passage gardé.")
+        total = round((span[1] - span[0]) * clip.video.tb * clip.video.fps_fraction)
+        progress = Progress(f"Suivi du compteur {clip.id}", total, float(clip.video.fps_fraction))
+        track = dash.track_from_click(project, clip, seed, box, args.direction, progress)
+        print(progress.close())
+        lost = sum(1 for o in track.obs if o[5] < dash.LOST_SCORE)
+        print(f"Compteur suivi sur {len(track.obs)} images ; suivi incertain sur {lost} image(s).")
+    refresh_review(project)
+    pj.save(project)
+    _write_report(project)
+    return 0
+
+
 def cmd_probe(args: argparse.Namespace) -> int:
     from .video import probe
 
@@ -278,6 +326,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="afficher les passages à vérifier")
     p.add_argument("project_file", metavar="PROJET")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("dash", help="flouter le compteur : zone fixe ou suivi à partir d'une image")
+    p.add_argument("project_file", metavar="PROJET")
+    p.add_argument("--box", metavar="X,Y,L,H", help="rectangle du compteur en pixels : coin haut-gauche, largeur, hauteur")
+    p.add_argument("--at", type=parse_time, metavar="TEMPS", help="instant (temps source) de l'image où le rectangle est donné (défaut : début)")
+    p.add_argument("--clip", help="identifiant du clip (défaut : le premier)")
+    p.add_argument("--fixed", action="store_true", help="zone fixe sur tout le clip, sans suivi")
+    p.add_argument("--direction", choices=["both", "forward", "backward"], default="both", help="sens du suivi à partir de l'image donnée")
+    p.add_argument("--clear", action="store_true", help="supprimer les zones de compteur du clip")
+    p.set_defaults(func=cmd_dash)
 
     p = sub.add_parser("probe", help="afficher les caractéristiques d'une vidéo")
     p.add_argument("videos", nargs="+", metavar="VIDEO")
