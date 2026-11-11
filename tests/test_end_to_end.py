@@ -306,3 +306,25 @@ def test_solid_style_is_a_flat_fill():
 
 def test_fps_constant_is_consistent():
     assert FPS == 30
+
+
+def test_ellipse_blur_hides_the_box_and_keeps_far_corners(tmp_path):
+    from moto_blur.postprocess import Zone
+
+    rng = np.random.default_rng(0)
+    frame = av.VideoFrame.from_ndarray(rng.integers(0, 255, (180, 320, 3), dtype=np.uint8), format="rgb24").reformat(format="yuv420p")
+    before = np.frombuffer(frame.planes[0], dtype=np.uint8).reshape(180, -1)[:, :320].copy()
+    blur_frame(frame, [Zone("face", (100, 40, 220, 140), "ellipse")], feather=0.12)
+    after = np.frombuffer(frame.planes[0], dtype=np.uint8).reshape(180, -1)[:, :320]
+    assert after[70:110, 135:185].std() < 8  # centre : illisible
+    assert (after[40:44, 100:104] == before[40:44, 100:104]).all()  # coin du rectangle : intact
+    assert (after[:40] == before[:40]).all()
+
+
+def test_zone_partly_outside_the_frame_is_clipped(tmp_path):
+    from moto_blur.postprocess import Zone
+
+    frame = av.VideoFrame.from_ndarray(np.random.default_rng(0).integers(0, 255, (180, 320, 3), dtype=np.uint8), format="rgb24").reformat(format="yuv420p")
+    blur_frame(frame, [Zone("face", (-40, -30, 60, 50), "ellipse"), Zone("plate", (280, 150, 360, 200), "rounded", 8)])
+    y = np.frombuffer(frame.planes[0], dtype=np.uint8).reshape(180, -1)[:, :320]
+    assert y[0:20, 0:20].std() < 12 and y[160:178, 290:318].std() < 12

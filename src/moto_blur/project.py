@@ -17,13 +17,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from fractions import Fraction
 from pathlib import Path
 
 PROJECT_VERSION = 1
-KINDS = ("face", "plate")
-KIND_LABELS = {"face": "visage", "plate": "plaque"}
+KINDS = ("face", "plate")  # catégories détectées automatiquement
+KIND_LABELS = {"face": "visage", "plate": "plaque", "dash": "compteur", "manual": "zone manuelle"}
 
 
 @dataclass
@@ -131,14 +131,32 @@ class BlurSettings:
     style: str = "pixelate"
     # Nombre maximal de cellules de mosaïque sur le plus grand côté de la zone.
     cells: int = 5
+    # Forme du flou par catégorie : "ellipse", "rounded" (rectangle arrondi) ou "rect".
+    face_shape: str = "ellipse"
+    plate_shape: str = "rounded"
+    dash_shape: str = "rounded"
+    # Largeur du bord adouci des ellipses, en fraction de leur rayon.
+    feather: float = 0.12
+
+    def shape_for(self, kind: str) -> str:
+        return {"face": self.face_shape, "plate": self.plate_shape, "dash": self.dash_shape}.get(
+            kind, "rect"
+        )
 
 
 @dataclass
 class Track:
     id: int
-    kind: str
-    # Observations brutes : [pts, x1, y1, x2, y2, score]
+    kind: str  # "face", "plate", "dash" (compteur) ou "manual"
+    # Observations brutes : [pts, x1, y1, x2, y2, score]. Pour une zone manuelle, ce sont les
+    # images clés posées à la main ; la zone est interpolée entre elles.
     obs: list[list[float]]
+    # "auto" : détection ; "tracker" : suivi à partir d'un clic ; "manual" : tracée à la main.
+    source: str = "auto"
+    # Corrections faites à la vérification : piste ignorée (faux positif), flou prolongé.
+    disabled: bool = False
+    extend_before_s: float | None = None
+    extend_after_s: float | None = None
 
 
 @dataclass
@@ -210,7 +228,17 @@ def add_clip(project: Project, video_path: Path, video: VideoInfo, audio: AudioI
 
 def _track_to_json(t: Track) -> str:
     obs = [[int(o[0]), int(o[1]), int(o[2]), int(o[3]), int(o[4]), round(float(o[5]), 3)] for o in t.obs]
-    return json.dumps({"id": t.id, "kind": t.kind, "obs": obs}, separators=(",", ":"))
+    doc: dict = {"id": t.id, "kind": t.kind}
+    if t.source != "auto":
+        doc["source"] = t.source
+    if t.disabled:
+        doc["disabled"] = True
+    if t.extend_before_s is not None:
+        doc["extend_before_s"] = t.extend_before_s
+    if t.extend_after_s is not None:
+        doc["extend_after_s"] = t.extend_after_s
+    doc["obs"] = obs
+    return json.dumps(doc, separators=(",", ":"))
 
 
 def dumps(project: Project) -> str:
@@ -249,6 +277,12 @@ def save(project: Project, path: Path | None = None) -> None:
     os.replace(tmp, path)
 
 
+def _known(cls, values: dict):
+    """Construit un bloc de réglages en ignorant les clés inconnues (fichier plus récent)."""
+    names = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in values.items() if k in names})
+
+
 def load(path: Path) -> Project:
     path = Path(path)
     doc = json.loads(path.read_text(encoding="utf-8"))
@@ -261,14 +295,20 @@ def load(path: Path) -> Project:
     settings = doc.get("settings", {})
     analysis = {}
     for clip_id, a in doc.get("analysis", {}).items():
-        tracks = [Track(t["id"], t["kind"], t["obs"]) for t in a.get("tracks", [])]
+        tracks = [
+            Track(
+                t["id"], t["kind"], t["obs"], t.get("source", "auto"), t.get("disabled", False),
+                t.get("extend_before_s"), t.get("extend_after_s"),
+            )
+            for t in a.get("tracks", [])
+        ]
         analysis[clip_id] = ClipAnalysis(a.get("signature", ""), a.get("analyzed", []), tracks)
     return Project(
         clips=clips,
         timeline=[Segment(**s) for s in doc.get("timeline", [])],
         mutes=[Mute(**m) for m in doc.get("mutes", [])],
-        analysis_settings=AnalysisSettings(**settings.get("analysis", {})),
-        blur_settings=BlurSettings(**settings.get("blur", {})),
+        analysis_settings=_known(AnalysisSettings, settings.get("analysis", {})),
+        blur_settings=_known(BlurSettings, settings.get("blur", {})),
         analysis=analysis,
         review=doc.get("review", []),
         path=path,

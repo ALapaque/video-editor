@@ -50,8 +50,51 @@ def plane_array(plane: av.video.plane.VideoPlane, bytes_per_sample: int) -> np.n
     return full[:, : plane.width]
 
 
-def blur_frame(frame: av.VideoFrame, zones: list[Zone], cells: int = 5, style: str = "pixelate") -> None:
-    """Floute en place les zones (x1, y1, x2, y2 en pixels de l'image) d'une image YUV planaire."""
+def shape_mask(
+    h: int, w: int, shape: str, box: tuple[float, float, float, float], radius: float, feather: float
+) -> np.ndarray | None:
+    """Masque (h, w) entre 0 et 1 d'une forme dont `box` est donnée dans le repère du masque.
+
+    `box` peut dépasser du masque (zone au bord de l'image). None signifie « tout le rectangle ».
+    """
+    if shape == "rect":
+        return None
+    x1, y1, x2, y2 = box
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if shape == "ellipse":
+        center = (round((x1 + x2) / 2 * 16), round((y1 + y2) / 2 * 16))
+        axes = (max(1, round((x2 - x1) / 2 * 16)), max(1, round((y2 - y1) / 2 * 16)))
+        cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1, cv2.LINE_AA, 4)
+        sigma = feather * min(x2 - x1, y2 - y1) / 2 / 2.5
+        out = mask.astype(np.float32) / 255
+        if sigma >= 0.6:
+            # Bord adouci, calculé sur un masque élargi pour ne pas créer d'arête au bord.
+            pad = int(3 * sigma) + 1
+            big = np.zeros((h + 2 * pad, w + 2 * pad), dtype=np.uint8)
+            cv2.ellipse(big, (center[0] + pad * 16, center[1] + pad * 16), axes, 0, 0, 360, 255, -1, cv2.LINE_AA, 4)
+            out = cv2.GaussianBlur(big.astype(np.float32) / 255, (0, 0), sigma)[pad:-pad, pad:-pad]
+        return out
+    # rectangle arrondi : un rectangle plein en croix, plus quatre disques dans les coins
+    r = max(0.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
+    if r < 1:
+        return None
+    ix1, iy1, ix2, iy2 = round(x1), round(y1), round(x2), round(y2)
+    ir = round(r)
+    cv2.rectangle(mask, (ix1 + ir, iy1), (ix2 - ir - 1, iy2 - 1), 255, -1)
+    cv2.rectangle(mask, (ix1, iy1 + ir), (ix2 - 1, iy2 - ir - 1), 255, -1)
+    for cx, cy in ((ix1 + ir, iy1 + ir), (ix2 - ir - 1, iy1 + ir), (ix1 + ir, iy2 - ir - 1), (ix2 - ir - 1, iy2 - ir - 1)):
+        cv2.circle(mask, (cx, cy), ir, 255, -1, cv2.LINE_AA)
+    return mask.astype(np.float32) / 255
+
+
+def blur_frame(
+    frame: av.VideoFrame, zones: list, cells: int = 5, style: str = "pixelate", feather: float = 0.12
+) -> None:
+    """Floute en place les zones d'une image YUV planaire.
+
+    `zones` : objets `Zone` (boîte, forme, rayon), ou simples boîtes (x1, y1, x2, y2) traitées
+    comme des rectangles. Les boîtes sont en pixels de l'image et peuvent en dépasser.
+    """
     if not zones:
         return
     if frame.format.name not in SUPPORTED_FORMATS:
@@ -60,10 +103,24 @@ def blur_frame(frame: av.VideoFrame, zones: list[Zone], cells: int = 5, style: s
     for plane in frame.planes:
         data = plane_array(plane, bps)
         sx, sy = frame.width / plane.width, frame.height / plane.height
-        for x1, y1, x2, y2 in zones:
+        for zone in zones:
+            box = getattr(zone, "box", zone)
+            shape = getattr(zone, "shape", "rect")
+            radius = getattr(zone, "radius", 0)
+            x1, y1, x2, y2 = box
             # Arrondi vers l'extérieur : un plan de couleur à demi-résolution couvre toute la zone.
-            px1, py1 = int(x1 // sx), int(y1 // sy)
+            px1, py1 = max(0, int(x1 // sx)), max(0, int(y1 // sy))
             px2 = min(plane.width, int(-(-x2 // sx)))
             py2 = min(plane.height, int(-(-y2 // sy)))
-            if px2 > px1 and py2 > py1:
-                obscure_region(data[py1:py2, px1:px2], cells, style)
+            if px2 <= px1 or py2 <= py1:
+                continue
+            region = data[py1:py2, px1:px2]
+            local = (x1 / sx - px1, y1 / sy - py1, x2 / sx - px1, y2 / sy - py1)
+            mask = shape_mask(py2 - py1, px2 - px1, shape, local, radius / sx, feather)
+            if mask is None:
+                obscure_region(region, cells, style)
+                continue
+            hidden = region.copy()
+            obscure_region(hidden, cells, style)
+            mixed = hidden.astype(np.float32) * mask + region.astype(np.float32) * (1 - mask)
+            region[...] = np.rint(mixed).astype(region.dtype)

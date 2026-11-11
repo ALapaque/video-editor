@@ -19,7 +19,7 @@ Tout est exprimé en PTS source : rien ne dépend du montage.
 from __future__ import annotations
 
 import bisect
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 
 import numpy as np
@@ -43,11 +43,27 @@ def _shift(box: Box, dx: float, dy: float) -> Box:
     return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
 
 
+@dataclass(frozen=True)
+class Zone:
+    """Zone à flouter sur une image. La boîte peut dépasser de l'image : le flou la rogne."""
+
+    kind: str
+    box: tuple[int, int, int, int]
+    shape: str = "rect"  # "rect", "rounded" ou "ellipse"
+    radius: int = 0  # rayon des coins pour "rounded"
+    track_id: int = 0
+
+
 class TrackZones:
     """Calcule la zone de flou d'une piste à n'importe quel instant."""
 
     def __init__(self, track: Track, settings: BlurSettings, video: VideoInfo):
         self.track = track
+        if track.source == "manual":
+            # Zone tracée à la main : exactement ce qui a été dessiné, sans marge ni prolongation.
+            settings = replace(
+                settings, margin=0.0, min_margin_px=0, extend_s=0.0, temporal_pad_frames=0
+            )
         self.settings = settings
         self.width, self.height = video.width, video.height
         obs = sorted(track.obs, key=lambda o: o[0])
@@ -56,7 +72,10 @@ class TrackZones:
         self.scores = [float(o[5]) for o in obs]
         self.frame_pts = float(video.frame_pts)
         self.pts_per_s = float(1 / video.tb)
-        self.extend_pts = settings.extend_s * self.pts_per_s
+        before = settings.extend_s if track.extend_before_s is None else track.extend_before_s
+        after = settings.extend_s if track.extend_after_s is None else track.extend_after_s
+        self.extend_before = before * self.pts_per_s
+        self.extend_after = after * self.pts_per_s
         self.pad_pts = settings.temporal_pad_frames * self.frame_pts
         self.v_start = self._velocity(0, min(len(obs) - 1, 4))
         self.v_end = self._velocity(max(0, len(obs) - 5), len(obs) - 1)
@@ -75,23 +94,23 @@ class TrackZones:
     @property
     def start(self) -> float:
         """Début de la zone de flou (prolongation et voisinage compris), en PTS."""
-        return self.pts[0] - self.extend_pts - self.pad_pts
+        return self.pts[0] - self.extend_before - self.pad_pts
 
     @property
     def end(self) -> float:
-        return self.pts[-1] + self.extend_pts + self.pad_pts
+        return self.pts[-1] + self.extend_after + self.pad_pts
 
     def raw_box(self, pts: float) -> Box | None:
         """Boîte interpolée ou prolongée à l'instant `pts`, sans marge. None hors piste."""
         first, last = self.pts[0], self.pts[-1]
         if pts < first:
             dt = first - pts
-            if dt > self.extend_pts:
+            if dt > self.extend_before:
                 return None
             return self._extended(self.boxes[0], self.v_start, -dt)
         if pts > last:
             dt = pts - last
-            if dt > self.extend_pts:
+            if dt > self.extend_after:
                 return None
             return self._extended(self.boxes[-1], self.v_end, dt)
         i = bisect.bisect_right(self.pts, pts) - 1
@@ -108,8 +127,8 @@ class TrackZones:
         growth = 1 + self.settings.extend_growth * abs(dt) / self.pts_per_s
         return _scale(_union(box, moved), growth)
 
-    def zone(self, pts: float) -> tuple[int, int, int, int] | None:
-        """Zone de flou finale (x1, y1, x2, y2 entiers, bornée à l'image) à l'instant `pts`."""
+    def _padded(self, pts: float) -> tuple[Box, float, float] | None:
+        """Boîte avec voisinage temporel et marge (non bornée à l'image), et les deux marges."""
         box: Box | None = None
         offsets = [0.0]
         for k in range(1, self.settings.temporal_pad_frames + 1):
@@ -123,13 +142,45 @@ class TrackZones:
         s = self.settings
         mx = max((box[2] - box[0]) * s.margin, s.min_margin_px)
         my = max((box[3] - box[1]) * s.margin, s.min_margin_px)
-        x1 = max(0, int(np.floor(box[0] - mx)))
-        y1 = max(0, int(np.floor(box[1] - my)))
-        x2 = min(self.width, int(np.ceil(box[2] + mx)))
-        y2 = min(self.height, int(np.ceil(box[3] + my)))
+        return (box[0] - mx, box[1] - my, box[2] + mx, box[3] + my), mx, my
+
+    def zone(self, pts: float) -> tuple[int, int, int, int] | None:
+        """Rectangle englobant de la zone de flou (entiers, borné à l'image) à l'instant `pts`."""
+        padded = self._padded(pts)
+        if padded is None:
+            return None
+        box = padded[0]
+        x1, y1 = max(0, int(np.floor(box[0]))), max(0, int(np.floor(box[1])))
+        x2, y2 = min(self.width, int(np.ceil(box[2]))), min(self.height, int(np.ceil(box[3])))
         if x2 <= x1 or y2 <= y1:
             return None
         return (x1, y1, x2, y2)
+
+    def shaped(self, pts: float) -> Zone | None:
+        """Zone de flou avec sa forme. La forme contient toujours la boîte détectée entière.
+
+        - Ellipse : une ellipse inscrite dans un rectangle n'en couvre pas les coins. Pour
+          qu'elle contienne toute la boîte détectée, ses axes valent au moins racine de 2 fois
+          ceux de la boîte (plus la largeur du bord adouci).
+        - Rectangle arrondi : le rayon des coins est limité par la marge, de sorte que les coins
+          de la boîte détectée restent couverts.
+        """
+        padded = self._padded(pts)
+        if padded is None or self.zone(pts) is None:
+            return None
+        (x1, y1, x2, y2), mx, my = padded
+        shape = "rect" if self.track.source == "manual" else self.settings.shape_for(self.track.kind)
+        radius = 0
+        if shape == "ellipse":
+            factor = 1.4143 / (1 - min(max(self.settings.feather, 0.0), 0.5))
+            hw = max((x2 - x1) / 2, ((x2 - x1) / 2 - mx) * factor)
+            hh = max((y2 - y1) / 2, ((y2 - y1) / 2 - my) * factor)
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            x1, y1, x2, y2 = cx - hw, cy - hh, cx + hw, cy + hh
+        elif shape == "rounded":
+            radius = int(min(2 * min(mx, my), (x2 - x1) / 2, (y2 - y1) / 2))
+        box = (int(np.floor(x1)), int(np.floor(y1)), int(np.ceil(x2)), int(np.ceil(y2)))
+        return Zone(self.track.kind, box, shape, radius, self.track.id)
 
     def observation(self, pts: int) -> list[float] | None:
         """Observation brute exactement à cet instant (pour le mode debug)."""
@@ -143,7 +194,7 @@ class ZoneIndex:
     """Toutes les zones de flou d'un clip, avec recherche rapide par instant."""
 
     def __init__(self, tracks: list[Track], settings: BlurSettings, video: VideoInfo):
-        self.items = [TrackZones(t, settings, video) for t in tracks if t.obs]
+        self.items = [TrackZones(t, settings, video) for t in tracks if t.obs and not t.disabled]
         self.bucket = max(1.0, float(1 / video.tb))  # une case par seconde
         self.buckets: dict[int, list[TrackZones]] = {}
         for item in self.items:
@@ -154,13 +205,17 @@ class ZoneIndex:
         return [z for z in self.buckets.get(int(pts // self.bucket), []) if z.start <= pts <= z.end]
 
     def zones(self, pts: float) -> list[tuple[str, tuple[int, int, int, int]]]:
-        """Zones à flouter à l'instant `pts` : liste de (catégorie, boîte)."""
+        """Rectangles englobants à l'instant `pts` : liste de (catégorie, boîte bornée)."""
         out = []
         for item in self.active(pts):
             z = item.zone(pts)
             if z is not None:
                 out.append((item.track.kind, z))
         return out
+
+    def shaped(self, pts: float) -> list[Zone]:
+        """Zones à flouter à l'instant `pts`, avec leur forme."""
+        return [z for item in self.active(pts) if (z := item.shaped(pts)) is not None]
 
 
 # --- Passages douteux -----------------------------------------------------
@@ -213,7 +268,7 @@ def build_review(
     """Regroupe les pistes douteuses d'un clip en passages à vérifier (PTS source)."""
     flagged = []
     for t in tracks:
-        if not t.obs:
+        if not t.obs or t.disabled or t.source != "auto":
             continue
         reasons = track_reasons(t, video, detect_every)
         if reasons:

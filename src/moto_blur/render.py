@@ -38,7 +38,7 @@ from .video import iter_frames
 
 FADE_S = 0.008  # fondu audio à chaque point de coupe ou de silence
 COPYABLE_AUDIO = {"aac", "mp3", "ac3", "eac3", "alac"}
-DEBUG_COLORS = {"face": (60, 220, 60), "plate": (60, 200, 255)}  # RVB
+DEBUG_COLORS = {"face": (60, 220, 60), "plate": (60, 200, 255), "dash": (255, 90, 200), "manual": (255, 255, 255)}  # RVB
 
 
 class RenderError(Exception):
@@ -378,12 +378,19 @@ def _draw_debug(frame: av.VideoFrame, index: ZoneIndex, video: pj.VideoInfo) -> 
     thick = max(1, round(2 * scale))
     font = cv2.FONT_HERSHEY_SIMPLEX
     for item in index.active(frame.pts):
-        zone = item.zone(frame.pts)
-        if zone is None:
+        shaped = item.shaped(frame.pts)
+        if shaped is None:
             continue
+        zone = shaped.box
         color = DEBUG_COLORS.get(item.track.kind, (255, 255, 255))
-        # Zone qui serait floutée : cadre jaune fin.
-        cv2.rectangle(rgb, zone[:2], zone[2:], (255, 230, 0), max(1, thick // 2))
+        # Zone qui serait floutée : contour jaune fin, à la forme réelle du flou.
+        thin = max(1, thick // 2)
+        if shaped.shape == "ellipse":
+            center = ((zone[0] + zone[2]) // 2, (zone[1] + zone[3]) // 2)
+            axes = ((zone[2] - zone[0]) // 2, (zone[3] - zone[1]) // 2)
+            cv2.ellipse(rgb, center, axes, 0, 0, 360, (255, 230, 0), thin, cv2.LINE_AA)
+        else:
+            cv2.rectangle(rgb, zone[:2], zone[2:], (255, 230, 0), thin)
         obs = item.observation(frame.pts)
         label = pj.KIND_LABELS[item.track.kind]
         if obs is not None:
@@ -418,14 +425,14 @@ def process_frame(
     if debug:
         frame = _draw_debug(frame, index, video)
     else:
-        zones = [z for _, z in index.zones(pts)]
+        zones = index.shaped(pts)
         if zones:
             if frame.format.name not in SUPPORTED_FORMATS:
                 frame = frame.reformat(format="yuv420p")
             # Indispensable : le décodeur réutilise cette image comme référence pour les
             # suivantes. Sans copie, le flou contaminerait les images décodées ensuite.
             frame.make_writable()
-            blur_frame(frame, zones, blur.cells, blur.style)
+            blur_frame(frame, zones, blur.cells, blur.style, blur.feather)
     if frame.format.name != pix_fmt:
         frame = frame.reformat(format=pix_fmt)
     frame.pict_type = PictureType.NONE  # l'encodeur choisit lui-même ses images clés

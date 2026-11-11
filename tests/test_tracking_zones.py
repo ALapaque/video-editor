@@ -271,3 +271,70 @@ def test_merge_detections_never_shrinks_coverage():
     assert len(merged) == 2
     assert merged[0].tolist() == [95, 98, 205, 143, pytest.approx(0.9)]
     assert merged[1, :4].tolist() == [800, 800, 840, 820]
+
+
+# --- Formes du flou et corrections manuelles -------------------------------
+
+
+def _inside_ellipse(zone, x, y) -> bool:
+    x1, y1, x2, y2 = zone.box
+    cx, cy, a, b = (x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1) / 2, (y2 - y1) / 2
+    return ((x - cx) / a) ** 2 + ((y - cy) / b) ** 2 <= 1.0
+
+
+@pytest.mark.parametrize("margin", [0.0, 0.1, 0.3, 0.6])
+def test_ellipse_always_contains_the_whole_detected_box(video_info, margin):
+    t = pj.Track(1, "face", [[0, 400, 300, 460, 380, 0.9]])
+    s = settings(margin=margin, face_shape="ellipse", feather=0.12)
+    zone = TrackZones(t, s, video_info).shaped(0)
+    assert zone.shape == "ellipse"
+    for x, y in [(400, 300), (460, 300), (400, 380), (460, 380)]:
+        # même en retirant le bord adouci, les coins de la boîte restent dans l'ellipse
+        cx, cy = (zone.box[0] + zone.box[2]) / 2, (zone.box[1] + zone.box[3]) / 2
+        assert _inside_ellipse(zone, cx + (x - cx) / (1 - 0.12), cy + (y - cy) / (1 - 0.12))
+
+
+def test_rounded_corners_never_uncover_the_detected_box(video_info):
+    from moto_blur.blur import shape_mask
+
+    t = pj.Track(1, "plate", [[0, 500, 400, 620, 440, 0.9]])
+    for margin, min_px in [(0.0, 3), (0.1, 6), (0.3, 6)]:
+        zone = TrackZones(t, settings(margin=margin, min_margin_px=min_px), video_info).shaped(0)
+        assert zone.shape == "rounded"
+        x1, y1, x2, y2 = zone.box
+        mask = shape_mask(y2 - y1, x2 - x1, "rounded", (0, 0, x2 - x1, y2 - y1), zone.radius, 0.12)
+        covered = np.ones((y2 - y1, x2 - x1)) if mask is None else mask
+        assert covered[400 - y1 : 440 - y1, 500 - x1 : 620 - x1].min() >= 0.99
+
+
+def test_disabled_track_is_not_blurred_and_extension_can_be_overridden(video_info):
+    t = pj.Track(1, "plate", [[i * F, 500, 400, 620, 440, 0.9] for i in range(10, 20)])
+    index = ZoneIndex([t], settings(extend_s=0.1), video_info)
+    assert index.shaped(15 * F) and not index.shaped(2 * F)
+    t.extend_before_s = 0.3  # flou prolongé à la main : 9 images avant la première détection
+    index = ZoneIndex([t], settings(extend_s=0.1), video_info)
+    assert index.shaped(2 * F) and not index.shaped(0)
+    assert index.shaped(22 * F) and not index.shaped(25 * F)  # la fin garde le réglage général
+    t.disabled = True
+    assert ZoneIndex([t], settings(), video_info).shaped(15 * F) == []
+
+
+def test_manual_zone_is_exactly_what_was_drawn(video_info):
+    t = pj.Track(7, "manual", [[10 * F, 100, 100, 300, 200, 1.0], [20 * F, 200, 100, 400, 200, 1.0]], source="manual")
+    index = ZoneIndex([t], pj.BlurSettings(), video_info)
+    (zone,) = index.shaped(15 * F)
+    assert zone.box == (150, 100, 350, 200) and zone.shape == "rect"
+    assert index.shaped(9 * F) == [] and index.shaped(21 * F) == []
+    assert build_review("c1", [t], video_info) == []
+
+
+def test_track_corrections_survive_save_and_load(tmp_path, video_info):
+    p = pj.Project(clips=[pj.Clip("c1", "a.mp4", "x", video_info)])
+    p.analysis["c1"] = pj.ClipAnalysis("s", [], [
+        pj.Track(1, "face", [[0, 1, 2, 3, 4, 0.5]], disabled=True, extend_after_s=1.5),
+        pj.Track(2, "dash", [[0, 1, 2, 3, 4, 1.0]], source="manual"),
+    ])
+    pj.save(p, tmp_path / "p.json")
+    a, b = pj.load(tmp_path / "p.json").analysis["c1"].tracks
+    assert a.disabled and a.extend_after_s == 1.5 and a.extend_before_s is None and a.source == "auto"
+    assert b.kind == "dash" and b.source == "manual" and not b.disabled
