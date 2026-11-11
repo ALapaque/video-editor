@@ -136,10 +136,10 @@ export const kindLabel: Record<string, string> = {
 
 // --- Appels au moteur -------------------------------------------------------
 
-export function notify(message: string, kind: "info" | "error" = "info"): void {
+export function notify(message: string, kind: "info" | "error" = "info", sticky = false): void {
   state.toast = message;
   state.toastKind = kind;
-  if (kind === "info") window.setTimeout(() => state.toast === message && (state.toast = ""), 5000);
+  if (kind === "info" && !sticky) window.setTimeout(() => state.toast === message && (state.toast = ""), 5000);
 }
 
 function apply(next: State): void {
@@ -168,7 +168,7 @@ export async function refresh(): Promise<void> {
     state.loaded = true;
     const job = next.job;
     if (before === "running" && job && job.state !== "running" && job.message) {
-      notify(job.message, job.state === "error" ? "error" : "info");
+      notify(job.message, job.state === "error" ? "error" : "info", true); // reste affiché jusqu'au clic
     }
     if (next.project && !job?.state.startsWith("run") && next.project.clips.some((c) => !c.proxy && !c.missing)) {
       if (job?.state !== "error" && job?.state !== "cancelled") await send("POST", "/api/proxies");

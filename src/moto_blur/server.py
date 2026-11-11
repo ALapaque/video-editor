@@ -388,7 +388,8 @@ class Engine:
             self.job = job
 
         def on_progress(p: progress.Progress) -> None:
-            job.done, job.total, job.fps, job.label = p.done, p.total, p.fps, p.label
+            job.done, job.total, job.label = p.done, p.total, p.label
+            job.fps = p.fps if p.unit == "images" else 0.0
             if job.cancel:
                 raise progress.Cancelled()
 
@@ -431,7 +432,10 @@ class Engine:
         def work(job: Job) -> str:
             job.label = "Chargement des modèles"
             complete = analyze_project(project, device=device)
-            return "Analyse terminée." if complete else "Analyse interrompue : ce qui est fait est conservé."
+            note = " ".join(getattr(project, "notes", []))
+            if not complete:
+                return "Analyse interrompue : ce qui est fait est conservé."
+            return f"Analyse terminée. {note}".strip()
 
         self.start("analyze", "Analyse", work)
 
@@ -698,7 +702,30 @@ def make_server(engine: Engine, port: int = 0) -> ThreadingHTTPServer:
     return server
 
 
-def serve(project_path: Path | None, port: int = 0, open_browser: bool = True) -> None:
+def _exit_when_parent_closes() -> None:
+    """Arrête le moteur quand l'application de bureau qui l'a lancé se ferme.
+
+    L'application garde ouvert le tube relié à l'entrée standard du moteur ; quand elle
+    disparaît (fermeture normale ou plantage), la lecture se termine et le moteur s'arrête.
+    """
+    import sys
+
+    def watch() -> None:
+        try:
+            while sys.stdin.buffer.read(1024):
+                pass
+        except (OSError, ValueError):
+            pass
+        os._exit(0)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
+def serve(
+    project_path: Path | None, port: int = 0, open_browser: bool = True, exit_with_parent: bool = False
+) -> None:
+    if exit_with_parent:
+        _exit_when_parent_closes()
     engine = Engine()
     if project_path is not None:
         engine.open_project(project_path)
@@ -706,7 +733,8 @@ def serve(project_path: Path | None, port: int = 0, open_browser: bool = True) -
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     # Ligne lue par l'application de bureau pour connaître le port : ne pas en changer le format.
     print(f"MOTO_BLUR_UI {url}", flush=True)
-    print("Interface ouverte dans le navigateur. Ctrl+C dans ce terminal pour arrêter.", flush=True)
+    if open_browser:
+        print("Interface ouverte dans le navigateur. Ctrl+C dans ce terminal pour arrêter.", flush=True)
     if open_browser:
         import webbrowser
 

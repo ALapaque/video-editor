@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>moto-blur</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #111418; color: #e6e9ee; font: 14px system-ui, sans-serif; }
+      main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+      p { color: #93a0b0; max-width: 520px; text-align: center; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>moto-blur</h1>
+      <p id="status">Démarrage du moteur…</p>
+    </main>
+    <script>
+      // Le programme hôte remplace ce texte si le moteur ne démarre pas.
+      window.motoBlurStatus = (text) => (document.getElementById("status").textContent = text);
+    </script>
+  </body>
+</html>

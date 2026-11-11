@@ -7,9 +7,19 @@ rogner, supprimer des passages, assembler plusieurs clips, couper le son.
 Tout le traitement est local : aucune vidéo ne quitte la machine. Le seul appel réseau est le
 téléchargement des modèles de détection au premier lancement.
 
-**État : phase 1, prototype en ligne de commande.** Le floutage du compteur (phase 2),
-l'interface de montage et de vérification (phase 3) et l'application de bureau (phase 4) ne
-sont pas encore faits.
+**État.** Les quatre phases sont codées ; seule une partie a pu être vérifiée (développement
+sur une machine Linux sans carte graphique et sans vraies vidéos de moto) :
+
+| Phase | Contenu | Vérifié |
+|---|---|---|
+| 1 | ligne de commande : analyse, rendu, montage minimal, mode debug, rapport | oui, sur vidéos de synthèse |
+| 2 | compteur : zone fixe, suivi à partir d'un clic | oui, sur vidéos de synthèse |
+| 3 | interface de montage et de vérification (`moto-blur ui`) | oui, dans un navigateur |
+| 4 | application de bureau Tauri | coque lancée sous Linux ; installeurs macOS et Windows jamais fabriqués |
+
+Jamais exécutés : l'accélération CoreML et DirectML, les encodeurs matériels VideoToolbox et AMF.
+
+**Pour démarrer : [TUTORIEL.md](TUTORIEL.md).** Choix techniques : [docs/CHOIX-TECHNIQUES.md](docs/CHOIX-TECHNIQUES.md).
 
 > **À lire avant de publier une vidéo.** Aucun logiciel automatique ne garantit « zéro fuite ».
 > moto-blur comble les trous de détection, prolonge les flous et élargit les zones, mais un
@@ -51,6 +61,20 @@ Sinon l'analyse tourne sur le processeur, beaucoup plus lentement.
 ## Utilisation
 
 Placez vos vidéos dans `samples/` (ce dossier n'est jamais commité).
+
+### Interface
+
+```sh
+uv run moto-blur ui                      # écran d'accueil
+uv run moto-blur ui samples/sortie.mp4   # ouvre directement une vidéo ou un projet
+```
+
+L'interface s'ouvre dans le navigateur, servie par le moteur sur `127.0.0.1` uniquement. Elle
+couvre le montage (couper, supprimer, réorganiser, rogner, passages muets), la vérification
+(passages douteux, zones manuelles, faux positifs, prolongation), le compteur, l'analyse et
+l'export. Le mode d'emploi détaillé est dans [TUTORIEL.md](TUTORIEL.md).
+
+### Ligne de commande
 
 ```sh
 # Caractéristiques d'une vidéo (codec, résolution, fréquence, 8 ou 10 bits, audio)
@@ -112,6 +136,21 @@ Règles du montage :
   profondeur de couleur, le rendu s'arrête et l'explique. Aucune conversion n'est faite en
   silence (et aucune n'est encore implémentée).
 
+### Compteur
+
+```sh
+# Suivre le compteur à partir du rectangle donné sur l'image située à 5 s (x, y, largeur, hauteur)
+uv run moto-blur dash samples/sortie.motoblur.json --at 0:05 --box 1500,1700,600,300
+
+# Zone fixe sur tout le clip (caméra fixée à la moto)
+uv run moto-blur dash samples/sortie.motoblur.json --fixed --box 1500,1700,600,300
+
+# Supprimer les zones de compteur
+uv run moto-blur dash samples/sortie.motoblur.json --clear
+```
+
+Dans l'interface, le rectangle se trace à la souris (onglet « Zones », bouton « Compteur… »).
+
 ### Réglages utiles
 
 | Option | Effet |
@@ -150,7 +189,9 @@ relancer la même commande reprend là où elle s'est arrêtée.
    recalculées à chaque rendu à partir des pistes et des réglages de flou.
 3. **Rendu.** Les passages gardés sont décodés dans l'ordre du montage, floutés et encodés une
    seule fois. Le flou remplace la zone par cinq cellules de couleur moyenne au plus,
-   ré-agrandies en lissant : l'information d'origine est détruite, pas atténuée. Tout ce qui est
+   ré-agrandies en lissant : l'information d'origine est détruite, pas atténuée. Les visages
+   sont floutés en ellipse, les plaques et le compteur en rectangle arrondi ; la forme contient
+   toujours toute la boîte détectée. Tout ce qui est
    hors des zones reste identique à la source avant encodage ; le 10 bits et les métadonnées
    de couleur sont conservés.
 4. **Rapport.** Les pistes fragiles sont listées avec leurs horodatages : confiance faible,
@@ -170,14 +211,24 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
 - Seule la première piste audio est conservée.
 - L'encodage matériel (VideoToolbox, AMF) et l'accélération CoreML et DirectML n'ont pas pu être
   testés pendant le développement, fait sur une machine Linux sans carte graphique.
+- Les formes de flou suivent la boîte de détection (ellipse, rectangle arrondi), pas le contour
+  réel de l'objet : les détecteurs utilisés ne donnent que des boîtes.
+- Le suivi du compteur donne un rectangle ; il n'a été essayé que sur des vidéos de synthèse.
+- L'application de bureau n'est pas signée et ses installeurs n'ont jamais été fabriqués.
 - Avec `--codec h264` sur une source 10 bits, la sortie est en 8 bits.
 
 ## Développement
 
 ```sh
-uv run pytest        # tests (aucun modèle ni carte graphique requis)
+uv run pytest        # tests du moteur (les tests du suivi du compteur téléchargent un modèle de 0,7 Mo)
 uv run ruff check src tests
+
+cd ui && npm install && npm run build   # recompile l'interface dans src/moto_blur/ui
 ```
+
+Organisation : `src/moto_blur` (moteur et serveur local), `ui` (interface Vue + TypeScript, dont
+la version compilée est commitée dans `src/moto_blur/ui` pour que `moto-blur ui` fonctionne sans
+Node), `desktop` (coque Tauri et empaquetage du moteur), `tests`.
 
 Les tests couvrent le suivi, l'interpolation, la prolongation et les marges des zones, la
 conversion entre temps source et temps du montage, l'analyse incrémentale, et un rendu complet

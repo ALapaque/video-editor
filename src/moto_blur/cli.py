@@ -228,7 +228,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             target = project.path
         else:
             target = Path(args.inputs[0])
-    serve(target, port=args.port, open_browser=not args.no_browser)
+    serve(target, port=args.port, open_browser=not args.no_browser, exit_with_parent=args.exit_with_parent)
     return 0
 
 
@@ -347,6 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-p", "--project", help="fichier projet à créer pour plusieurs vidéos")
     p.add_argument("--port", type=int, default=0, help="port local (défaut : un port libre)")
     p.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur")
+    p.add_argument("--exit-with-parent", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("dash", help="flouter le compteur : zone fixe ou suivi à partir d'une image")

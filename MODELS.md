@@ -65,6 +65,21 @@ yolo-v9-t-640  c3c1026ca7d0585dd88084d68182dd897113712fa734ae1557ca70174440c076
 yolo-v9-s-608  2b878b38d9aa07b6ddc3ea75c4ffcb39869bc5c218e0a14002f60ab2f7b0be9a
 ```
 
+### Compteur — VitTrack (OpenCV Zoo)
+
+| Nom dans moto-blur | Taille | Usage |
+|---|---|---|
+| `vittrack` | 0,7 Mo | suivi du compteur à partir d'un rectangle tracé sur une image |
+
+- Source : <https://huggingface.co/opencv/object_tracking_vittrack>
+  (révision `868e4c941984c6363594ec34ee1c3ba0b75378a3`, fichier `object_tracking_vittrack_2023sep.onnx`).
+- Licence : Apache-2.0 (fichier LICENSE du dépôt).
+- Exécuté par le module de réseaux de neurones d'OpenCV, sur le processeur.
+
+```
+vittrack  2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d
+```
+
 ## Modèles étudiés et écartés
 
 | Modèle | Raison |
@@ -76,7 +91,8 @@ yolo-v9-s-608  2b878b38d9aa07b6ddc3ea75c4ffcb39869bc5c218e0a14002f60ab2f7b0be9a
 | YOLOv11 plaques, `morsetechlab` (AGPL-3.0) | Utilisable ; la fiche du modèle reconnaît une contamination entre données d'entraînement et de test. Non intégré en phase 1. |
 | RF-DETR plaques, `autolane` (Apache-2.0) | Aucune métrique publiée, provenance des données inconnue. Non intégré en phase 1. |
 | EgoBlur Gen2 (Meta, Apache-2.0) | Environ 1,5 s par image sur processeur, format TorchScript sans export ONNX, téléchargement derrière un formulaire. Peut servir à étiqueter des vidéos pour un réentraînement. |
-| SAM 3 / 3.1 (pour le compteur, phase 2) | Licence « SAM License » avec restrictions d'usage, et suivi vidéo limité à CUDA. |
+| SAM 2.1 (Apache-2.0, pour le compteur) | Donnerait un contour exact, mais pipeline vidéo en cinq graphes ONNX jamais annoncé testé sur CoreML ou DirectML. Non intégré ; à reconsidérer si VitTrack ne suffit pas. |
+| SAM 3 / 3.1 (pour le compteur) | Licence « SAM License » avec restrictions d'usage, et suivi vidéo limité à CUDA. |
 
 ## Bibliothèques
 

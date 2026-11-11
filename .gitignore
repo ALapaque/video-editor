@@ -21,3 +21,7 @@ build/
 .DS_Store
 *.proxies/
 node_modules/
+desktop/engine-dist/
+desktop/engine-build/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

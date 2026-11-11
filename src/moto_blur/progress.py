@@ -15,8 +15,9 @@ class Cancelled(KeyboardInterrupt):
 
 
 class Progress:
-    def __init__(self, label: str, total_frames: int, video_fps: float):
+    def __init__(self, label: str, total_frames: int, video_fps: float, unit: str = "images"):
         self.label = label
+        self.unit = unit  # "images" pour un traitement vidéo, autre chose pour un téléchargement
         self.total = max(1, total_frames)
         self.video_fps = video_fps
         self.done = 0
@@ -41,8 +42,10 @@ class Progress:
         remaining = (self.total - self.done) / fps if fps > 0 else 0
         m, s = divmod(int(remaining), 60)
         sys.stderr.write(
-            f"\r{self.label} : {self.done}/{self.total} images "
-            f"({100 * self.done / self.total:.0f} %), {fps:.1f} i/s, reste {m} min {s:02d} s   "
+            f"\r{self.label} : {self.done}/{self.total} {self.unit} "
+            f"({100 * self.done / self.total:.0f} %)"
+            + (f", {fps:.1f} i/s" if self.unit == "images" else "")
+            + f", reste {m} min {s:02d} s   "
         )
         sys.stderr.flush()
 

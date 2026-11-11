@@ -14,6 +14,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from .progress import Progress
+
 _HF = "https://huggingface.co/deepghs/yolo-face/resolve/e3662574830c534dfcc9c3b7ea4d89272f8aae4e"
 _OIM = "https://github.com/ankandrew/open-image-models/releases/download/assets"
 
@@ -99,12 +101,17 @@ def ensure_model(spec: ModelSpec) -> Path:
     if path.exists():
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Téléchargement du modèle {spec.name} ({spec.size_mb:.0f} Mo)…", file=sys.stderr)
     tmp = path.with_suffix(".part")
     request = urllib.request.Request(spec.url, headers={"User-Agent": "moto-blur"})
     with urllib.request.urlopen(request) as response, open(tmp, "wb") as out:
-        while chunk := response.read(1 << 20):
+        total = int(response.headers.get("Content-Length") or spec.size_mb * 1e6)
+        steps = max(1, total // 100_000)
+        progress = Progress(f"Téléchargement du modèle {spec.name}", steps, 0, unit="x 100 ko")
+        while chunk := response.read(100_000):
             out.write(chunk)
+            progress.step()
+    sys.stderr.write("\r" + " " * 100 + "\r")
+    print(f"Modèle {spec.name} téléchargé ({spec.size_mb:.0f} Mo).", file=sys.stderr)
     digest = _sha256(tmp)
     if digest != spec.sha256:
         tmp.unlink()

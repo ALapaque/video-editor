@@ -1,0 +1,20 @@
+[package]
+name = "moto-blur-desktop"
+version = "0.1.0"
+description = "moto-blur : floutage automatique et montage simple pour vidéos moto"
+license = "AGPL-3.0-or-later"
+edition = "2021"
+
+[lib]
+name = "moto_blur_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+strip = true
+opt-level = "s"

@@ -1,0 +1,50 @@
+name: Installeurs
+
+# Fabrique l'application de bureau pour macOS (Apple Silicon) et Windows.
+# Lancement manuel (onglet Actions de GitHub) ou à la pose d'une étiquette de version (v0.1.0…).
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  application:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Interface web
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Moteur autonome (PyInstaller)
+        shell: bash
+        run: |
+          uv sync --no-dev
+          uv run --with pyinstaller pyinstaller desktop/engine.spec --distpath desktop/engine-dist --workpath desktop/engine-build -y
+          ./desktop/engine-dist/moto-blur-engine/moto-blur-engine info
+
+      - name: Application et installeur (Tauri)
+        working-directory: desktop
+        run: |
+          npm ci
+          npx tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moto-blur-${{ matrix.os }}
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

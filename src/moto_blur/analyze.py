@@ -172,6 +172,10 @@ def analyze_project(project: pj.Project, device: str = "auto", detect_fn: Detect
                 complete = False
                 break
         print(progress.close())
+        if progress.done and detect_fn is None:
+            # Résumé relu par l'interface : dit notamment si l'accélération matérielle a servi.
+            used = ", ".join(n.strip().replace(" zones par image", " zones") for n in notes)
+            project.notes = [f"{progress.done} images à {progress.fps:.1f} i/s — {used}"]
         if progress.done:
             n = progress.done
             print(
