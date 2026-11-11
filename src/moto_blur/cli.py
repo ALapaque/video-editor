@@ -107,6 +107,8 @@ def _apply_settings(project: pj.Project, args: argparse.Namespace) -> None:
         a.full_pass = False
     if getattr(args, "only", None):
         a.kinds = [args.only]
+    if getattr(args, "conform", None):
+        project.conform = args.conform
     for name in ("margin", "extend_s", "style"):
         value = getattr(args, name, None)
         if value is not None:
@@ -307,6 +309,7 @@ def _add_render_options(p: argparse.ArgumentParser) -> None:
     g.add_argument("--quality", type=int, default=80, help="qualité de 0 à 100 (défaut 80)")
     g.add_argument("--codec", choices=["source", "h264", "hevc"], default="source", help="codec de sortie (défaut : celui de la source)")
     g.add_argument("--encoder", default="auto", help="auto, hardware, software, ou un nom précis (ex. hevc_amf)")
+    g.add_argument("--conform", choices=["first", "largest"], help="clips de formats différents : aligner sur le premier clip, ou sur la plus grande résolution et fréquence")
     g.add_argument("--margin", type=float, help="marge autour des zones, en fraction de leur taille (défaut 0.30)")
     g.add_argument("--extend-s", type=float, help="prolongation du flou avant et après l'objet, en secondes (défaut 0.30)")
     g.add_argument("--style", choices=["pixelate", "solid"], help="type de flou (défaut pixelate)")

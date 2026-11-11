@@ -101,3 +101,5 @@ select, input[type="text"], input[type="number"] { background: var(--bg); border
 .choices { display: flex; flex-direction: column; gap: 8px; }
 .choices button { text-align: left; white-space: normal; padding: 10px 12px; }
 .choices small { display: block; opacity: .85; font-weight: normal; margin-top: 2px; }
+.banner .row { margin: 6px 0 4px; }
+.banner small { display: block; }

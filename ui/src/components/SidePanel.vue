@@ -192,6 +192,16 @@ async function saveAnalysis(): Promise<void> {
       <label>Forme pour les plaques
         <select v-model="blur.plate_shape" @change="saveBlur"><option value="rounded">rectangle arrondi</option><option value="rect">rectangle</option><option value="ellipse">ellipse</option></select>
       </label>
+      <template v-if="project?.mismatch">
+        <h4>Clips de formats différents</h4>
+        <label>Aligner sur
+          <select :value="project.conform" @change="send('PUT', '/api/settings', { conform: ($event.target as HTMLSelectElement).value })">
+            <option value="" disabled>à choisir</option>
+            <option value="first">le premier clip</option>
+            <option value="largest">la plus grande résolution et fréquence</option>
+          </select>
+        </label>
+      </template>
       <h4>Détection</h4>
       <p class="help">Modifier ces réglages refait toute l'analyse.</p>
       <label>Modèle de visages

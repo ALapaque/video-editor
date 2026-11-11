@@ -177,6 +177,10 @@ class Project:
     blur_settings: BlurSettings = field(default_factory=BlurSettings)
     analysis: dict[str, ClipAnalysis] = field(default_factory=dict)
     review: list[dict] = field(default_factory=list)
+    # Assemblage de clips de formats différents : "" (pas encore choisi, le rendu refuse),
+    # "first" (tout aligner sur le premier clip) ou "largest" (plus grande résolution et
+    # plus haute fréquence d'images).
+    conform: str = ""
     path: Path | None = None
 
     def clip(self, clip_id: str) -> Clip:
@@ -254,6 +258,7 @@ def dumps(project: Project) -> str:
             "analysis": asdict(project.analysis_settings),
             "blur": asdict(project.blur_settings),
         },
+        "conform": project.conform,
         "review": project.review,
     }
     text = json.dumps(head, indent=2, ensure_ascii=False)
@@ -313,5 +318,6 @@ def load(path: Path) -> Project:
         blur_settings=_known(BlurSettings, settings.get("blur", {})),
         analysis=analysis,
         review=doc.get("review", []),
+        conform=doc.get("conform", ""),
         path=path,
     )

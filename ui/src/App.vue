@@ -90,6 +90,14 @@ onMounted(() => {
     <main v-if="project" class="work">
       <div class="left">
         <div v-if="missing.length" class="banner error">Fichier source introuvable : {{ missing.map((c) => c.path).join(", ") }}</div>
+        <div v-else-if="project.mismatch && !project.conform" class="banner">
+          Les clips du montage n'ont pas tous la même résolution ou la même fréquence d'images. Comment les assembler ?
+          <span class="row">
+            <button :disabled="busy" @click="send('PUT', '/api/settings', { conform: 'first' })">Aligner sur le premier clip</button>
+            <button :disabled="busy" @click="send('PUT', '/api/settings', { conform: 'largest' })">Aligner sur la plus grande résolution et la plus haute fréquence</button>
+          </span>
+          <small class="dim">Mise à l'échelle avec bandes noires si le rapport d'image diffère ; images dupliquées ou supprimées si la fréquence diffère.</small>
+        </div>
         <div v-else-if="needsAnalysis && !busy" class="banner">Des passages gardés n'ont pas encore été analysés : ils sortiraient sans flou. Cliquez « Analyser ».</div>
         <Player />
         <div class="tools">

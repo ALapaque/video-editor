@@ -27,7 +27,7 @@ from .analyze import analyze_project, needed_intervals, refresh_review
 from .blur import SUPPORTED_FORMATS, blur_frame
 from .postprocess import ZoneIndex
 from .proxy import build_proxy, proxy_path
-from .render import RenderError, check_ready, render_project
+from .render import RenderError, check_ready, formats_differ, render_project, used_clips
 from .timeline import pts_to_sec, resolve_segments, sec_to_pts
 from .video import iter_frames, probe
 
@@ -196,6 +196,8 @@ class Engine:
                         "blur": asdict(project.blur_settings),
                     },
                     "review": review,
+                    "conform": project.conform,
+                    "mismatch": formats_differ(used_clips(project, resolve_segments(project))),
                     "tracks": tracks,
                     "problem": problem,
                 },
@@ -306,6 +308,10 @@ class Engine:
         project = self.require()
         with self.lock:
             self._busy_check()
+            if "conform" in body:
+                if body["conform"] not in ("", "first", "largest"):
+                    raise ApiError("choix d'alignement inconnu.")
+                project.conform = body["conform"]
             for block, target in (("analysis", project.analysis_settings), ("blur", project.blur_settings)):
                 for key, value in body.get(block, {}).items():
                     if not hasattr(target, key):

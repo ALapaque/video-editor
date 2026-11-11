@@ -328,3 +328,49 @@ def test_zone_partly_outside_the_frame_is_clipped(tmp_path):
     blur_frame(frame, [Zone("face", (-40, -30, 60, 50), "ellipse"), Zone("plate", (280, 150, 360, 200), "rounded", 8)])
     y = np.frombuffer(frame.planes[0], dtype=np.uint8).reshape(180, -1)[:, :320]
     assert y[0:20, 0:20].std() < 12 and y[160:178, 290:318].std() < 12
+
+
+def test_mismatched_clips_can_be_aligned_on_the_first(tmp_path, source):
+    """Deuxième clip plus grand et à 15 i/s : mis à l'échelle et ses images dupliquées."""
+    a, b = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    shutil.copy(source, a)
+    make_video(b, frames=30, size=(640, 360), fps=15)  # 2 s
+    project = make_project(tmp_path, a, b)
+    project.timeline = [pj.Segment("c1", 0.0, 1.0), pj.Segment("c2", 0.0, 2.0)]
+    analyze_project(project, detect_fn=FakeDetector())
+    project.conform = "first"
+    out = tmp_path / "out.mp4"
+    render_project(project, out, encoder="software")
+    frames = read_frames(out)
+    assert len(frames) == 30 + 60  # 1 s à 30 i/s, puis 2 s à 15 i/s rendues à 30 i/s
+    assert all(f.shape[:2] == (180, 320) for f in frames)
+    with av.open(str(out)) as c:
+        assert float(c.streams.video[0].duration * c.streams.video[0].time_base) == pytest.approx(3.0, abs=0.01)
+        assert float(c.streams.audio[0].duration * c.streams.audio[0].time_base) == pytest.approx(3.0, abs=0.03)
+    # l'objet du second clip (deux fois plus grand à la source) est flouté à sa place réduite
+    for j in (30, 31, 58, 89):
+        i = (j - 30) // 2
+        x1, y1, x2, y2 = (v // 2 for v in object_box(i))
+        assert detail(frames[j][y1 + 1 : y2 - 1, x1 + 1 : x2 - 1]) < 10, f"image {j}"
+    # images dupliquées : deux images de sortie consécutives montrent la même image source
+    assert np.abs(frames[40].astype(int) - frames[41].astype(int)).mean() < 2
+
+
+def test_mismatched_clips_can_be_aligned_on_the_largest(tmp_path, source):
+    a, b = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    shutil.copy(source, a)  # 320x180 à 30 i/s
+    make_video(b, frames=30, size=(640, 480), fps=15)  # plus grand, autre rapport d'image
+    project = make_project(tmp_path, a, b)
+    project.timeline = [pj.Segment("c1", 0.0, 1.0), pj.Segment("c2", 0.0, 1.0)]
+    analyze_project(project, detect_fn=FakeDetector())
+    project.conform = "largest"
+    out = tmp_path / "out.mp4"
+    render_project(project, out, encoder="software")
+    frames = read_frames(out)
+    assert len(frames) == 60 and all(f.shape[:2] == (480, 640) for f in frames)
+    # premier clip en 16:9 dans une image 4:3 : bandes noires en haut et en bas
+    assert frames[10][:50].max() < 30 and frames[10][-50:].max() < 30
+    assert frames[10][200:280].mean() > 60
+    # son objet est flouté à sa position agrandie (x2, décalée de 60 lignes)
+    x1, y1, x2, y2 = (v * 2 for v in object_box(10))
+    assert detail(frames[10][y1 + 62 : y2 + 58, x1 + 2 : x2 - 2]) < 10

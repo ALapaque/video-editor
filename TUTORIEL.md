@@ -139,9 +139,11 @@ Chaque modification est enregistrée aussitôt dans le fichier projet. Si vous r
 passage après une analyse, le bouton « Analyser » redevient orange : seule la partie ajoutée
 sera analysée.
 
-Si vous assemblez des clips de résolution ou de fréquence d'images différentes, l'export
-s'arrête et l'explique. Aucune conversion n'est encore faite : dites-moi quel comportement
-vous voulez.
+Si vous assemblez des clips de résolution ou de fréquence d'images différentes, un bandeau vous
+demande comment les assembler : sur le format du premier clip, ou sur la plus grande résolution
+et la plus haute fréquence. Rien n'est choisi à votre place ; le choix se change ensuite dans
+l'onglet « Réglages ». Les clips qui ne sont pas au format retenu sont mis à l'échelle (avec
+des bandes noires si le rapport d'image diffère) et leurs images sont dupliquées ou sautées.
 
 ### Vérification
 

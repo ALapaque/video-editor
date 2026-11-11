@@ -19,7 +19,7 @@ import contextlib
 import io
 import platform
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -30,7 +30,7 @@ from av.video.frame import PictureType
 
 from . import project as pj
 from .analyze import needed_intervals
-from .blur import SUPPORTED_FORMATS, blur_frame
+from .blur import SUPPORTED_FORMATS, blur_frame, plane_array
 from .dash import missing_span
 from .postprocess import ZoneIndex
 from .progress import Progress
@@ -40,6 +40,10 @@ from .video import iter_frames
 FADE_S = 0.008  # fondu audio à chaque point de coupe ou de silence
 COPYABLE_AUDIO = {"aac", "mp3", "ac3", "eac3", "alac"}
 DEBUG_COLORS = {"face": (60, 220, 60), "plate": (60, 200, 255), "dash": (255, 90, 200), "manual": (255, 255, 255)}  # RVB
+
+
+# Format planaire équivalent aux formats semi-planaires des encodeurs matériels.
+PLANAR_OF = {"nv12": "yuv420p", "p010le": "yuv420p10le"}
 
 
 class RenderError(Exception):
@@ -75,13 +79,7 @@ def check_ready(project: pj.Project, segments: list[ResolvedSegment], output: Pa
                 f"le suivi du compteur ne couvre pas tous les passages gardés du clip {clip.id}. "
                 "Lancez « moto-blur analyze » sur ce projet pour le prolonger."
             )
-    first = used[0].video
-    different = [
-        c for c in used[1:]
-        if (c.video.width, c.video.height, c.video.fps_fraction, c.video.pix_fmt)
-        != (first.width, first.height, first.fps_fraction, first.pix_fmt)
-    ]
-    if different:
+    if formats_differ(used) and project.conform not in ("first", "largest"):
         lines = [
             f"  {c.id} : {c.video.width}x{c.video.height}, {float(c.video.fps_fraction):.3f} i/s, "
             f"{c.video.pix_fmt}  ({c.path})"
@@ -90,13 +88,60 @@ def check_ready(project: pj.Project, segments: list[ResolvedSegment], output: Pa
         raise RenderError(
             "les clips assemblés n'ont pas tous le même format :\n"
             + "\n".join(lines)
-            + "\nRien n'a été choisi à votre place. Comportements possibles :\n"
-            "  a) aligner tous les clips sur le premier (mise à l'échelle avec bandes noires si le\n"
-            "     rapport d'image diffère ; images dupliquées ou supprimées si la fréquence diffère) ;\n"
-            "  b) aligner sur la plus grande résolution et la plus haute fréquence ;\n"
-            "  c) rendre chaque format dans un fichier séparé.\n"
-            "Aucun de ces comportements n'est encore implémenté : dites-moi lequel vous voulez."
+            + "\nRien n'a été choisi à votre place. Choisissez un comportement :\n"
+            "  - aligner sur le premier clip (option --conform first) ;\n"
+            "  - aligner sur la plus grande résolution et la plus haute fréquence (--conform largest).\n"
+            "Dans les deux cas : mise à l'échelle avec bandes noires si le rapport d'image diffère,\n"
+            "images dupliquées ou supprimées si la fréquence diffère."
         )
+
+
+def used_clips(project: pj.Project, segments: list[ResolvedSegment]) -> list[pj.Clip]:
+    return [project.clip(cid) for cid in dict.fromkeys(s.clip_id for s in segments)]
+
+
+def formats_differ(clips: list[pj.Clip]) -> bool:
+    keys = {(c.video.width, c.video.height, c.video.fps_fraction, c.video.pix_fmt) for c in clips}
+    return len(keys) > 1
+
+
+def target_format(project: pj.Project, clips: list[pj.Clip]) -> tuple[pj.VideoInfo, pj.Clip]:
+    """Format de la vidéo de sortie, et clip dont on reprend les caractéristiques de couleur."""
+    base = clips[0]
+    if project.conform == "largest" and formats_differ(clips):
+        base = max(clips, key=lambda c: c.video.width * c.video.height)
+        fastest = max(clips, key=lambda c: c.video.fps_fraction)
+        video = replace(base.video, fps=fastest.video.fps, time_base=fastest.video.time_base)
+        return video, base
+    return base.video, base
+
+
+def fit_frame(frame: av.VideoFrame, width: int, height: int) -> av.VideoFrame:
+    """Met une image planaire aux dimensions voulues, sans la déformer (bandes noires)."""
+    if (frame.width, frame.height) == (width, height):
+        return frame
+    scale = min(width / frame.width, height / frame.height)
+    fw = min(width, max(2, round(frame.width * scale / 2) * 2))
+    fh = min(height, max(2, round(frame.height * scale / 2) * 2))
+    scaled = frame.reformat(width=fw, height=fh)
+    if (fw, fh) == (width, height):
+        return scaled
+    canvas = av.VideoFrame(width, height, frame.format.name)
+    for attr in ("colorspace", "color_range", "color_primaries", "color_trc"):
+        with contextlib.suppress(AttributeError, ValueError, TypeError):
+            setattr(canvas, attr, getattr(scaled, attr))
+    bits = frame.format.components[0].bits
+    bps = 2 if bits > 8 else 1
+    full_range = frame.format.name.startswith("yuvj")
+    ox, oy = (width - fw) // 4 * 2, (height - fh) // 4 * 2  # décalage pair : plans de couleur alignés
+    for i, plane in enumerate(canvas.planes):
+        target = plane_array(plane, bps)
+        black = (0 if full_range else 16 << (bits - 8)) if i == 0 else 128 << (bits - 8)
+        target[...] = black
+        source = plane_array(scaled.planes[i], bps)
+        px, py = ox * plane.width // width, oy * plane.height // height
+        target[py : py + source.shape[0], px : px + source.shape[1]] = source
+    return canvas
 
 
 def can_copy_everything(project: pj.Project, segments: list[ResolvedSegment]) -> bool:
@@ -426,7 +471,9 @@ def process_frame(
     video: pj.VideoInfo,
     pix_fmt: str,
     debug: bool,
+    size: tuple[int, int] | None = None,
 ) -> av.VideoFrame:
+    """Floute une image (à sa résolution d'origine), puis la met au format de sortie."""
     pts = frame.pts
     if debug:
         frame = _draw_debug(frame, index, video)
@@ -439,6 +486,11 @@ def process_frame(
             # suivantes. Sans copie, le flou contaminerait les images décodées ensuite.
             frame.make_writable()
             blur_frame(frame, zones, blur.cells, blur.style, blur.feather)
+    if size is not None and (frame.width, frame.height) != size:
+        planar = PLANAR_OF.get(pix_fmt, pix_fmt)
+        if frame.format.name != planar:
+            frame = frame.reformat(format=planar)
+        frame = fit_frame(frame, *size)
     if frame.format.name != pix_fmt:
         frame = frame.reformat(format=pix_fmt)
     frame.pict_type = PictureType.NONE  # l'encodeur choisit lui-même ses images clés
@@ -460,7 +512,14 @@ def render_project(
     segments = resolve_segments(project)
     check_ready(project, segments, output)
     first_clip = project.clip(segments[0].clip_id)
-    video = first_clip.video
+    clips = used_clips(project, segments)
+    video, color_clip = target_format(project, clips)
+    size = (video.width, video.height)
+    if formats_differ(clips):
+        print(
+            f"Clips de formats différents : sortie en {video.width}x{video.height}, "
+            f"{float(video.fps_fraction):.3f} i/s, {video.pix_fmt}."
+        )
     if codec == "source":
         codec = video.codec if video.codec in ("h264", "hevc") else "hevc"
     out_tb = video.tb
@@ -488,7 +547,7 @@ def render_project(
     partial = output.with_name(output.stem + ".partiel" + output.suffix)
     try:
         with av.open(str(partial), "w") as out:
-            with av.open(str(project.clip_path(first_clip))) as src:
+            with av.open(str(project.clip_path(color_clip))) as src:
                 vstream = out.add_stream(choice.name, rate=video.fps_fraction)
                 _configure(vstream, choice, video, out_tb, src.streams.video[0].codec_context)
 
@@ -509,18 +568,46 @@ def render_project(
                     clip = project.clip(seg.clip_id)
                     index = zone_index(clip)
                     base = round(seg.offset / out_tb)
-                    ratio = seg.tb / out_tb
                     count = 0
+
+                    def emit(frame: av.VideoFrame, out_pts: int) -> None:
+                        nonlocal count
+                        encode(frame, out_pts)
+                        count += 1
+                        if audio and count % 8 == 0:
+                            audio.pump(float(out_pts * out_tb) + 0.5)
+
+                    def prepare(frame: av.VideoFrame, clip=clip, index=index) -> av.VideoFrame:
+                        return process_frame(
+                            frame, index, project.blur_settings, clip.video, choice.pix_fmt, debug, size
+                        )
+
                     with av.open(str(project.clip_path(clip))) as src:
-                        for frame in iter_frames(src, seg.in_pts, seg.out_pts):
-                            rel = round((frame.pts - seg.in_pts) * ratio)
-                            ready = process_frame(
-                                frame, index, project.blur_settings, clip.video, choice.pix_fmt, debug
-                            )
-                            encode(ready, base + rel)
-                            count += 1
-                            if audio and count % 8 == 0:
-                                audio.pump(float((base + rel) * out_tb) + 0.5)
+                        frames = iter_frames(src, seg.in_pts, seg.out_pts)
+                        if clip.video.fps_fraction == video.fps_fraction:
+                            ratio = seg.tb / out_tb
+                            for frame in frames:
+                                rel = round((frame.pts - seg.in_pts) * ratio)
+                                emit(prepare(frame), base + rel)
+                        else:
+                            # Fréquence différente : chaque image de sortie reprend l'image source
+                            # affichée à cet instant (images dupliquées ou sautées, sans mélange).
+                            out_fps = video.fps_fraction
+                            wanted = round(seg.duration * out_fps)
+                            shown = 1 / clip.video.fps_fraction
+                            done = 0
+                            ready = None
+                            for frame in frames:
+                                until = (frame.pts - seg.in_pts) * seg.tb + shown
+                                if done >= wanted or Fraction(done) / out_fps >= until:
+                                    continue  # image sautée : inutile de la flouter
+                                ready = prepare(frame)
+                                while done < wanted and Fraction(done) / out_fps < until:
+                                    emit(ready, base + round(Fraction(done) / out_fps / out_tb))
+                                    done += 1
+                            while ready is not None and done < wanted:
+                                emit(ready, base + round(Fraction(done) / out_fps / out_tb))
+                                done += 1
                 if audio:
                     audio.close()
             for packet in vstream.encode(None):

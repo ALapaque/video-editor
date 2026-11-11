@@ -60,6 +60,10 @@ export interface Project {
   review: ReviewItem[];
   tracks: Record<string, Track[]>;
   problem: string | null;
+  /** Les clips du montage n'ont pas tous le même format. */
+  mismatch: boolean;
+  /** Choix d'alignement : "" (pas encore choisi), "first" ou "largest". */
+  conform: string;
 }
 
 export interface Job {

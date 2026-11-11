@@ -133,8 +133,9 @@ Règles du montage :
 - Sans aucune coupe (un clip entier, sans passage muet), l'audio est recopié sans réencodage.
   Sinon il est réencodé en AAC, avec un fondu de 8 ms à chaque coupe pour éviter les clics.
 - Si les clips assemblés n'ont pas la même résolution, la même fréquence d'images ou la même
-  profondeur de couleur, le rendu s'arrête et l'explique. Aucune conversion n'est faite en
-  silence (et aucune n'est encore implémentée).
+  profondeur de couleur, le rendu s'arrête et demande un choix : `--conform first` (aligner sur
+  le premier clip) ou `--conform largest` (plus grande résolution et plus haute fréquence). Les
+  autres clips sont mis à l'échelle avec bandes noires, leurs images dupliquées ou sautées.
 
 ### Compteur
 
