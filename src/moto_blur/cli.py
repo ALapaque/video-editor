@@ -3,6 +3,7 @@
     moto-blur analyze VIDEO [VIDEO…]   analyse et écrit le fichier projet
     moto-blur render  PROJET -o SORTIE produit la vidéo finale
     moto-blur run     VIDEO… -o SORTIE enchaîne les deux
+    moto-blur ui      [VIDEO|PROJET]   ouvre l'interface de montage et de vérification
     moto-blur dash    PROJET --box …   floute le compteur (zone fixe ou suivi)
     moto-blur report  PROJET           affiche les passages à vérifier
     moto-blur probe   VIDEO            affiche les caractéristiques d'une vidéo
@@ -217,6 +218,20 @@ def cmd_dash(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    from .server import serve
+
+    target = None
+    if args.inputs:
+        if len(args.inputs) > 1 or args.project:
+            project = _open_or_create(args)
+            target = project.path
+        else:
+            target = Path(args.inputs[0])
+    serve(target, port=args.port, open_browser=not args.no_browser)
+    return 0
+
+
 def cmd_probe(args: argparse.Namespace) -> int:
     from .video import probe
 
@@ -326,6 +341,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="afficher les passages à vérifier")
     p.add_argument("project_file", metavar="PROJET")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("ui", help="ouvrir l'interface de montage et de vérification")
+    p.add_argument("inputs", nargs="*", metavar="VIDEO|PROJET", help="vidéos ou fichier projet à ouvrir (facultatif)")
+    p.add_argument("-p", "--project", help="fichier projet à créer pour plusieurs vidéos")
+    p.add_argument("--port", type=int, default=0, help="port local (défaut : un port libre)")
+    p.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur")
+    p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("dash", help="flouter le compteur : zone fixe ou suivi à partir d'une image")
     p.add_argument("project_file", metavar="PROJET")

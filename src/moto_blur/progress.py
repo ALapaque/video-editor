@@ -5,6 +5,14 @@ from __future__ import annotations
 import sys
 import time
 
+# Fonction appelée à chaque avancée (interface graphique : affichage et annulation).
+# Elle peut lever `Cancelled` pour interrompre proprement le traitement en cours.
+hook = None
+
+
+class Cancelled(KeyboardInterrupt):
+    """Traitement annulé depuis l'interface. Traité comme une interruption au clavier."""
+
 
 class Progress:
     def __init__(self, label: str, total_frames: int, video_fps: float):
@@ -17,6 +25,8 @@ class Progress:
 
     def step(self, n: int = 1) -> None:
         self.done += n
+        if hook is not None:
+            hook(self)
         now = time.perf_counter()
         if now - self._last >= 0.5:
             self._last = now

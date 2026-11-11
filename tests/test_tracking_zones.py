@@ -338,3 +338,12 @@ def test_track_corrections_survive_save_and_load(tmp_path, video_info):
     a, b = pj.load(tmp_path / "p.json").analysis["c1"].tracks
     assert a.disabled and a.extend_after_s == 1.5 and a.extend_before_s is None and a.source == "auto"
     assert b.kind == "dash" and b.source == "manual" and not b.disabled
+
+
+def test_review_passages_are_capped_in_busy_scenes(video_info):
+    # 40 pistes douteuses qui se chevauchent sans interruption pendant 30 s
+    tracks = [pj.Track(i, "face", [[(i * 22 + k) * F, 100, 100, 140, 140, 0.2] for k in range(30)]) for i in range(40)]
+    review = build_review("c1", tracks, video_info)
+    assert len(review) >= 4
+    assert all((r["end_pts"] - r["start_pts"]) / 15360 < 8 for r in review)
+    assert sorted(t for r in review for t in r["tracks"]) == list(range(40))

@@ -264,6 +264,9 @@ def track_reasons(
     return reasons
 
 
+MAX_PASSAGE_S = 6.0
+
+
 def build_review(
     clip_id: str, tracks: list[Track], video: VideoInfo, detect_every: int = 1, merge_s: float = 1.0
 ) -> list[dict]:
@@ -278,10 +281,13 @@ def build_review(
             flagged.append((int(min(pts)), int(max(pts)), t.kind, reasons, t.id))
     flagged.sort()
     merge_pts = float(merge_s / video.tb)
+    # Longueur maximale d'un passage : dans une scène chargée (foule), les pistes douteuses
+    # s'enchaînent sans interruption ; on découpe pour garder des passages vérifiables.
+    max_pts = float(MAX_PASSAGE_S / video.tb)
     passages: list[dict] = []
     for start, end, kind, reasons, track_id in flagged:
         last = passages[-1] if passages else None
-        if last and start <= last["end_pts"] + merge_pts:
+        if last and start <= last["end_pts"] + merge_pts and start - last["start_pts"] < max_pts:
             last["end_pts"] = max(last["end_pts"], end)
             last["tracks"].append(track_id)
             if kind not in last["kinds"]:
