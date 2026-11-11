@@ -1,0 +1,21 @@
+# Vidéos de test : ne jamais commiter
+samples/
+# Modèles téléchargés, sorties, fichiers projet locaux
+models/
+*.onnx
+*.mp4
+*.mov
+*.mkv
+*.motoblur.json
+*.report.txt
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
