@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+    # Pendant la mise au point : toute modification de l'application de bureau la refabrique.
+    branches: ["claude/**"]
+    paths: ["desktop/**", ".github/workflows/installeurs.yml"]
 
 jobs:
   application:
