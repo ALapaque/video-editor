@@ -61,7 +61,8 @@ def test_montage_edits_are_saved_and_flag_missing_analysis(api, tmp_path):
 def test_zones_follow_corrections(api):
     zones = api("GET", "/api/zones?clip=c1&from=10&to=12")["frames"]
     assert set(zones) == {"10", "11", "12"}
-    x1, y1, x2, y2, shape, _radius, kind, track_id, score = zones["10"][0]
+    x1, y1, x2, y2, shape, _radius, kind, track_id, score, tracks = zones["10"][0]
+    assert tracks == [track_id]
     assert kind == "plate" and shape == "rounded" and score == 0.9 and x1 < 40 and x2 > 80
     api("PATCH", "/api/tracks", {"clip": "c1", "id": track_id, "disabled": True})
     assert api("GET", "/api/zones?clip=c1&from=10&to=12")["frames"] == {}

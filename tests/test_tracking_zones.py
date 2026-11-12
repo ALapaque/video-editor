@@ -387,3 +387,83 @@ def test_min_score_never_hides_manual_or_tracked_zones(video_info):
     dash = pj.Track(2, "dash", [[i * F, 100, 100, 300, 200, 0.1] for i in range(11)], source="tracker")
     assert not below_min_score(manual, s) and not below_min_score(dash, s)
     assert len(ZoneIndex([manual, dash], s, video_info).shaped(5 * F)) == 2
+
+
+# --- Flous superposés ------------------------------------------------------------
+
+
+def _coverage(zones, w=400, h=300):
+    """Part de chaque pixel couverte par une liste de zones (0 à 1), calculée par le vrai masque."""
+    from moto_blur.blur import shape_mask
+
+    total = np.zeros((h, w), dtype=np.float32)
+    for z in zones:
+        x1, y1, x2, y2 = (max(0, z.box[0]), max(0, z.box[1]), min(w, z.box[2]), min(h, z.box[3]))
+        local = (z.box[0] - x1, z.box[1] - y1, z.box[2] - x1, z.box[3] - y1)
+        mask = shape_mask(y2 - y1, x2 - x1, z.shape, local, z.radius, 0.0)
+        part = np.ones((y2 - y1, x2 - x1), dtype=np.float32) if mask is None else mask
+        total[y1:y2, x1:x2] = np.maximum(total[y1:y2, x1:x2], part)
+    return total
+
+
+def _nothing_uncovered(before, after) -> bool:
+    """Tout pixel pleinement flouté avant la fusion l'est encore après (à l'anticrénelage près)."""
+    return not ((_coverage(before) >= 0.99) & (_coverage(after) < 0.5)).any()
+
+
+def test_zone_inside_another_is_dropped_and_overlapping_zones_become_one():
+    from moto_blur.postprocess import Zone, merge_zones
+
+    face = Zone("face", (100, 60, 300, 260), "ellipse", 0, 1)  # tableau de bord pris pour un visage
+    plate = Zone("plate", (80, 110, 320, 210), "rounded", 20, 2)  # ... et pour une plaque
+    inner = Zone("plate", (90, 130, 150, 190), "rounded", 8, 3)  # petite plaque dans la grande
+    far = Zone("plate", (350, 10, 390, 30), "rounded", 4, 4)
+    merged = merge_zones([face, plate, inner, far])
+    assert len(merged) == 2
+    big = max(merged, key=lambda z: z.box[2] - z.box[0])
+    assert big.box == (80, 60, 320, 260) and big.kind == "plate"
+    assert sorted(big.tracks) == [1, 2, 3]
+    assert [z for z in merged if z is not big][0].box == far.box
+    # zéro fuite : tout pixel flouté avant la fusion l'est encore après
+    assert _nothing_uncovered([face, plate, inner, far], merged)
+
+
+def test_zones_that_barely_touch_stay_separate_and_corners_are_respected():
+    from moto_blur.postprocess import Zone, merge_zones
+
+    a = Zone("face", (100, 100, 200, 200), "ellipse", 0, 1)
+    b = Zone("face", (190, 100, 290, 200), "ellipse", 0, 2)  # 10 % de recouvrement
+    assert len(merge_zones([a, b])) == 2
+    # une petite zone dans le COIN de la boîte d'une ellipse n'est pas couverte par l'ellipse :
+    # elle ne doit pas être supprimée
+    corner = Zone("plate", (102, 102, 118, 112), "rect", 0, 3)
+    merged = merge_zones([a, corner])
+    assert _nothing_uncovered([a, corner], merged)
+
+
+def test_detection_inside_a_tracked_object_gives_a_single_blur(video_info):
+    dash = pj.Track(1, "dash", [[i * F, 800, 600, 1100, 800, 1.0] for i in range(10)], source="tracker", label="compteur") if "label" in pj.Track.__dataclass_fields__ else pj.Track(1, "dash", [[i * F, 800, 600, 1100, 800, 1.0] for i in range(10)], source="tracker")
+    face = pj.Track(2, "face", [[i * F, 880, 650, 960, 740, 0.7] for i in range(10)])
+    zones = ZoneIndex([dash, face], pj.BlurSettings(), video_info).shaped(5 * F)
+    assert len(zones) == 1 and zones[0].kind == "dash" and sorted(zones[0].tracks) == [1, 2]
+    apart = ZoneIndex([dash, face], pj.BlurSettings(merge_overlaps=False), video_info).shaped(5 * F)
+    assert len(apart) == 2
+
+
+def test_merging_random_zones_never_uncovers_a_pixel():
+    """Tirage de nombreuses configurations : la fusion ne retire jamais de flou."""
+    from moto_blur.postprocess import Zone, merge_zones
+
+    rng = np.random.default_rng(7)
+    for _ in range(150):
+        zones = []
+        for i in range(int(rng.integers(2, 7))):
+            x, y = int(rng.integers(0, 300)), int(rng.integers(0, 220))
+            w, h = int(rng.integers(8, 160)), int(rng.integers(8, 120))
+            shape = ["rect", "rounded", "ellipse"][int(rng.integers(0, 3))]
+            radius = int(rng.integers(1, max(2, min(w, h) // 2))) if shape == "rounded" else 0
+            zones.append(Zone(["face", "plate", "dash"][int(rng.integers(0, 3))], (x, y, x + w, y + h), shape, radius, i + 1))
+        merged = merge_zones(zones)
+        assert len(merged) <= len(zones)
+        assert sorted(t for z in merged for t in z.tracks) == list(range(1, len(zones) + 1))
+        assert _nothing_uncovered(zones, merged), zones
