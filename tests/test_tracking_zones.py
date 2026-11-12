@@ -467,3 +467,65 @@ def test_merging_random_zones_never_uncovers_a_pixel():
         assert len(merged) <= len(zones)
         assert sorted(t for z in merged for t in z.tracks) == list(range(1, len(zones) + 1))
         assert _nothing_uncovered(zones, merged), zones
+
+
+def _merge_zones_reference(zones, min_overlap=0.5):
+    """Fusion écrite au plus simple : après chaque fusion, toutes les paires sont recomparées.
+
+    Sert de référence : `merge_zones` doit donner exactement le même résultat, plus vite."""
+    from dataclasses import replace
+
+    from moto_blur.postprocess import _KIND_PRIORITY, Zone, _corner, _inside, _overlap
+
+    def covers(outer, inner):
+        x1, y1, x2, y2 = inner.box
+        return all(_inside(outer, x, y) for x, y in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)))
+
+    out = sorted(zones, key=lambda z: -(z.box[2] - z.box[0]) * (z.box[3] - z.box[1]))
+    out = [replace(z, tracks=z.tracks or (z.track_id,)) for z in out]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(out)):
+            for j in range(i + 1, len(out)):
+                a, b = out[i], out[j]
+                if covers(a, b):
+                    out[i] = replace(a, tracks=a.tracks + b.tracks)
+                elif covers(b, a):
+                    out[i] = replace(b, tracks=b.tracks + a.tracks)
+                elif _overlap(a, b) >= min_overlap:
+                    box = (
+                        min(a.box[0], b.box[0]), min(a.box[1], b.box[1]),
+                        max(a.box[2], b.box[2]), max(a.box[3], b.box[3]),
+                    )
+                    lead = a if _KIND_PRIORITY.get(a.kind, 0) >= _KIND_PRIORITY.get(b.kind, 0) else b
+                    radius = int(min(0.12 * min(box[2] - box[0], box[3] - box[1]), _corner(a), _corner(b)))
+                    out[i] = Zone(lead.kind, box, "rounded" if radius >= 1 else "rect", radius, lead.track_id, a.tracks + b.tracks)
+                else:
+                    continue
+                del out[j]
+                changed = True
+                break
+            if changed:
+                break
+    return out
+
+
+@pytest.mark.parametrize("min_overlap", [0.5, 0.2, 0.0])
+def test_merging_many_zones_gives_the_same_result_as_the_simple_algorithm(min_overlap):
+    """Images chargées (jusqu'à 60 zones, fusions en chaîne) : même liste, même ordre, mêmes pistes."""
+    from moto_blur.postprocess import Zone, merge_zones
+
+    rng = np.random.default_rng(11)
+    for n in [0, 1, 2, 3, 5, 8, 13, 20, 30, 45, 60] * 12:
+        spread = int(rng.integers(120, 900))  # serré : beaucoup de fusions ; large : presque aucune
+        zones = []
+        for i in range(n):
+            x, y = int(rng.integers(0, spread)), int(rng.integers(0, spread))
+            w, h = int(rng.integers(1, 160)), int(rng.integers(1, 120))
+            if rng.random() < 0.15 and zones:  # zone posée dans une autre, ou collée à son bord
+                x, y = zones[-1].box[0] + int(rng.integers(0, 12)), zones[-1].box[1] + int(rng.integers(0, 12))
+            shape = ["rect", "rounded", "ellipse"][int(rng.integers(0, 3))]
+            radius = int(rng.integers(0, max(1, min(w, h) // 2 + 1))) if shape == "rounded" else 0
+            zones.append(Zone(["face", "plate", "dash", "manual"][int(rng.integers(0, 4))], (x, y, x + w, y + h), shape, radius, i + 1))
+        assert merge_zones(zones, min_overlap) == _merge_zones_reference(zones, min_overlap), zones

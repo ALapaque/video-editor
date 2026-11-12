@@ -94,6 +94,13 @@ def _inside(zone: Zone, x: float, y: float) -> bool:
 def _covers(outer: Zone, inner: Zone) -> bool:
     """Vrai si `outer` couvre toute la boîte de `inner` (ses quatre coins)."""
     x1, y1, x2, y2 = inner.box
+    ox1, oy1, ox2, oy2 = outer.box
+    # Les quatre coins doivent d'abord être dans la boîte de `outer` : test immédiat, qui
+    # écarte presque toutes les paires et suffit pour un rectangle sans coins arrondis.
+    if not (ox1 <= x1 <= ox2 and ox1 <= x2 <= ox2 and oy1 <= y1 <= oy2 and oy1 <= y2 <= oy2):
+        return False
+    if outer.shape == "rect" or (outer.shape == "rounded" and outer.radius <= 0):
+        return True
     return all(_inside(outer, x, y) for x, y in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)))
 
 
@@ -114,6 +121,26 @@ def _corner(zone: Zone) -> float:
     return float(zone.radius) if zone.shape == "rounded" else 0.0
 
 
+def _fuse(a: Zone, b: Zone, min_overlap: float) -> Zone | None:
+    """Zone qui remplace `a` et `b` si elles doivent être réunies, sinon None."""
+    if _covers(a, b):
+        return Zone(a.kind, a.box, a.shape, a.radius, a.track_id, a.tracks + b.tracks)
+    if _covers(b, a):
+        return Zone(b.kind, b.box, b.shape, b.radius, b.track_id, b.tracks + a.tracks)
+    if _overlap(a, b) < min_overlap:
+        return None
+    box = (
+        min(a.box[0], b.box[0]), min(a.box[1], b.box[1]),
+        max(a.box[2], b.box[2]), max(a.box[3], b.box[3]),
+    )
+    lead = a if _KIND_PRIORITY.get(a.kind, 0) >= _KIND_PRIORITY.get(b.kind, 0) else b
+    # Coins arrondis seulement dans la mesure où ils ne découvrent rien de ce
+    # que les deux zones d'origine couvraient près de leurs propres coins.
+    radius = int(min(0.12 * min(box[2] - box[0], box[3] - box[1]), _corner(a), _corner(b)))
+    shape = "rounded" if radius >= 1 else "rect"
+    return Zone(lead.kind, box, shape, radius, lead.track_id, a.tracks + b.tracks)
+
+
 def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
     """Réunit les flous qui se recouvrent, sans jamais découvrir un pixel qui était flouté.
 
@@ -121,37 +148,45 @@ def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
     - Deux zones qui se recouvrent largement sont remplacées par un seul rectangle arrondi
       englobant les deux (donc un peu plus grand que leur réunion).
     Les zones qui se touchent à peine restent séparées.
+
+    Règle : tant qu'il reste une paire à réunir, la première dans l'ordre (i, j) l'est. Pour
+    ne pas tout recomparer après chaque fusion, on garde l'invariant « aucune paire placée
+    avant (i, j) n'est à réunir » : une fusion ne peut le rompre que pour les paires (p, i),
+    p < i, et seulement si la zone i a changé de géométrie.
     """
     out = sorted(zones, key=lambda z: -(z.box[2] - z.box[0]) * (z.box[3] - z.box[1]))
-    out = [replace(z, tracks=z.tracks or (z.track_id,)) for z in out]
-    changed = True
-    while changed:
-        changed = False
-        for i in range(len(out)):
-            for j in range(i + 1, len(out)):
-                a, b = out[i], out[j]
-                if _covers(a, b):
-                    out[i] = replace(a, tracks=a.tracks + b.tracks)
-                elif _covers(b, a):
-                    out[i] = replace(b, tracks=b.tracks + a.tracks)
-                elif _overlap(a, b) >= min_overlap:
-                    box = (
-                        min(a.box[0], b.box[0]), min(a.box[1], b.box[1]),
-                        max(a.box[2], b.box[2]), max(a.box[3], b.box[3]),
-                    )
-                    lead = a if _KIND_PRIORITY.get(a.kind, 0) >= _KIND_PRIORITY.get(b.kind, 0) else b
-                    # Coins arrondis seulement dans la mesure où ils ne découvrent rien de ce
-                    # que les deux zones d'origine couvraient près de leurs propres coins.
-                    radius = int(min(0.12 * min(box[2] - box[0], box[3] - box[1]), _corner(a), _corner(b)))
-                    shape = "rounded" if radius >= 1 else "rect"
-                    out[i] = Zone(lead.kind, box, shape, radius, lead.track_id, a.tracks + b.tracks)
-                else:
-                    continue
-                del out[j]
-                changed = True
+    out = [
+        z if z.tracks else Zone(z.kind, z.box, z.shape, z.radius, z.track_id, (z.track_id,))
+        for z in out
+    ]
+    # Deux boîtes disjointes ne se couvrent pas et ont un recouvrement nul.
+    skip_apart = min_overlap > 0
+    i, j = 0, 1
+    while i < len(out):
+        a = out[i]
+        ax1, ay1, ax2, ay2 = a.box
+        fused = None
+        while j < len(out):
+            b = out[j]
+            bx1, by1, bx2, by2 = b.box
+            if not (skip_apart and (bx1 > ax2 or bx2 < ax1 or by1 > ay2 or by2 < ay1)):
+                fused = _fuse(a, b, min_overlap)
+                if fused is not None:
+                    break
+            j += 1
+        if fused is None:
+            i, j = i + 1, i + 2
+            continue
+        out[i] = fused
+        del out[j]
+        if fused.box == a.box and fused.shape == a.shape and fused.radius == a.radius:
+            continue  # même géométrie (zone absorbée) : la ligne i reprend où elle en était
+        for p in range(i):
+            if _fuse(out[p], fused, min_overlap) is not None:
+                i, j = p, i  # paire devenue fusionnable avant (i, j) : c'est la suivante
                 break
-            if changed:
-                break
+        else:
+            j = i + 1
     return out
 
 
@@ -250,9 +285,10 @@ class TrackZones:
     def zone(self, pts: float) -> tuple[int, int, int, int] | None:
         """Rectangle englobant de la zone de flou (entiers, borné à l'image) à l'instant `pts`."""
         padded = self._padded(pts)
-        if padded is None:
-            return None
-        box = padded[0]
+        return None if padded is None else self._bounded(padded[0])
+
+    def _bounded(self, box: Box) -> tuple[int, int, int, int] | None:
+        """Boîte en entiers bornée à l'image, None si elle est entièrement hors de l'image."""
         x1, y1 = max(0, int(np.floor(box[0]))), max(0, int(np.floor(box[1])))
         x2, y2 = min(self.width, int(np.ceil(box[2]))), min(self.height, int(np.ceil(box[3])))
         if x2 <= x1 or y2 <= y1:
@@ -269,7 +305,7 @@ class TrackZones:
           de la boîte détectée restent couverts.
         """
         padded = self._padded(pts)
-        if padded is None or self.zone(pts) is None:
+        if padded is None or self._bounded(padded[0]) is None:
             return None
         (x1, y1, x2, y2), mx, my = padded
         shape = "rect" if self.track.source == "manual" else self.settings.shape_for(self.track.kind)

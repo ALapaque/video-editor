@@ -384,25 +384,29 @@ class Engine:
     def zones(self, clip_id: str, first: int, last: int) -> dict:
         """Zones de flou pour les images `first` à `last` (indices) d'un clip."""
         project = self.require()
+        # Le verrou ne sert qu'à récupérer l'index et sa version. Le calcul se fait ensuite
+        # sans lui : l'index a copié les observations des pistes à sa construction, et
+        # /api/state (progression d'un traitement) n'attend pas derrière un bloc de zones.
         with self.lock:
             clip = project.clip(clip_id)
-            v = clip.video
             index = self.zone_index(clip)
-            last = min(last, first + 900, v.frames)
-            frames = {}
-            for k in range(max(0, first), last + 1):
-                pts = v.start_pts + round(k * v.frame_pts)
-                items = []
-                by_track = {item.track.id: item for item in index.active(pts)}
-                for z in index.shaped(pts):  # flous superposés déjà réunis
-                    item = by_track.get(z.track_id)
-                    obs = item.observation(pts) if item else None
-                    score = None if obs is None else round(obs[4], 2)
-                    # 10e valeur : toutes les pistes réunies dans cette zone.
-                    items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))])
-                if items:
-                    frames[k] = items
-            return {"version": self.version, "frames": frames}
+            version = self.version
+        v = clip.video
+        last = min(last, first + 900, v.frames)
+        frames = {}
+        for k in range(max(0, first), last + 1):
+            pts = v.start_pts + round(k * v.frame_pts)
+            items = []
+            by_track = {item.track.id: item for item in index.active(pts)}
+            for z in index.shaped(pts):  # flous superposés déjà réunis
+                item = by_track.get(z.track_id)
+                obs = item.observation(pts) if item else None
+                score = None if obs is None else round(obs[4], 2)
+                # 10e valeur : toutes les pistes réunies dans cette zone.
+                items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))])
+            if items:
+                frames[k] = items
+        return {"version": version, "frames": frames}
 
     def frame_jpeg(self, clip_id: str, frame_index: int, blur: bool, max_width: int) -> bytes:
         """Image source exacte, en pleine résolution, avec ou sans le flou du rendu final."""

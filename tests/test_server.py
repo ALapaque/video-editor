@@ -203,3 +203,33 @@ def test_older_project_files_load_without_review_state(api):
     assert old.review_done == [] and old.marks == []
     state = Engine(old).state()
     assert state["project"]["marks"] == [] and all(r["done"] is False for r in state["project"]["review"])
+
+
+def test_zones_are_computed_without_holding_the_engine_lock(tmp_path, video_info, monkeypatch):
+    """Pendant le calcul d'un bloc de zones, /api/state (qui prend le verrou) ne doit pas attendre."""
+    from moto_blur.postprocess import ZoneIndex
+
+    project = pj.Project(path=tmp_path / "p.motoblur.json")
+    project.clips.append(pj.Clip("c1", "clip.mp4", "fp", video_info))
+    track = pj.Track(1, "face", [[i * 512, 100, 100, 200, 200, 0.9] for i in range(10)])
+    project.analysis["c1"] = pj.ClipAnalysis(tracks=[track])
+    engine = Engine(project)
+    free = []
+    shaped = ZoneIndex.shaped
+
+    def spy(self, pts):
+        def probe():  # depuis un autre fil, comme une autre requête
+            got = engine.lock.acquire(timeout=2)
+            free.append(got)
+            if got:
+                engine.lock.release()
+
+        other = threading.Thread(target=probe)
+        other.start()
+        other.join()
+        return shaped(self, pts)
+
+    monkeypatch.setattr(ZoneIndex, "shaped", spy)
+    out = engine.zones("c1", 0, 4)
+    assert sorted(out["frames"]) == [0, 1, 2, 3, 4] and out["version"] == engine.version
+    assert free == [True] * 5
