@@ -21,7 +21,16 @@ Essais faits sur les machines virtuelles de GitHub (sans carte graphique) : sur 
 charge et les encodeurs VideoToolbox H.264 et H.265 fonctionnent ; sur Windows, DirectML ne
 trouve pas de carte graphique et le moteur se replie correctement sur le processeur et sur
 l'encodeur logiciel. Restent à vérifier sur de vraies machines : la vitesse avec accélération,
-DirectML et l'encodeur AMF sur Radeon.
+l'encodeur AMF sur Radeon, CoreML sur un vrai Mac. Sur un PC Windows 10 avec une Radeon RX 7900 XT,
+DirectML fonctionne : 8,4 images par seconde sur une vidéo 1440 × 2560 à 30 i/s (retour d'essai
+de l'utilisateur, une seule vidéo).
+
+Ajouts récents, vérifiés seulement sous Linux sur processeur et sur vidéos de synthèse :
+flous stabilisés, flou ajouté à la main qui suit ce qu'on entoure, contour précis des objets
+suivis, annuler / rétablir, préréglages d'analyse (conditions difficiles, rapide) avec
+estimation de durée, planche de vignettes pour retirer les faux flous, relecture mémorisée,
+export d'un extrait de contrôle et préréglages d'export, capture d'image, profil « ma moto »,
+projets récents, ménage des fichiers d'aperçu, export d'images d'entraînement.
 
 **Pour démarrer : [TUTORIEL.md](TUTORIEL.md).** Choix techniques : [docs/CHOIX-TECHNIQUES.md](docs/CHOIX-TECHNIQUES.md).
 
@@ -185,6 +194,12 @@ par défaut dans ce cas) ; `--scope all` refait tout le clip.
 | `--codec source\|h264\|hevc` | Codec de sortie. Par défaut celui de la source. |
 | `--encoder auto\|hardware\|software\|NOM` | Encodeur. `auto` essaie le matériel (VideoToolbox sur Mac, AMF sur Radeon) puis se replie sur le logiciel. |
 
+Dans l'interface, trois préréglages d'analyse regroupent ces réglages : « Normal », « Conditions
+difficiles » (modèle de visages le plus précis, seuils plus bas, tuiles plus petites : nettement
+plus lent, davantage de flous à vérifier) et « Rapide » (modèles légers, une image sur deux :
+environ deux fois plus court, moins sûr). L'interface peut mesurer la vitesse sur quelques
+images et annoncer la durée avant de lancer l'analyse.
+
 Les réglages d'analyse sont enregistrés dans le fichier projet. En changer un refait toute
 l'analyse ; changer un réglage de flou ou de rendu ne refait rien.
 
@@ -192,6 +207,17 @@ Si l'analyse est trop lente, dans l'ordre du moins risqué au plus risqué : `--
 yolo11n-face` et `--plate-model yolo-v9-t-640`, puis `--tile-size` plus grand, puis
 `--detect-every 2` (raisonnable à 60 i/s). `Ctrl+C` pendant l'analyse conserve ce qui est fait ;
 relancer la même commande reprend là où elle s'est arrêtée.
+
+### Images d'entraînement et modèle personnel
+
+```sh
+# Exporter les plaques vérifiées d'un projet comme images d'entraînement (tuiles + étiquettes)
+uv run moto-blur dataset samples/sortie.motoblur.json -o entrainement
+```
+
+Un modèle de plaques entraîné sur vos propres vidéos se pose dans
+`~/.moto-blur/models/perso/plate/` et s'utilise comme les autres. L'entraînement lui-même se fait
+hors de moto-blur : [docs/ENTRAINEMENT.md](docs/ENTRAINEMENT.md).
 
 ## Comment ça marche
 
@@ -207,7 +233,9 @@ relancer la même commande reprend là où elle s'est arrêtée.
    seule fois. Le flou remplace la zone par cinq cellules de couleur moyenne au plus,
    ré-agrandies en lissant : l'information d'origine est détruite, pas atténuée. Les visages
    sont floutés en ellipse, les plaques et le compteur en rectangle arrondi ; la forme contient
-   toujours toute la boîte détectée. Tout ce qui est
+   toujours toute la boîte détectée. Les zones sont stabilisées (position moyennée, taille
+   régulière) sans jamais découvrir la détection de l'image. Pour un objet suivi, un contour
+   précis peut être calculé à la demande : le flou épouse alors la silhouette de l'objet. Tout ce qui est
    hors des zones reste identique à la source avant encodage ; le 10 bits et les métadonnées
    de couleur sont conservés.
 4. **Rapport.** Les pistes fragiles sont listées avec leurs horodatages : confiance faible,
@@ -228,9 +256,20 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
 - L'accélération CoreML et DirectML et l'encodeur AMF n'ont jamais tourné sur une vraie carte
   graphique. Au début de l'analyse, le logiciel mesure l'accélération contre le processeur et
   garde le plus rapide.
-- Les formes de flou suivent la boîte de détection (ellipse, rectangle arrondi), pas le contour
-  réel de l'objet : les détecteurs utilisés ne donnent que des boîtes.
-- Le suivi du compteur donne un rectangle ; il n'a été essayé que sur des vidéos de synthèse.
+- Les formes de flou des visages et des plaques suivent la boîte de détection (ellipse, rectangle
+  arrondi), pas le contour réel : les détecteurs utilisés ne donnent que des boîtes.
+- Le suivi d'objet n'a été essayé que sur des vidéos de synthèse. Le contour précis (à la
+  demande, pour un objet suivi) aussi : il est calculé toutes les 0,25 s et reporté entre deux ;
+  il protège moins qu'un rectangle large (un contour serré laisse voir ce qui dépasse), revient
+  de lui-même à la forme habituelle quand il n'est pas fiable, et doit être vérifié sur la vidéo.
+  Sa vitesse sur Mac et sur Radeon n'a pas été mesurée.
+- Les préréglages « Conditions difficiles » et « Rapide » n'ont pas été évalués sur de vraies
+  vidéos : leur effet réel sur les plaques manquées est inconnu. « Rapide » est par construction
+  moins sûr.
+- Le profil « ma moto » retrouve un objet par son aspect : il peut se tromper d'objet si un autre
+  lui ressemble. Les objets retrouvés sont à confirmer à la vérification.
+- Le gain de vitesse du traitement des plaques « par lot » sur carte graphique n'a pas été mesuré
+  (aucun gain sur processeur).
 - L'application de bureau n'est pas signée, et ses installeurs n'ont jamais été lancés sur une
   vraie machine.
 - Avec `--codec h264` sur une source 10 bits, la sortie est en 8 bits.
@@ -250,7 +289,9 @@ Node), `desktop` (coque Tauri et empaquetage du moteur), `tests`.
 
 Les tests couvrent le suivi, l'interpolation, la prolongation et les marges des zones, la
 conversion entre temps source et temps du montage, l'analyse incrémentale, et un rendu complet
-sur une vidéo de synthèse (coupes à l'image près, audio sans clic, flou effectif).
+sur une vidéo de synthèse (coupes à l'image près, audio sans clic, flou effectif), ainsi que la
+stabilisation des zones, le contour précis (aucun pixel de l'objet découvert), l'annulation,
+les préréglages, l'export d'un extrait, le profil et l'export d'images d'entraînement.
 
 ## Licence
 
