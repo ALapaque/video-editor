@@ -9,6 +9,8 @@ dependencies = [
     "av>=19,<20",
     "numpy>=2",
     "opencv-python-headless>=4.10",
+    # Conversion locale des modèles de plaques pour traiter les tuiles par lot.
+    "onnx>=1.16",
     # Windows : DirectML (GPU AMD/Intel/Nvidia). Dernière version publiée du paquet : 1.24.4.
     "onnxruntime-directml==1.24.4; sys_platform == 'win32'",
     # macOS (CoreML inclus) et Linux (CPU).

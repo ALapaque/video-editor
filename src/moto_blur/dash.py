@@ -220,6 +220,18 @@ class _Appearance:
         self.seed = self._norm(self.patch)
         self.recent = self.seed
 
+    @classmethod
+    def from_patch(cls, patch: np.ndarray) -> _Appearance:
+        """Aspect construit à partir d'une image de l'objet seule (profil enregistré)."""
+        self = cls.__new__(cls)
+        self.patch = patch if patch.ndim == 2 else cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+        h, w = self.patch.shape[:2]
+        k = cls.SIDE / max(w, h)
+        self.size = (max(8, round(w * k)), max(8, round(h * k)))
+        self.seed = self._norm(self.patch)
+        self.recent = self.seed
+        return self
+
     def _norm(self, patch: np.ndarray) -> np.ndarray:
         return cv2.resize(patch, self.size, interpolation=cv2.INTER_AREA)
 
@@ -501,6 +513,57 @@ def track_from_click(
         state.tracks.append(track)
         created.append(track)
     return created
+
+
+def follow_region(
+    project: pj.Project,
+    clip: pj.Clip,
+    seed_pts: int,
+    box: tuple[float, float, float, float],
+    start_pts: int,
+    end_pts: int,
+    progress: Progress | None = None,
+) -> pj.Track:
+    """Flou ajouté à la main qui SUIT ce qui a été entouré (une personne, une plaque).
+
+    Le suivi part de l'image désignée, vers l'avant et vers l'arrière, dans [start_pts, end_pts].
+    Il s'arrête au premier changement de plan ou dès que l'objet est perdu : un flou manuel ne
+    cherche jamais l'objet ailleurs. La piste créée est une zone manuelle suivie (catégorie
+    "manual", origine "tracker") : elle se retire et se prolonge comme les autres.
+    """
+    v = clip.video
+    start_pts, end_pts = max(int(start_pts), v.start_pts), min(int(end_pts), v.end_pts)
+    seed_pts = min(max(int(seed_pts), start_pts), max(start_pts, end_pts - 1))
+    scale = TRACK_WIDTH / v.width
+    size = (TRACK_WIDTH, max(2, round(v.height * scale / 2) * 2))
+    init = (
+        round(box[0] * scale), round(box[1] * scale),
+        max(2, round((box[2] - box[0]) * scale)), max(2, round((box[3] - box[1]) * scale)),
+    )
+    with av.open(str(project.clip_path(clip))) as container:
+        seed_frame = next(iter_frames(container, seed_pts, v.end_pts), None)
+        if seed_frame is None:
+            raise ValueError("image de départ introuvable.")
+        seed_pts = seed_frame.pts
+        seed_image = _small(seed_frame, size)
+        step = round(v.frame_pts / 2) + 1
+        frames = ((f.pts, _small(f, size)) for f in iter_frames(container, seed_pts + step, end_pts))
+        forward, _ = _follow(frames, seed_image, init, scale, clip, progress, search=False)
+        frames = _reverse_frames(container, start_pts, seed_pts, size, v.tb)
+        backward, _ = _follow(frames, seed_image, init, scale, clip, progress, search=False)
+    obs = [[seed_pts, *[float(b) for b in box], 1.0]]
+    if backward:
+        obs = list(reversed(backward[0].obs)) + obs
+    if forward:
+        obs = obs + forward[0].obs
+    state = project.analysis.setdefault(clip.id, pj.ClipAnalysis())
+    track = pj.Track(
+        project.next_track_id(), "manual", obs, source="tracker",
+        extend_before_s=0.0 if backward and backward[0].ends_at_cut else None,
+        extend_after_s=0.0 if forward and forward[0].ends_at_cut else None,
+    )
+    state.tracks.append(track)
+    return track
 
 
 def extend_tracking(project: pj.Project, clip: pj.Clip, progress: Progress | None = None) -> bool:

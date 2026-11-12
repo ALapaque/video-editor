@@ -218,6 +218,35 @@ def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
     return out
 
 
+def smooth_boxes(boxes: list[Box], half: int = 2) -> list[Box]:
+    """Stabilise une suite de boîtes sans jamais en découvrir une.
+
+    Le centre est moyenné sur les images voisines (les vibrations se compensent) ; la taille
+    prend le maximum du voisinage (elle ne « respire » plus), agrandie si nécessaire pour que
+    la boîte lissée contienne toujours la boîte d'origine de la même image.
+    """
+    arr = np.asarray(boxes, dtype=np.float64)
+    n = len(arr)
+    cx, cy = (arr[:, 0] + arr[:, 2]) / 2, (arr[:, 1] + arr[:, 3]) / 2
+    hw, hh = (arr[:, 2] - arr[:, 0]) / 2, (arr[:, 3] - arr[:, 1]) / 2
+    windows = [(max(0, i - half), min(n, i + half + 1)) for i in range(n)]
+
+    def steady(size: np.ndarray) -> np.ndarray:
+        # Plus grande taille du voisinage, puis moyenne de ces maximums : la taille varie en
+        # douceur, et reste au moins égale à celle de l'image (chaque maximum la contient).
+        top = np.array([size[lo:hi].max() for lo, hi in windows])
+        return np.array([top[lo:hi].mean() for lo, hi in windows])
+
+    sw, sh = steady(hw), steady(hh)
+    out: list[Box] = []
+    for i, (lo, hi) in enumerate(windows):
+        mx, my = cx[lo:hi].mean(), cy[lo:hi].mean()
+        w = max(sw[i], abs(cx[i] - mx) + hw[i])
+        h = max(sh[i], abs(cy[i] - my) + hh[i])
+        out.append((mx - w, my - h, mx + w, my + h))
+    return out
+
+
 class TrackZones:
     """Calcule la zone de flou d'une piste à n'importe quel instant."""
 
@@ -228,7 +257,8 @@ class TrackZones:
             settings = replace(
                 settings, margin=0.0, min_margin_px=0, extend_s=0.0, temporal_pad_frames=0
             )
-        elif track.kind == "dash":
+        elif track.source == "tracker":
+            # Objet suivi à partir d'un rectangle tracé : boîte fiable, petite marge.
             settings = replace(settings, margin=settings.dash_margin)
         self.settings = settings
         self.width, self.height = video.width, video.height
@@ -236,6 +266,9 @@ class TrackZones:
         self.pts = [int(o[0]) for o in obs]
         self.boxes: list[Box] = [(o[1], o[2], o[3], o[4]) for o in obs]
         self.scores = [float(o[5]) for o in obs]
+        self.raw = self.boxes  # détections telles quelles (affichage, mode debug)
+        if settings.smooth and track.source != "manual" and len(obs) >= 3:
+            self.boxes = smooth_boxes(self.boxes)
         self.frame_pts = float(video.frame_pts)
         self.pts_per_s = float(1 / video.tb)
         before = settings.extend_s if track.extend_before_s is None else track.extend_before_s
@@ -352,7 +385,7 @@ class TrackZones:
         """Observation brute exactement à cet instant (pour le mode debug)."""
         i = bisect.bisect_left(self.pts, pts)
         if i < len(self.pts) and self.pts[i] == pts:
-            return [*self.boxes[i], self.scores[i]]
+            return [*self.raw[i], self.scores[i]]
         return None
 
 
@@ -431,6 +464,7 @@ def track_reasons(
 
 
 MAX_PASSAGE_S = 6.0
+MAX_OBJECTS_PER_PASSAGE = 3
 
 
 def build_review(
@@ -463,6 +497,7 @@ def build_review(
         if last and start <= last["end_pts"] + merge_pts and start - last["start_pts"] < max_pts:
             last["end_pts"] = max(last["end_pts"], end)
             last["tracks"].append(track_id)
+            last["_parts"].append((start, end, kind, reasons, track_id))
             if kind not in last["kinds"]:
                 last["kinds"].append(kind)
             for r in reasons:
@@ -478,6 +513,18 @@ def build_review(
                     "kinds": [kind],
                     "reasons": list(reasons),
                     "tracks": [track_id],
+                    "_parts": [(start, end, kind, reasons, track_id)],
                 }
             )
-    return passages
+    # Passage chargé : une question par objet plutôt qu'une seule pour des dizaines de zones,
+    # à laquelle on ne peut pas répondre d'un coup d'œil.
+    out: list[dict] = []
+    for p in passages:
+        parts = p.pop("_parts")
+        if len(parts) <= MAX_OBJECTS_PER_PASSAGE:
+            out.append(p)
+            continue
+        for start, end, kind, reasons, track_id in parts:
+            out.append({"clip": clip_id, "start_pts": start, "end_pts": end, "kinds": [kind],
+                        "reasons": list(reasons), "tracks": [track_id]})
+    return sorted(out, key=lambda r: (r["start_pts"], r["end_pts"]))

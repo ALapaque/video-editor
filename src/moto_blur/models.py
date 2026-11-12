@@ -11,7 +11,7 @@ import hashlib
 import os
 import sys
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .progress import Progress
@@ -93,6 +93,69 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def batchable(spec: ModelSpec, path: Path) -> tuple[ModelSpec, Path]:
+    """Version du modèle qui traite toutes les tuiles d'une image en un seul appel.
+
+    Les modèles de plaques sont publiés avec la suppression des doublons intégrée et une seule
+    image par appel : il fallait donc un appel par tuile. On en extrait ici la partie détection
+    (sortie brute, avant suppression des doublons, faite ensuite par moto-blur comme pour les
+    visages) et on libère la taille du lot. La conversion est faite une fois, sur cette machine,
+    à partir du fichier téléchargé ; le résultat est gardé à côté de lui.
+
+    En cas d'échec, le modèle d'origine est renvoyé tel quel.
+    """
+    if spec.output != "end2end":
+        return spec, path
+    target = path.with_name(f"{spec.name}.lot.onnx")
+    converted = replace(spec, output="ultralytics", dynamic=True)
+    if target.exists():
+        return converted, target
+    try:
+        import onnx
+        from onnx import numpy_helper
+
+        model = onnx.load(str(path))
+        produced = {o: n for n in model.graph.node for o in n.output}
+        # Sortie brute : le tenseur que le bloc « end2end » reçoit du détecteur.
+        raw = [
+            i for n in model.graph.node if n.name.startswith("/end2end") for i in n.input
+            if i in produced and not produced[i].name.startswith("/end2end")
+        ]
+        if len(set(raw)) != 1:
+            raise ValueError("sortie brute introuvable")
+        partial = target.with_suffix(".part")
+        onnx.utils.extract_model(str(path), str(partial), [model.graph.input[0].name], [raw[0]])
+        model = onnx.load(str(partial))
+        graph = model.graph
+        graph.input[0].type.tensor_type.shape.dim[0].dim_param = "batch"
+        for output in graph.output:
+            output.type.tensor_type.shape.Clear()
+        del graph.value_info[:]
+        # Les « Reshape » figés sur un lot de 1 : 0 signifie « garder la taille d'entrée ».
+        initializers = {i.name: i for i in graph.initializer}
+        constants = {n.output[0]: n for n in graph.node if n.op_type == "Constant"}
+        for node in graph.node:
+            if node.op_type != "Reshape":
+                continue
+            name = node.input[1]
+            if name in initializers:
+                shape = numpy_helper.to_array(initializers[name]).copy()
+                if shape.size and shape[0] == 1:
+                    shape[0] = 0
+                    initializers[name].CopyFrom(numpy_helper.from_array(shape, name))
+            elif name in constants:
+                shape = numpy_helper.to_array(constants[name].attribute[0].t).copy()
+                if shape.size and shape[0] == 1:
+                    shape[0] = 0
+                    constants[name].attribute[0].t.CopyFrom(numpy_helper.from_array(shape))
+        onnx.save(model, str(partial))
+        os.replace(partial, target)
+        return converted, target
+    except Exception as exc:  # noqa: BLE001 - la conversion est une optimisation, jamais un blocage
+        print(f"Conversion de {spec.name} impossible ({exc}) : une tuile par appel.", file=sys.stderr)
+        return spec, path
 
 
 def ensure_model(spec: ModelSpec) -> Path:

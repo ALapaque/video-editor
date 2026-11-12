@@ -11,7 +11,7 @@ a = Analysis(
     pathex=[],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["onnxruntime", "av", "cv2"],
+    hiddenimports=["onnxruntime", "av", "cv2", "onnx"],
     excludes=["tkinter", "matplotlib", "pytest"],
 )
 pyz = PYZ(a.pure)
