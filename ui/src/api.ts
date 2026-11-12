@@ -26,6 +26,10 @@ export interface Range {
 }
 
 export interface ReviewItem extends Range {
+  /** Identifiant stable du passage ; il change si le passage change (il est alors redemandé). */
+  key: string;
+  /** Validé par l'utilisateur pendant la vérification guidée. */
+  done: boolean;
   kinds: string[];
   reasons: string[];
   tracks: number[];
@@ -45,6 +49,13 @@ export interface Track {
   keyframes?: number[][];
 }
 
+/** Signalement posé pendant la relecture complète : instant d'un clip, en secondes de temps source. */
+export interface Mark {
+  id: number;
+  clip: string;
+  time: number;
+}
+
 export interface Settings {
   analysis: Record<string, string | number | boolean | string[]>;
   blur: Record<string, string | number | boolean>;
@@ -58,6 +69,7 @@ export interface Project {
   mutes: Range[];
   settings: Settings;
   review: ReviewItem[];
+  marks: Mark[];
   tracks: Record<string, Track[]>;
   problem: string | null;
   /** Les clips du montage n'ont pas tous le même format. */

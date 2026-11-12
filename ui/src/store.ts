@@ -30,11 +30,20 @@ export const state = reactive({
   toastKind: "info" as "info" | "error",
   zoom: 0, // pixels par seconde ; 0 = ajusté à la largeur
   pendingDash: null as { clip: string; time: number; box: number[] } | null,
+  tab: "review" as "review" | "zones" | "settings", // onglet du panneau latéral
+  step: 0, // étape du guide choisie à la main (1 à 4) ; 0 = étape déduite de l'état du projet
 });
+
+/** Commandes du lecteur, renseignées par le composant Player à son montage. */
+export const player = {
+  play: async (): Promise<void> => {},
+  pause: (): void => {},
+};
 
 export const project = computed(() => state.data.project);
 export const job = computed(() => state.data.job);
 export const busy = computed(() => state.data.job?.state === "running");
+export const needsAnalysis = computed(() => project.value?.clips.some((c) => c.needs_analysis) ?? false);
 
 export function fpsOf(clip: Clip): number {
   return clip.fps_num / clip.fps_den;
@@ -111,7 +120,7 @@ export const visibleReview = computed(() => {
   const items: { item: ReviewItem; at: number; end: number; key: string }[] = [];
   for (const item of project.value?.review ?? []) {
     for (const part of mapRange(item)) {
-      items.push({ item, at: part.start, end: part.end, key: `${item.clip}:${item.start.toFixed(3)}:${item.end.toFixed(3)}` });
+      items.push({ item, at: part.start, end: part.end, key: item.key });
     }
   }
   return items.sort((a, b) => a.at - b.at);

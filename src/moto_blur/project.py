@@ -177,6 +177,11 @@ class Project:
     blur_settings: BlurSettings = field(default_factory=BlurSettings)
     analysis: dict[str, ClipAnalysis] = field(default_factory=dict)
     review: list[dict] = field(default_factory=list)
+    # Vérification guidée : clés (voir `review_key`) des passages douteux que l'utilisateur a
+    # validés, et signalements posés pendant la relecture complète. Un signalement est
+    # {"id": entier, "clip": identifiant, "time": secondes depuis la première image du clip}.
+    review_done: list[str] = field(default_factory=list)
+    marks: list[dict] = field(default_factory=list)
     # Assemblage de clips de formats différents : "" (pas encore choisi, le rendu refuse),
     # "first" (tout aligner sur le premier clip) ou "largest" (plus grande résolution et
     # plus haute fréquence d'images).
@@ -198,6 +203,19 @@ class Project:
     def next_track_id(self) -> int:
         ids = [t.id for a in self.analysis.values() for t in a.tracks]
         return max(ids, default=0) + 1
+
+
+def review_key(item: dict) -> str:
+    """Clé d'un passage à vérifier. Elle change dès que le passage change : il est alors redemandé."""
+    return f"{item['clip']}:{item['start_pts']}:{item['end_pts']}"
+
+
+def prune_review_state(project: Project) -> None:
+    """Oublie les validations de passages disparus et les signalements de clips retirés."""
+    keys = {review_key(r) for r in project.review}
+    project.review_done = [k for k in dict.fromkeys(project.review_done) if k in keys]
+    clips = {c.id for c in project.clips}
+    project.marks = [m for m in project.marks if m.get("clip") in clips]
 
 
 def fingerprint(path: Path) -> str:
@@ -259,6 +277,8 @@ def dumps(project: Project) -> str:
             "blur": asdict(project.blur_settings),
         },
         "conform": project.conform,
+        "review_done": project.review_done,
+        "marks": project.marks,
         "review": project.review,
     }
     text = json.dumps(head, indent=2, ensure_ascii=False)
@@ -318,6 +338,11 @@ def load(path: Path) -> Project:
         blur_settings=_known(BlurSettings, settings.get("blur", {})),
         analysis=analysis,
         review=doc.get("review", []),
+        review_done=[str(k) for k in doc.get("review_done", [])],
+        marks=[
+            {"id": int(m["id"]), "clip": str(m["clip"]), "time": float(m["time"])}
+            for m in doc.get("marks", [])
+        ],
         conform=doc.get("conform", ""),
         path=path,
     )

@@ -1,44 +1,17 @@
 <script setup lang="ts">
-// Panneau latéral : passages à vérifier, zones de l'image courante, réglages.
-import { computed, reactive, ref, watch } from "vue";
+// Panneau latéral : vérification guidée, zones de l'image courante, réglages.
+import { computed, reactive, watch } from "vue";
 import type { Track } from "../api";
+import { pending } from "../review";
 import Icon from "./Icon.vue";
+import ReviewPanel from "./ReviewPanel.vue";
 import {
   busy, current, deleteTrack, formatTime, kindLabel, notify, patchTrack, project, removeMute, saveManual,
-  seekTime, send, state, time, visibleReview,
+  send, state,
 } from "../store";
 
-const tab = ref<"review" | "zones" | "settings">("review");
+const tab = computed({ get: () => state.tab, set: (value) => (state.tab = value) });
 const tabIndex = computed(() => ["review", "zones", "settings"].indexOf(tab.value));
-
-// --- Vérification ---
-const storageKey = computed(() => `moto-blur:verifies:${project.value?.path ?? ""}`);
-const checked = reactive(new Set<string>());
-watch(storageKey, (key) => {
-  checked.clear();
-  try {
-    for (const k of JSON.parse(localStorage.getItem(key) ?? "[]")) checked.add(k);
-  } catch {
-    /* stockage indisponible : les coches ne sont simplement pas mémorisées */
-  }
-}, { immediate: true });
-function toggleChecked(key: string): void {
-  if (checked.has(key)) checked.delete(key);
-  else checked.add(key);
-  try {
-    localStorage.setItem(storageKey.value, JSON.stringify([...checked]));
-  } catch {
-    /* idem */
-  }
-}
-const remaining = computed(() => visibleReview.value.filter((r) => !checked.has(r.key)).length);
-function jump(direction: 1 | -1): void {
-  const list = visibleReview.value.filter((r) => !checked.has(r.key));
-  const t = time.value;
-  const target = direction > 0 ? list.find((r) => r.at - 0.4 > t + 0.05) : [...list].reverse().find((r) => r.at - 0.4 < t - 0.05);
-  if (target) seekTime(Math.max(0, target.at - 0.4));
-  else notify(direction > 0 ? "Plus de passage à vérifier après la tête de lecture." : "Pas de passage à vérifier avant.");
-}
 
 // --- Zones de l'image courante ---
 const sourceTime = computed(() => (current.value ? state.frame / current.value.fps : 0));
@@ -105,33 +78,14 @@ async function saveAnalysis(): Promise<void> {
 <template>
   <aside class="side">
     <nav class="tabs" role="tablist">
-      <button role="tab" :aria-selected="tab === 'review'" :class="{ on: tab === 'review' }" @click="tab = 'review'">À vérifier <b v-if="remaining">{{ remaining }}</b></button>
+      <button role="tab" :aria-selected="tab === 'review'" :class="{ on: tab === 'review' }" @click="tab = 'review'">Vérification <b v-if="pending">{{ pending }}</b></button>
       <button role="tab" :aria-selected="tab === 'zones'" :class="{ on: tab === 'zones' }" @click="tab = 'zones'">Zones</button>
       <button role="tab" :aria-selected="tab === 'settings'" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">Réglages</button>
       <span class="tab-ind" :style="{ transform: `translateX(${tabIndex * 100}%)` }"></span>
     </nav>
 
     <Transition name="pane" mode="out-in">
-      <section v-if="tab === 'review'" key="review" class="pane">
-        <p class="help">Passages où le logiciel n'est pas sûr de lui. Ils sont floutés quand même ; regardez-les image par image. Un objet jamais détecté n'apparaît pas ici.</p>
-        <div class="row pair">
-          <button @click="jump(-1)"><Icon name="chevronLeft" />Précédent</button>
-          <button @click="jump(1)">Suivant<Icon name="chevronRight" /></button>
-        </div>
-        <p v-if="!visibleReview.length" class="blank"><Icon name="check" :size="18" />Aucun passage douteux dans le montage.</p>
-        <ul class="list review">
-          <li v-for="r in visibleReview" :key="r.key + r.at" :class="{ done: checked.has(r.key), here: time >= r.at - 0.5 && time <= r.end + 0.2 }">
-            <input type="checkbox" :checked="checked.has(r.key)" title="Marquer comme vérifié" aria-label="Marquer comme vérifié" @change="toggleChecked(r.key)" />
-            <a href="#" @click.prevent="seekTime(Math.max(0, r.at - 0.4))">
-              <span class="line">
-                <strong class="mono">{{ formatTime(r.at, 1) }}</strong>
-                <span class="kinds" :class="r.item.kinds[0]">{{ r.item.kinds.map((k) => kindLabel[k] ?? k).join(" + ") }}</span>
-              </span>
-              <small>{{ r.item.reasons.join(" ; ") }}</small>
-            </a>
-          </li>
-        </ul>
-      </section>
+      <ReviewPanel v-if="tab === 'review'" key="review" />
 
       <section v-else-if="tab === 'zones'" key="zones" class="pane">
         <div class="row pair">

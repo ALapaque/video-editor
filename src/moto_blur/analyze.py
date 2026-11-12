@@ -263,3 +263,4 @@ def refresh_review(project: pj.Project) -> None:
             )
             review.extend(dash.build_dash_review(clip, state.tracks))
     project.review = review
+    pj.prune_review_state(project)

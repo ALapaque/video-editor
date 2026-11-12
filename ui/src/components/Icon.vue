@@ -13,6 +13,7 @@ const paths = {
   arrowUp: '<path d="M8 13V3M4 7l4-4 4 4"/>',
   chevronLeft: '<path d="M9.75 3.5 5.25 8l4.5 4.5"/>',
   chevronRight: '<path d="M6.25 3.5 10.75 8l-4.5 4.5"/>',
+  flag: '<path d="M3.5 14V2.5M3.5 3h8.25l-2 2.9 2 2.9H3.5"/>',
   volume: '<path d="M2.5 6.25h2L7.75 3.5v9L4.5 9.75h-2z"/><path d="M10.4 6a2.9 2.9 0 0 1 0 4M12.3 4.2a5.4 5.4 0 0 1 0 7.6"/>',
   volumeOff: '<path d="M2.5 6.25h2L7.75 3.5v9L4.5 9.75h-2z"/><path d="M10.5 6.25 14 9.75M14 6.25l-3.5 3.5"/>',
   folder: '<path d="M1.75 4.25a1 1 0 0 1 1-1h3l1.5 1.75h6a1 1 0 0 1 1 1v6.25a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/>',
