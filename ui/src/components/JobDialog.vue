@@ -29,6 +29,11 @@ const title = computed(() => {
     case "analyze": return "Analyse du montage";
     case "dash": return objectName.value ? `Suivi de l'objet « ${objectName.value} »` : "Suivi d'un objet";
     case "render": return "Export de la vidéo";
+    case "follow": return "Suivi du flou ajouté";
+    case "estimate": return "Estimation de la durée d'analyse";
+    case "profile": return "Application de votre profil";
+    case "contour": return "Contour précis";
+    case "dataset": return "Images d'entraînement";
     default: return "Traitement en cours";
   }
 });
@@ -37,6 +42,11 @@ const phase = computed(() => {
   if (downloading.value) return `${j.value.label} (une seule fois, puis il reste sur cette machine)`;
   if (j.value.kind === "dash") return "Recherche de l'objet image par image, vers l'avant et l'arrière.";
   if (j.value.kind === "render") return "Écriture de la vidéo floutée.";
+  if (j.value.kind === "follow") return "Suivi de ce que vous avez entouré, image par image, dans ce passage.";
+  if (j.value.kind === "estimate") return "Mesure de la vitesse sur quelques images de la vidéo.";
+  if (j.value.kind === "profile") return "Recherche des objets de votre profil dans la vidéo.";
+  if (j.value.kind === "contour") return "Calcul du contour de l'objet, image par image. C'est long : comptez plusieurs fois la durée du passage suivi.";
+  if (j.value.kind === "dataset") return "Enregistrement des images des plaques vérifiées.";
   const named = j.value.label.replace(/\bc\d+\b/g, (id) => project.value?.clips.find((c) => c.id === id)?.name ?? id);
   return named.replace(/^Analyse /, "Détection des visages et des plaques : ");
 });
@@ -46,6 +56,11 @@ const after = computed(() => {
     case "analyze": return "L'analyse terminée, vous pourrez vérifier le floutage.";
     case "dash": return "Le suivi terminé, l'objet sera flouté sur tout le clip ; regardez le résultat en lecture.";
     case "render": return "La vidéo sera écrite dans le dossier du projet. Vos fichiers d'origine ne sont pas modifiés.";
+    case "follow": return "Le suivi s'arrête seul à un changement de plan.";
+    case "estimate": return "La durée estimée s'affichera à côté du bouton « Analyser ».";
+    case "profile": return "À la fin, vous saurez quels objets ont été retrouvés.";
+    case "contour": return "Le calcul terminé, le flou épousera la forme de l'objet.";
+    case "dataset": return "À la fin, le dossier des images sera indiqué.";
     default: return "";
   }
 });
@@ -57,17 +72,26 @@ const resultTitle = computed(() => {
   if (j.value.state === "cancelled") return "Traitement annulé";
   switch (j.value.kind) {
     case "analyze": return j.value.message.startsWith("Analyse terminée") ? "Analyse terminée" : "Analyse interrompue";
-    case "render": return "Export terminé";
+    case "render": return extract.value ? "Extrait terminé" : "Export terminé";
     case "dash": return "Suivi terminé";
+    case "follow": return "Flou ajouté";
+    case "estimate": return "Durée estimée";
+    case "profile": return "Profil appliqué";
+    case "contour": return "Contour précis calculé";
+    case "dataset": return "Images d'entraînement enregistrées";
     default: return "Traitement terminé";
   }
 });
+/** Export d'un extrait de contrôle (« Essayer sur un extrait de 10 s »), et non de la vidéo entière. */
+const extract = computed(() => j.value.message.startsWith("Extrait écrit"));
 /** Chemin du fichier écrit par l'export, pour le montrer à part (texte sélectionnable). */
-const outputPath = computed(() => (j.value.state === "done" ? (j.value.message.match(/^Vidéo écrite : (.+)$/s)?.[1] ?? "") : ""));
+const outputPath = computed(() => (j.value.state === "done" ? (j.value.message.match(/^(?:Vidéo écrite|Extrait écrit) : (.+)$/s)?.[1] ?? "") : ""));
 /** Message du moteur, une information par ligne (vitesse, accélération utilisée…). */
 const lines = computed(() => {
-  if (outputPath.value) return ["La vidéo a été écrite ici :"];
-  const text = j.value.message || (j.value.state === "cancelled" ? "Traitement annulé." : "");
+  if (outputPath.value) return [extract.value ? "L'extrait a été écrit ici. Regardez-le, puis lancez l'export complet :" : "La vidéo a été écrite ici :"];
+  let text = j.value.message || (j.value.state === "cancelled" ? "Traitement annulé." : "");
+  // profil appliqué : une ligne par objet (« compteur » : retrouvé… « téléphone » : non retrouvé…)
+  if (j.value.kind === "profile") text = text.replace(/\. (?=« )/g, ".\n");
   return text.split(/\n| — /).map((l) => l.trim()).filter((l) => l && l !== `${resultTitle.value}.`).map((l) => l.replace(/^Analyse terminée\.\s*/, ""));
 });
 const canReview = computed(() => j.value.kind === "analyze" && j.value.state === "done" && j.value.message.startsWith("Analyse terminée"));
@@ -136,7 +160,7 @@ onBeforeUnmount(() => {
         <div class="job-big" role="status" aria-live="off">
           <span class="job-percent mono">{{ percent }}<small> %</small></span>
           <dl class="job-facts">
-            <template v-if="!downloading"><dt>Images</dt><dd class="mono">{{ j.done }} / {{ j.total }}</dd></template>
+            <template v-if="!downloading && j.kind !== 'profile'"><dt>Images</dt><dd class="mono">{{ j.done }} / {{ j.total }}</dd></template>
             <template v-if="j.fps > 0"><dt>Vitesse</dt><dd class="mono">{{ j.fps }} i/s</dd></template>
             <template v-if="eta"><dt>Temps restant</dt><dd class="mono">{{ eta }}</dd></template>
           </dl>

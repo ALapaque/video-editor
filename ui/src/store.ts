@@ -38,6 +38,8 @@ export const state = reactive({
   step: 0, // étape du guide choisie à la main (1 à 4) ; 0 = étape déduite de l'état du projet
   mode: "" as Mode, // interface choisie ; "" = pas encore choisie (l'écran de choix s'affiche)
   loopRange: null as { from: number; to: number } | null, // extrait lu en boucle hors vérification (mode simple)
+  // mode avancé : rectangle de flou tracé, en attente du choix « suivre » ou « zone fixe »
+  pendingBlur: null as PendingBlur | null,
 });
 
 // --- Mode simple ou avancé ----------------------------------------------------
@@ -440,3 +442,18 @@ export async function saveManual(clip: string, keyframes: number[][], id?: numbe
   const next = await send("POST", "/api/manual", { clip, keyframes, id, kind });
   if (next?.created !== undefined) state.selectedTrack = { clip, id: next.created };
 }
+
+/* === mode avancé : ajouts === */
+
+/** Rectangle de flou tracé à la main, avant le choix entre « suivre » et « zone fixe ». */
+export interface PendingBlur {
+  clip: string;
+  time: number; // instant du tracé, en secondes de temps source
+  box: number[]; // x1, y1, x2, y2 en pixels de l'image source
+  start: number; // portion où suivre : le passage du montage affiché (secondes de temps source)
+  end: number;
+  fixed: number[][]; // images clés de la zone fixe, si ce choix est retenu
+  guided: boolean; // tracé depuis « Il manque un flou », pendant la vérification
+}
+
+/* === fin des ajouts du mode avancé === */

@@ -4,7 +4,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ZoneTuple } from "../api";
 import Icon from "./Icon.vue";
-import { loop, objectHere, outline, rate, removeZone, resume, review } from "../review";
+import { snapshot } from "../extras";
+import { loop, objectHere, outline, rate, removeZone, resume, review, speeds } from "../review";
 import {
   start,
   current, droppedNow, duration, formatTime, kindLabel, notify, objectNames, player, project, saveManual, seekTime, segments,
@@ -179,8 +180,14 @@ const colors: Record<string, string> = { face: "#4ade80", plate: "#38bdf8", dash
 
 function shapePath(ctx: CanvasRenderingContext2D, z: ZoneTuple, k: number): void {
   const [x1, y1, x2, y2, shape, radius] = z;
+  const contour = shape === "contour" ? z[10] : undefined;
   ctx.beginPath();
-  if (shape === "ellipse") ctx.ellipse(((x1 + x2) / 2) * k, ((y1 + y2) / 2) * k, ((x2 - x1) / 2) * k, ((y2 - y1) / 2) * k, 0, 0, Math.PI * 2);
+  if (contour && contour.length >= 3) {
+    // contour précis d'un objet suivi : polygone fermé, en pixels de l'image source
+    ctx.moveTo(contour[0][0] * k, contour[0][1] * k);
+    for (let i = 1; i < contour.length; i++) ctx.lineTo(contour[i][0] * k, contour[i][1] * k);
+    ctx.closePath();
+  } else if (shape === "ellipse") ctx.ellipse(((x1 + x2) / 2) * k, ((y1 + y2) / 2) * k, ((x2 - x1) / 2) * k, ((y2 - y1) / 2) * k, 0, 0, Math.PI * 2);
   else if (shape === "rounded" && radius > 0) ctx.roundRect(x1 * k, y1 * k, (x2 - x1) * k, (y2 - y1) * k, radius * k);
   else ctx.rect(x1 * k, y1 * k, (x2 - x1) * k, (y2 - y1) * k);
 }
@@ -271,9 +278,9 @@ function draw(): void {
     ctx.setLineDash([]);
     if (droppedCount.value !== dropped.length) droppedCount.value = dropped.length;
   }
-  const waiting = state.pendingDash;
+  const waiting = state.pendingDash ?? state.pendingBlur;
   if (waiting && waiting.clip === s.clip.id && !drag) {
-    // rectangle tracé autour d'un objet, en attente de son nom
+    // rectangle tracé, en attente du nom de l'objet ou du choix « suivre » / « zone fixe »
     const [x1, y1, x2, y2] = waiting.box;
     ctx.lineWidth = 2 * ratio;
     ctx.strokeStyle = "#fde047";
@@ -349,7 +356,21 @@ async function pointerUp(): Promise<void> {
     return;
   }
   const t = state.frame / s.fps;
-  if (tool === "manual" && guidedLoop) {
+  if (tool === "manual" && state.mode !== "simple") {
+    // mode avancé : le rectangle attend le choix « Suivre ce que j'ai entouré » ou « Zone fixe ».
+    // La zone fixe reste celle d'avant : tout le passage en boucle pendant la vérification, 2 s sinon.
+    let from = t;
+    let to = Math.min(t + 2, (s.outFrame - 1) / s.fps);
+    if (guidedLoop) {
+      const base = s.inFrame / s.fps - s.offset;
+      from = Math.max(guidedLoop.from + base, s.inFrame / s.fps);
+      to = Math.min(guidedLoop.to + base, (s.outFrame - 1) / s.fps);
+    }
+    state.pendingBlur = {
+      clip: s.clip.id, time: t, box, start: s.inFrame / s.fps, end: s.outFrame / s.fps,
+      fixed: [[from, ...box], [Math.max(to, from + 1 / s.fps), ...box]], guided: !!guidedLoop,
+    };
+  } else if (tool === "manual" && guidedLoop) {
     // vérification guidée : la zone couvre tout le passage en boucle (dans le passage du montage affiché)
     const base = s.inFrame / s.fps - s.offset;
     const from = Math.max(guidedLoop.from + base, s.inFrame / s.fps);
@@ -383,7 +404,7 @@ async function pointerUp(): Promise<void> {
 function onKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
-  if (state.jobOpen) return; // dialogue de progression ouvert : le clavier lui appartient
+  if (state.jobOpen || state.pendingBlur || review.sheet) return; // un dialogue est ouvert : le clavier lui appartient
   const s = current.value;
   if (!s) return;
   if (event.code === "Space") toggle();
@@ -409,7 +430,19 @@ watch(() => [state.seg, state.frame, state.data.version, state.preview, state.se
 watch(() => current.value?.clip.proxy, () => nextTick(sync));
 watch(exact, (value) => (exactLoading.value = !!value));
 watch(rate, (value) => video.value && (video.value.playbackRate = value));
-watch(() => [review.sub, review.current, state.showDropped, state.pendingDash], draw);
+watch(() => [review.sub, review.current, state.showDropped, state.pendingDash, state.pendingBlur], draw);
+
+// Capture : l'image affichée est enregistrée en PNG pleine résolution à côté du projet, floutée
+// comme à l'export (nette seulement si « Image exacte » montre la source nette).
+const snapping = ref(false);
+async function snap(): Promise<void> {
+  const s = current.value;
+  if (!s || snapping.value) return;
+  pause();
+  snapping.value = true;
+  await snapshot(s.clip.id, state.frame, exact.value !== "source");
+  snapping.value = false;
+}
 watch([volume, userMuted], () => {
   applyVolume();
   try {
@@ -451,7 +484,7 @@ onBeforeUnmount(() => {
   el?.cancelVideoFrameCallback?.(frameCallback);
 });
 
-defineExpose({ toggle, step, pause });
+defineExpose({ toggle, step, pause, snap });
 </script>
 
 <template>
@@ -463,6 +496,11 @@ defineExpose({ toggle, step, pause });
           <img v-if="exactUrl && !state.playing" class="exact" :src="exactUrl" alt="" @load="exactLoading = false" />
           <canvas ref="canvas" :data-dropped="state.showDropped ? droppedCount : undefined" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"></canvas>
           <div v-if="!clip.proxy" class="veil"><span class="spinner"></span>Préparation de l'aperçu de ce clip…</div>
+          <!-- assistant : pas de barre de commandes, la capture apparaît au survol dans le coin de l'image -->
+          <button
+            v-if="simple && clip.proxy && state.tool === 'none' && review.sub !== 'extra'" class="icon-btn snap-float" :disabled="snapping"
+            title="Enregistrer cette image, floutée, à côté de la vidéo" aria-label="Enregistrer cette image, floutée" @click="snap"
+          ><span v-if="snapping" class="spinner small"></span><Icon v-else name="camera" /></button>
           <Transition name="hint">
             <div v-if="state.tool !== 'none' && simple" class="hint tool">{{ state.tool === "dash" ? "Entourez l'objet avec la souris" : "Entourez avec la souris ce qui doit être flouté" }}</div>
             <div v-else-if="state.tool !== 'none'" class="hint tool">
@@ -486,9 +524,7 @@ defineExpose({ toggle, step, pause });
         <button class="icon-btn" title="Image suivante (→)" aria-label="Image suivante" @click="step(1)"><Icon name="stepForward" /></button>
       </span>
       <select v-model.number="review.speed" class="speed-select" aria-label="Vitesse de l'aperçu" title="Vitesse de l'aperçu (sans effet sur l'export)">
-        <option :value="1">1×</option>
-        <option :value="0.5">0,5×</option>
-        <option :value="0.25">0,25×</option>
+        <option v-for="s in speeds" :key="s.value" :value="s.value">{{ s.label }}</option>
       </select>
       <span class="timecode">
         <span class="clock">{{ formatTime(time) }} <span class="clock-total">/ {{ formatTime(duration) }}</span></span>
@@ -514,6 +550,11 @@ defineExpose({ toggle, step, pause });
           <option value="source">source nette</option>
         </select>
       </label>
+      <button
+        class="icon-btn snap" :disabled="snapping || !clip"
+        :title="exact === 'source' ? 'Enregistrer cette image en PNG, nette (« Image exacte » est sur « source nette »)' : 'Enregistrer cette image en PNG, floutée comme à l\'export, à côté du projet'"
+        :aria-label="exact === 'source' ? 'Enregistrer cette image, nette' : 'Enregistrer cette image, floutée'" @click="snap"
+      ><span v-if="snapping" class="spinner small"></span><Icon v-else name="camera" /></button>
     </div>
   </div>
 </template>

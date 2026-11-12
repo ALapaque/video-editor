@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // Panneau latéral : vérification guidée, zones de l'image courante, réglages.
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import type { Track } from "../api";
+import { applyProfile, presetInfo, saveProfile } from "../extras";
 import { pending } from "../review";
 import Icon from "./Icon.vue";
+import PresetChoice from "./PresetChoice.vue";
 import ReviewPanel from "./ReviewPanel.vue";
 import {
-  busy, current, deleteTrack, droppedHere, formatTime, notify, patchTrack, project, removeMute, saveManual,
-  send, state, tracksNow,
+  busy, current, deleteTrack, droppedHere, formatTime, kindLabel, notify, patchTrack, project, removeMute, saveManual,
+  send, start, state, tracksNow,
 } from "../store";
 
 const tab = computed({ get: () => state.tab, set: (value) => (state.tab = value) });
@@ -24,11 +26,13 @@ const tracksHere = computed<Track[]>(() =>
 // --- Objets désignés à la main dans le clip affiché (compteur, téléphone…) ---
 const objects = computed(() => {
   const s = current.value;
-  const out = new Map<string, { name: string; tracked: boolean; start: number; end: number }>();
+  const out = new Map<string, { name: string; tracked: boolean; contour: boolean; length: number; start: number; end: number }>();
   for (const t of s ? (project.value?.tracks[s.clip.id] ?? []) : []) {
     if (t.kind !== "dash") continue;
-    const o = out.get(t.name) ?? { name: t.name, tracked: false, start: t.start, end: t.end };
+    const o = out.get(t.name) ?? { name: t.name, tracked: false, contour: false, length: 0, start: t.start, end: t.end };
     o.tracked = o.tracked || t.source === "tracker";
+    o.contour = o.contour || t.contour === true;
+    if (t.source === "tracker") o.length += t.end - t.start;
     o.start = Math.min(o.start, t.start);
     o.end = Math.max(o.end, t.end);
     out.set(t.name, o);
@@ -40,6 +44,29 @@ async function clearObject(name: string): Promise<void> {
   confirmDelete.value = "";
   if (current.value) await send("POST", "/api/dash", { clip: current.value.clip.id, label: name, mode: "clear" });
 }
+
+// --- Contour précis d'un objet suivi (si cette installation le permet) ---
+const canContour = computed(() => state.data.features?.contour === true);
+const contourAsk = ref(""); // objet (« o:nom ») ou flou suivi (« t:numéro ») dont le calcul attend une confirmation
+/** Durée du calcul annoncée avant de le lancer : deux à quatre fois la durée suivie. */
+function contourTime(seconds: number): string {
+  const s = Math.max(1, seconds) * 3;
+  return s < 90 ? `environ ${Math.max(5, Math.round(s / 5) * 5)} s` : `environ ${Math.round(s / 60)} min`;
+}
+async function startContour(target: { label: string } | { id: number }): Promise<void> {
+  contourAsk.value = "";
+  if (current.value) await start("/api/contour", { clip: current.value.clip.id, ...target });
+}
+async function clearContour(target: { label: string } | { id: number }): Promise<void> {
+  if (current.value && (await send("POST", "/api/contour", { clip: current.value.clip.id, ...target, clear: true }))) notify("Forme simple rétablie.");
+}
+
+// une zone sélectionnée ailleurs (clic dans l'image, flou qui vient d'être ajouté) est amenée à l'écran dans la liste
+watch(() => [state.selectedTrack?.id, tab.value, contourAsk.value], () => {
+  if (state.selectedTrack && tab.value === "zones") {
+    void nextTick(() => document.querySelector(".zones li.selected")?.scrollIntoView({ block: "nearest" }));
+  }
+});
 
 function isSelected(tr: Track): boolean {
   return state.selectedTrack?.id === tr.id && state.selectedTrack.clip === current.value?.clip.id;
@@ -112,6 +139,35 @@ async function saveAnalysis(): Promise<void> {
   const { kinds: _kinds, ...rest } = analysis;
   if (await send("PUT", "/api/settings", { analysis: rest })) notify("Réglages d'analyse enregistrés. Relancez « Analyser » : toute l'analyse sera refaite.");
 }
+
+// Modèles proposés : ceux que le moteur annonce (fournis, puis personnels), sinon la liste d'origine.
+// Le modèle du projet reste dans la liste même s'il n'est plus annoncé.
+function models(kind: "face" | "plate", fallback: string[]): string[] {
+  const announced = state.data.models?.[kind];
+  const list = announced?.length ? announced : fallback;
+  const used = String(analysis[`${kind}_model`] ?? "");
+  return used && !list.includes(used) ? [...list, used] : list;
+}
+const faceModels = computed(() => models("face", ["yolo11n-face", "yolo11s-face", "yolo11m-face"]));
+const plateModels = computed(() => models("plate", ["yolo-v9-t-640", "yolo-v9-s-608"]));
+
+// --- Profil « ma moto » ---
+const profile = computed(() => state.data.profile ?? null);
+const profileAsk = ref<"" | "save" | "apply">("");
+const profileDate = computed(() =>
+  profile.value ? new Date(profile.value.saved_at * 1000).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) : "",
+);
+const profileKinds = computed(() => (profile.value?.kinds ?? []).map((k) => `${kindLabel[k] ?? k}s`).join(", "));
+function askSaveProfile(): void {
+  if (profile.value) profileAsk.value = "save"; // un profil existe : on confirme avant de le remplacer
+  else void saveProfile();
+}
+async function confirmProfile(): Promise<void> {
+  const what = profileAsk.value;
+  profileAsk.value = "";
+  if (what === "save") await saveProfile();
+  else if (what === "apply") await applyProfile();
+}
 </script>
 
 <template>
@@ -142,6 +198,18 @@ async function saveAnalysis(): Promise<void> {
                 <button class="small" @click="confirmDelete = ''">Annuler</button>
               </template>
               <button v-else class="small danger" :disabled="busy" :title="`Supprimer toutes les zones de « ${o.name} » dans ce clip`" @click="confirmDelete = o.name">Supprimer</button>
+              <div v-if="canContour && o.tracked" class="object-more">
+                <template v-if="contourAsk === `o:${o.name}`">
+                  <p>Le calcul est long : {{ contourTime(o.length) }} pour cet objet. La première fois, un modèle de 155 Mo est téléchargé.</p>
+                  <button class="small attention" :disabled="busy" @click="startContour({ label: o.name })">Lancer le calcul</button>
+                  <button class="small" @click="contourAsk = ''">Annuler</button>
+                </template>
+                <template v-else-if="o.contour">
+                  <span class="tag ok"><Icon name="check" :size="12" />contour précis</span>
+                  <button class="small" :disabled="busy" title="Le flou redevient un rectangle arrondi autour de l'objet" @click="clearContour({ label: o.name })">Revenir à la forme simple</button>
+                </template>
+                <button v-else class="small" :disabled="busy" title="Le flou épouse la forme de l'objet au lieu de le couvrir d'un rectangle. Calcul long." @click="contourAsk = `o:${o.name}`">Contour précis</button>
+              </div>
             </li>
           </ul>
         </template>
@@ -179,6 +247,16 @@ async function saveAnalysis(): Promise<void> {
                 <button v-else :disabled="busy" @click.stop="patchTrack(current!.clip.id, tr.id, { disabled: false })">Rétablir le flou</button>
                 <button v-if="tr.forced" :disabled="busy" title="Revenir à la règle du score minimal pour cette détection" @click.stop="patchTrack(current!.clip.id, tr.id, { forced: false })">Ne plus forcer</button>
                 <button v-if="tr.source === 'tracker'" class="danger" :disabled="busy" @click.stop="deleteTrack(current!.clip.id, tr.id)"><Icon name="trash" />Supprimer le suivi</button>
+                <!-- flou ajouté qui suit : contour précis, comme pour un objet suivi -->
+                <template v-if="canContour && tr.source === 'tracker' && tr.kind === 'manual'">
+                  <div v-if="contourAsk === `t:${tr.id}`" class="object-more" @click.stop>
+                    <p>Le calcul est long : {{ contourTime(tr.end - tr.start) }} pour ce flou. La première fois, un modèle de 155 Mo est téléchargé.</p>
+                    <button class="small attention" :disabled="busy" @click="startContour({ id: tr.id })">Lancer le calcul</button>
+                    <button class="small" @click="contourAsk = ''">Annuler</button>
+                  </div>
+                  <button v-else-if="tr.contour" :disabled="busy" title="Le flou redevient un rectangle arrondi" @click.stop="clearContour({ id: tr.id })">Revenir à la forme simple</button>
+                  <button v-else :disabled="busy" title="Le flou épouse la forme de ce qui est suivi. Calcul long." @click.stop="contourAsk = `t:${tr.id}`">Contour précis</button>
+                </template>
               </template>
             </div>
           </li>
@@ -227,6 +305,8 @@ async function saveAnalysis(): Promise<void> {
         <label>Forme pour les plaques
           <select v-model="blur.plate_shape" @change="saveBlur"><option value="rounded">rectangle arrondi</option><option value="rect">rectangle</option><option value="ellipse">ellipse</option></select>
         </label>
+        <label>Stabiliser les flous <input v-model="blur.smooth" type="checkbox" aria-describedby="smooth-help" @change="saveBlur" /></label>
+        <p id="smooth-help" class="help">Le flou ne tremble plus et ne change plus de taille à chaque image.</p>
         <div class="slider-row">
           <label for="min-face">Score minimal des visages <span class="mono value">{{ minScore.face.toFixed(2) }}</span></label>
           <input id="min-face" v-model.number="minScore.face" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
@@ -253,17 +333,44 @@ async function saveAnalysis(): Promise<void> {
           </label>
         </template>
         <h4>Détection</h4>
-        <p class="help">Modifier ces réglages refait toute l'analyse.</p>
+        <PresetChoice />
+        <p class="help">Réglages fins, pour les cas particuliers. Modifier ces réglages refait toute l'analyse.</p>
         <label>Modèle de visages
-          <select v-model="analysis.face_model"><option>yolo11n-face</option><option>yolo11s-face</option><option>yolo11m-face</option></select>
+          <select v-model="analysis.face_model"><option v-for="m in faceModels" :key="m">{{ m }}</option></select>
         </label>
         <label>Modèle de plaques
-          <select v-model="analysis.plate_model"><option>yolo-v9-t-640</option><option>yolo-v9-s-608</option></select>
+          <select v-model="analysis.plate_model"><option v-for="m in plateModels" :key="m">{{ m }}</option></select>
         </label>
         <label>Score minimal pour suivre un objet <input v-model.number="analysis.conf_new" type="number" min="0.01" max="0.9" step="0.05" /></label>
         <label>Taille des tuiles (0 = auto, -1 = aucune) <input v-model.number="analysis.tile_size" type="number" min="-1" step="64" /></label>
         <label>Détecter une image sur <input v-model.number="analysis.detect_every" type="number" min="1" max="10" step="1" /></label>
         <button :disabled="busy" @click="saveAnalysis">Enregistrer les réglages de détection</button>
+        <button class="wrap" :disabled="busy" title="Enregistre dans un dossier les images des plaques vérifiées de ce projet, pour entraîner un modèle de plaques" @click="start('/api/dataset')">Exporter des images d'entraînement (plaques)</button>
+        <p class="help">Pour améliorer la détection des plaques avec vos propres vidéos. Le dossier créé est indiqué à la fin.</p>
+
+        <h4>Profil « ma moto »</h4>
+        <p class="help">Le profil garde les réglages de ce projet et l'aspect de vos objets suivis (compteur, téléphone…), pour les retrouver dans vos prochaines vidéos.</p>
+        <div v-if="profile" class="profile-card">
+          <Icon name="user" :size="18" />
+          <span class="grow">
+            <strong>Profil enregistré le {{ profileDate }}</strong>
+            <small>{{ profile.objects.length ? `Objets : ${profile.objects.join(", ")}` : "Aucun objet suivi" }}</small>
+            <small>Détection : {{ profileKinds || "aucune" }} · préréglage {{ presetInfo[profile.preset]?.label ?? profile.preset }}</small>
+          </span>
+        </div>
+        <p v-else class="blank">Aucun profil enregistré pour l'instant.</p>
+        <div v-if="profileAsk" class="profile-ask" role="alert">
+          <p v-if="profileAsk === 'save'">Le profil enregistré le {{ profileDate }} sera remplacé par les réglages et les objets de ce projet.</p>
+          <p v-else>Les réglages de ce projet seront remplacés par ceux du profil, puis vos objets seront recherchés dans la vidéo. Si le préréglage d'analyse change, l'analyse sera à refaire.</p>
+          <span class="row">
+            <button class="small attention" :disabled="busy" @click="confirmProfile">{{ profileAsk === "save" ? "Remplacer le profil" : "Appliquer le profil" }}</button>
+            <button class="small" @click="profileAsk = ''">Annuler</button>
+          </span>
+        </div>
+        <template v-else>
+          <button class="wrap" :disabled="busy" @click="askSaveProfile">Enregistrer ce projet comme profil</button>
+          <button class="wrap" :disabled="busy || !profile" :title="profile ? 'Reprendre les réglages du profil et rechercher vos objets dans cette vidéo' : 'Enregistrez d\'abord un profil'" @click="profileAsk = 'apply'">Appliquer mon profil à ce projet</button>
+        </template>
       </section>
     </Transition>
   </aside>
