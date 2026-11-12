@@ -2,13 +2,14 @@
 import { computed, onMounted, ref, watch } from "vue";
 import ExportDialog from "./components/ExportDialog.vue";
 import FilePicker from "./components/FilePicker.vue";
+import JobDialog from "./components/JobDialog.vue";
 import Icon from "./components/Icon.vue";
 import Logo from "./components/Logo.vue";
 import Player from "./components/Player.vue";
 import SidePanel from "./components/SidePanel.vue";
 import Timeline from "./components/Timeline.vue";
 import WelcomeArt from "./components/WelcomeArt.vue";
-import { addMark, doubtDone, doubtEntries, doubtLeft, leave, markEntries, pending, review, startQueue, summary, validate } from "./review";
+import { addMark, doubtDone, doubtEntries, doubtLeft, guided, leave, markEntries, pending, review, startQueue, summary, validate } from "./review";
 import {
   addMute, busy, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, project, refresh, segments, send,
   splitAtPlayhead, start, state, time,
@@ -115,12 +116,50 @@ function muteMark(): void {
   }
 }
 
+// --- Objet désigné à la main (compteur, téléphone, GPS…) --------------------
+const quickNames = ["compteur", "téléphone", "GPS"];
+const objectName = ref("");
+/** Noms des objets déjà désignés dans le clip du rectangle en attente. */
+const existingObjects = computed(() => {
+  const clip = state.pendingDash?.clip;
+  const tracks = clip ? (project.value?.tracks[clip] ?? []) : [];
+  return [...new Set(tracks.filter((t) => t.kind === "dash").map((t) => t.name))];
+});
+/** Nom retenu : celui d'un objet existant s'il ne diffère que par la casse, sinon le texte saisi. */
+const chosenName = computed(() => {
+  const typed = objectName.value.trim();
+  return existingObjects.value.find((n) => n.toLowerCase() === typed.toLowerCase()) ?? typed;
+});
+const replaces = computed(() => !!chosenName.value && existingObjects.value.includes(chosenName.value));
+watch(() => state.pendingDash, (pending) => {
+  // premier objet du clip : « compteur » proposé ; ensuite le nom est à donner
+  if (pending) objectName.value = existingObjects.value.length ? "" : "compteur";
+});
+function capital(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 async function dashChoice(mode: "track" | "fixed" | "cancel"): Promise<void> {
   const pending = state.pendingDash;
+  const label = chosenName.value;
+  if (mode !== "cancel" && !label) return;
   state.pendingDash = null;
   if (!pending || mode === "cancel") return;
-  await start("/api/dash", { ...pending, mode, direction: "both" });
+  await start("/api/dash", { ...pending, mode, label, direction: "both" });
 }
+
+/** « Annuler » de l'indicateur réduit : l'analyse et l'export demandent une confirmation, dans le dialogue. */
+function cancelJob(): void {
+  const kind = job.value?.kind;
+  if (kind === "analyze" || kind === "render") {
+    state.jobConfirm = true;
+    state.jobOpen = true;
+  } else void send("POST", "/api/cancel");
+}
+
+/** Pendant la vérification guidée, le montage ne se modifie pas : aucun risque de couper par erreur. */
+const locked = computed(() => guided.value);
+const lockedTip = "Quittez la vérification pour modifier le montage";
 
 function onKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
@@ -129,7 +168,7 @@ function onKey(event: KeyboardEvent): void {
     return;
   }
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || busy.value) return;
-  if (picker.value || exporting.value || state.pendingDash) return; // un dialogue est ouvert
+  if (picker.value || exporting.value || state.pendingDash || state.jobOpen) return; // un dialogue est ouvert
   // vérification guidée : Entrée valide le passage affiché, S pose un signalement pendant la relecture
   if (event.key === "Enter" && review.mode === "queue" && target.tagName !== "BUTTON" && target.tagName !== "A") {
     event.preventDefault();
@@ -140,6 +179,7 @@ function onKey(event: KeyboardEvent): void {
     void addMark();
     return;
   }
+  if (locked.value) return; // C, Suppr et M sont neutralisés pendant la vérification guidée
   if (event.key === "c" || event.key === "C") void splitAtPlayhead();
   else if ((event.key === "Delete" || event.key === "Backspace") && state.selected >= 0) void deleteSegment(state.selected);
   else if (event.key === "m" || event.key === "M") muteMark();
@@ -195,15 +235,21 @@ onMounted(() => {
         <!-- Guide : une phrase sur ce qu'il y a à faire maintenant, et le bouton de l'action suivante -->
         <div class="guide" :class="{ warn: guide.warn && !busy }">
           <template v-if="job && job.state === 'running'">
-            <div class="job" role="status">
+            <button class="job" title="Afficher le détail de la progression" @click="state.jobOpen = true">
               <span class="job-text">
                 <span class="job-label">{{ job.label }}</span>
                 <span class="job-num">{{ percent }} %</span>
                 <span class="job-meta"><template v-if="job.fps">{{ job.fps }} i/s</template><template v-if="job.fps && eta"> · </template><template v-if="eta">{{ eta }}</template></span>
               </span>
               <span class="bar"><span :style="{ transform: `scaleX(${percent / 100})` }"></span></span>
-            </div>
-            <button @click="send('POST', '/api/cancel')">Annuler</button>
+            </button>
+            <button @click="cancelJob">Annuler</button>
+          </template>
+          <template v-else-if="job && state.jobFinished">
+            <button class="job done" :class="job.state" title="Afficher le résultat" @click="state.jobOpen = true">
+              <Icon :name="job.state === 'done' ? 'check' : 'alert'" />
+              <span class="job-label">{{ job.state === "error" ? "Le traitement a échoué" : job.state === "cancelled" ? "Traitement annulé" : "Traitement terminé" }} : afficher le résultat</span>
+            </button>
           </template>
           <template v-else>
             <span class="guide-step">Étape {{ step }}</span>
@@ -223,13 +269,13 @@ onMounted(() => {
         </div>
         <Player />
         <div class="tools">
-          <button :disabled="busy" title="Couper le passage à la tête de lecture (C)" @click="splitAtPlayhead"><Icon name="scissors" />Couper ici</button>
-          <button :disabled="busy || state.selected < 0" title="Supprimer le passage sélectionné (Suppr)" @click="deleteSegment(state.selected)"><Icon name="trash" />Supprimer le passage</button>
+          <button :disabled="busy || locked" :title="locked ? lockedTip : 'Couper le passage à la tête de lecture (C)'" @click="splitAtPlayhead"><Icon name="scissors" />Couper ici</button>
+          <button :disabled="busy || locked || state.selected < 0" :title="locked ? lockedTip : 'Supprimer le passage sélectionné (Suppr)'" @click="deleteSegment(state.selected)"><Icon name="trash" />Supprimer le passage</button>
           <span class="joined">
-            <button :disabled="busy || state.selected <= 0" title="Déplacer le passage sélectionné vers le début" @click="moveSegment(state.selected, -1)"><Icon name="arrowLeft" />Déplacer</button>
-            <button :disabled="busy || state.selected < 0 || state.selected >= project.timeline.length - 1" title="Déplacer le passage sélectionné vers la fin" @click="moveSegment(state.selected, 1)">Déplacer<Icon name="arrowRight" /></button>
+            <button :disabled="busy || locked || state.selected <= 0" :title="locked ? lockedTip : 'Déplacer le passage sélectionné vers le début'" @click="moveSegment(state.selected, -1)"><Icon name="arrowLeft" />Déplacer</button>
+            <button :disabled="busy || locked || state.selected < 0 || state.selected >= project.timeline.length - 1" :title="locked ? lockedTip : 'Déplacer le passage sélectionné vers la fin'" @click="moveSegment(state.selected, 1)">Déplacer<Icon name="arrowRight" /></button>
           </span>
-          <button class="mute-btn" :class="{ on: state.muteIn !== null }" :disabled="busy" title="Poser le début puis la fin d'un passage muet (M)" @click="muteMark"><Icon name="volumeOff" />{{ state.muteIn === null ? "Muet : début" : "Muet : fin" }}</button>
+          <button class="mute-btn" :class="{ on: state.muteIn !== null }" :disabled="busy || locked" :title="locked ? lockedTip : 'Poser le début puis la fin d\'un passage muet (M)'" @click="muteMark"><Icon name="volumeOff" />{{ state.muteIn === null ? "Muet : début" : "Muet : fin" }}</button>
           <span class="spacer"></span>
           <span class="dim total">Durée du montage : <span class="mono">{{ formatTime(duration) }}</span></span>
           <label class="dim zoom"><Icon name="zoom" /><span>Zoom</span> <input v-model.number="state.zoom" type="range" min="0" max="400" step="5" title="0 = tout le montage visible" /></label>
@@ -262,16 +308,27 @@ onMounted(() => {
       <FilePicker v-if="picker" :title="picker === 'open' ? 'Ouvrir une vidéo ou un projet' : 'Ajouter un clip au montage'" @pick="picked" @close="picker = ''" />
     </Transition>
     <Transition name="modal">
+      <JobDialog v-if="job && state.jobOpen" @review="beginReview" />
+    </Transition>
+    <Transition name="modal">
       <ExportDialog v-if="exporting" @close="exporting = false" />
     </Transition>
     <Transition name="modal">
       <div v-if="state.pendingDash" class="modal">
         <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dash-title">
-          <h3 id="dash-title"><Icon name="gauge" :size="18" />Flouter le compteur</h3>
+          <h3 id="dash-title"><Icon name="target" :size="18" />Flouter un objet</h3>
+          <label>Quel est cet objet ?
+            <span class="row quick">
+              <button v-for="n in quickNames" :key="n" type="button" class="small" :class="{ on: chosenName.toLowerCase() === n.toLowerCase() }" @click="objectName = n">{{ capital(n) }}</button>
+              <input v-model="objectName" type="text" maxlength="40" spellcheck="false" placeholder="Autre nom" aria-label="Nom de l'objet" />
+            </span>
+          </label>
+          <p v-if="replaces" class="note warn"><Icon name="alert" />« {{ chosenName }} » existe déjà dans ce clip : ses zones seront remplacées à partir de cette image.</p>
+          <p v-else-if="!chosenName" class="note"><Icon name="info" />Donnez un nom à l'objet pour continuer.</p>
           <p>Que faire du rectangle que vous venez de tracer ?</p>
           <div class="choices">
-            <button class="primary" @click="dashChoice('track')"><span>Suivre le compteur<small>Il est suivi image par image sur tout le clip, vers l'avant et l'arrière. À choisir si le cadrage bouge.</small></span></button>
-            <button @click="dashChoice('fixed')"><span>Zone fixe<small>Le même rectangle sur tout le clip. À choisir si la caméra est fixée à la moto et le cadrage constant.</small></span></button>
+            <button class="primary" :disabled="!chosenName" @click="dashChoice('track')"><span>Suivre l'objet<small>Il est suivi image par image sur tout le clip, vers l'avant et l'arrière. À choisir s'il bouge dans l'image.</small></span></button>
+            <button :disabled="!chosenName" @click="dashChoice('fixed')"><span>Zone fixe<small>Le même rectangle sur tout le clip. À choisir si l'objet ne bouge pas dans l'image (caméra fixée à la moto, cadrage constant).</small></span></button>
           </div>
           <div class="row end"><button @click="dashChoice('cancel')">Annuler</button></div>
         </div>

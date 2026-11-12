@@ -38,8 +38,15 @@ export interface ReviewItem extends Range {
 export interface Track {
   id: number;
   kind: string;
+  /** Nom à afficher : celui de l'objet désigné à la main (« compteur », « téléphone »…), sinon la catégorie. */
+  name: string;
   source: "auto" | "tracker" | "manual";
   disabled: boolean;
+  /** Floutée même si son score est sous le minimum. */
+  forced: boolean;
+  /** Détection écartée : son meilleur score n'atteint pas le minimum, elle n'est pas floutée. */
+  below_min_score: boolean;
+  best_score: number;
   start: number;
   end: number;
   extend_before_s: number | null;
@@ -97,6 +104,9 @@ export interface State {
 
 /** Zone sur une image : x1, y1, x2, y2, forme, rayon, catégorie, piste, score (null si interpolée). */
 export type ZoneTuple = [number, number, number, number, string, number, string, number, number | null];
+
+/** Détection écartée sur une image : x1, y1, x2, y2 (boîte brute), catégorie, piste, score. */
+export type DroppedTuple = [number, number, number, number, string, number, number | null];
 
 export interface Browse {
   dir: string;

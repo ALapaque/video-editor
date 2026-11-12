@@ -14,7 +14,7 @@ import os
 import threading
 import traceback
 import urllib.parse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -70,6 +70,7 @@ class Engine:
         self.job: Job | None = None
         self.version = 0  # incrémenté à chaque changement des zones (cache de l'interface)
         self._indexes: dict[str, tuple[int, ZoneIndex]] = {}
+        self._dropped: dict[str, tuple[int, ZoneIndex]] = {}
         self._problem: tuple[int, str | None] = (-1, None)
 
     # --- Projet -----------------------------------------------------------
@@ -137,6 +138,20 @@ class Engine:
         state = project.analysis.get(clip.id) or pj.ClipAnalysis()
         index = ZoneIndex(state.tracks, project.blur_settings, clip.video)
         self._indexes[clip.id] = (self.version, index)
+        return index
+
+    def dropped_index(self, clip: pj.Clip) -> ZoneIndex:
+        """Index des détections écartées par le score minimal (non floutées), pour les montrer."""
+        cached = self._dropped.get(clip.id)
+        if cached and cached[0] == self.version:
+            return cached[1]
+        project = self.require()
+        state = project.analysis.get(clip.id) or pj.ClipAnalysis()
+        settings = project.blur_settings
+        tracks = [t for t in state.tracks if not t.disabled and below_min_score(t, settings)]
+        # mêmes durées que si elles étaient floutées, mais sans le filtre qui les écarte
+        index = ZoneIndex(tracks, replace(settings, face_min_score=0.0, plate_min_score=0.0), clip.video)
+        self._dropped[clip.id] = (self.version, index)
         return index
 
     # --- État envoyé à l'interface ----------------------------------------
@@ -218,7 +233,7 @@ class Engine:
         v = clip.video
         scores = sorted(o[5] for o in t.obs)
         doc = {
-            "id": t.id, "kind": t.kind, "source": t.source, "disabled": t.disabled,
+            "id": t.id, "kind": t.kind, "name": t.name, "source": t.source, "disabled": t.disabled,
             "forced": t.forced, "below_min_score": below_min_score(t, self.require().blur_settings),
             "best_score": round(max(o[5] for o in t.obs), 2),
             "start": pts_to_sec(int(t.obs[0][0]), v), "end": pts_to_sec(int(t.obs[-1][0]), v),
@@ -381,8 +396,11 @@ class Engine:
         refresh_review(self.require())
         self.touch()
 
-    def zones(self, clip_id: str, first: int, last: int) -> dict:
-        """Zones de flou pour les images `first` à `last` (indices) d'un clip."""
+    def zones(self, clip_id: str, first: int, last: int, dropped: bool = False) -> dict:
+        """Zones de flou pour les images `first` à `last` (indices) d'un clip.
+
+        Avec `dropped`, ajoute les détections écartées par le score minimal : pour chaque image,
+        [x1, y1, x2, y2, catégorie, piste, score] avec la boîte brute interpolée, sans marge."""
         project = self.require()
         with self.lock:
             clip = project.clip(clip_id)
@@ -402,7 +420,26 @@ class Engine:
                     items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))])
                 if items:
                     frames[k] = items
-            return {"version": self.version, "frames": frames}
+            out = {"version": self.version, "frames": frames}
+            if dropped:
+                extra = {}
+                other = self.dropped_index(clip)
+                for k in range(max(0, first), last + 1):
+                    pts = v.start_pts + round(k * v.frame_pts)
+                    items = []
+                    for item in other.active(pts):
+                        box = item.raw_box(pts)
+                        if box is None:
+                            continue
+                        obs = item.observation(pts)
+                        items.append(
+                            [*[round(x) for x in box], item.track.kind, item.track.id,
+                             None if obs is None else round(obs[4], 2)]
+                        )
+                    if items:
+                        extra[k] = items
+                out["dropped"] = extra
+            return out
 
     def frame_jpeg(self, clip_id: str, frame_index: int, blur: bool, max_width: int) -> bytes:
         """Image source exacte, en pleine résolution, avec ou sans le flou du rendu final."""
@@ -498,13 +535,21 @@ class Engine:
         self.start("analyze", "Analyse", work)
 
     def start_dash(self, body: dict) -> None:
+        """Désigne un objet à flouter (compteur, téléphone…) : zone fixe ou suivi."""
         project = self.require()
         clip = project.clip(body["clip"])
+        name = dash.object_name(body.get("label"))
+        if body.get("mode") == "clear":
+            with self.lock:
+                self._busy_check()
+                dash.clear_dash(project, clip, name)
+                self._after_zone_change()
+            return
         box = tuple(float(x) for x in body["box"])
         if body.get("mode") == "fixed":
             with self.lock:
                 self._busy_check()
-                dash.set_fixed_zone(project, clip, tuple(int(x) for x in box))
+                dash.set_fixed_zone(project, clip, tuple(int(x) for x in box), name)
                 self._after_zone_change()
             return
         seed = sec_to_pts(float(body["time"]), clip.video, "floor")
@@ -515,14 +560,14 @@ class Engine:
             if span is None:
                 raise ApiError("ce clip n'a aucun passage gardé.")
             total = round((span[1] - span[0]) * clip.video.tb * clip.video.fps_fraction)
-            p = progress.Progress("Suivi du compteur", total, float(clip.video.fps_fraction))
-            track = dash.track_from_click(project, clip, seed, box, direction, p)
+            p = progress.Progress(f"Suivi : {name}", total, float(clip.video.fps_fraction))
+            track = dash.track_from_click(project, clip, seed, box, direction, p, name)
             refresh_review(project)
             pj.save(project)
             lost = sum(1 for o in track.obs if o[5] < dash.LOST_SCORE)
-            return f"Compteur suivi sur {len(track.obs)} images, incertain sur {lost}."
+            return f"« {name} » suivi sur {len(track.obs)} images, incertain sur {lost}."
 
-        self.start("dash", "Suivi du compteur", work)
+        self.start("dash", f"Suivi : {name}", work)
 
     def start_render(self, body: dict) -> None:
         project = self.require()
@@ -703,7 +748,11 @@ class Handler(BaseHTTPRequestHandler):
                 engine.start_dash(self._body())
                 self._json(engine.state())
             elif route == "/api/zones" and method == "GET":
-                self._json(engine.zones(query["clip"], int(query["from"]), int(query["to"])))
+                self._json(
+                    engine.zones(
+                        query["clip"], int(query["from"]), int(query["to"]), query.get("dropped") == "1"
+                    )
+                )
             elif route == "/api/frame" and method == "GET":
                 data = engine.frame_jpeg(
                     query["clip"], int(query["frame"]), query.get("blur") == "1", int(query.get("w", 0))

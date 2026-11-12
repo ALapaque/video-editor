@@ -6,8 +6,8 @@
 import { computed, reactive } from "vue";
 import type { Mark, ReviewItem } from "./api";
 import {
-  current, duration, formatTime, kindLabel, mapRange, patchTrack, player, project, seekTime, send,
-  state, time,
+  current, duration, formatTime, mapRange, patchTrack, player, project, seekTime, send,
+  state, time, trackById,
 } from "./store";
 
 /** Un élément de la file : passage douteux ou signalement de relecture, placé dans le montage. */
@@ -64,7 +64,7 @@ export const doubtDone = computed(() => doubtEntries.value.filter((e) => e.done)
 export const doubtLeft = computed(() => doubtEntries.value.length - doubtDone.value);
 export const pending = computed(() => doubtLeft.value + markEntries.value.length);
 export const guided = computed(() => review.mode === "queue" || review.mode === "sweep");
-export const rate = computed(() => (guided.value ? review.speed : 1));
+export const rate = computed(() => review.speed);
 
 /** Passage lu en boucle autour de l'élément affiché, en secondes du montage. */
 export const loop = computed(() => {
@@ -89,12 +89,17 @@ const plain: [string, string][] = [
   ["objet partiel au bord de l'image", "Objet coupé par le bord de l'image."],
   ["suivi du compteur incertain", "Le suivi du compteur a hésité : vérifiez qu'il reste couvert."],
 ];
+const lostObject = "suivi de l'objet";
 
 /** Raisons techniques du moteur traduites en phrases simples ; la raison brute reste en infobulle. */
 export function explain(reasons: string[]): { text: string; raw: string }[] {
   const out: { text: string; raw: string }[] = [];
   for (const raw of reasons) {
-    const text = plain.find(([prefix]) => raw.startsWith(prefix))?.[1] ?? raw;
+    let text = plain.find(([prefix]) => raw.startsWith(prefix))?.[1] ?? raw;
+    if (raw.startsWith(lostObject)) {
+      const name = raw.match(/«\s*(.+?)\s*»/)?.[1] ?? "l'objet";
+      text = `Le suivi de « ${name} » a hésité : vérifiez qu'il reste couvert.`;
+    }
     if (!out.some((x) => x.text === text)) out.push({ text, raw });
   }
   return out;
@@ -227,17 +232,34 @@ export function relocate(): void {
   review.last = { clip: best.clip, at: best.at, end: best.end };
 }
 
+/** Détections écartées par le score minimal dans le passage affiché (elles n'y sont pas floutées). */
+export const droppedInPassage = computed(() => {
+  const e = currentEntry.value;
+  if (review.mode !== "queue" || !e || !project.value) return 0;
+  const from = e.item ? e.item.start - 0.5 : (e.mark?.time ?? 0) - 1.5;
+  const to = e.item ? e.item.end + 0.5 : (e.mark?.time ?? 0) + 1.5;
+  return (project.value.tracks[e.clip] ?? []).filter((t) => t.below_min_score && !t.disabled && t.end >= from && t.start <= to).length;
+});
+
+/** « Flouter quand même » depuis la vérification : la détection écartée est floutée, la boucle reprend. */
+export async function forceZone(clip: string, id: number): Promise<void> {
+  await patchTrack(clip, id, { forced: true });
+  resume();
+}
+
 /** Retour à la question après une correction (ou son abandon), et reprise de la boucle. */
 export function resume(): void {
+  if (review.sub === "missing") state.showDropped = false;
   review.sub = "ask";
   state.tool = "none";
   relocate();
   if (review.mode === "queue") replay();
 }
 
-export async function removeZone(clip: string, id: number, kind: string): Promise<void> {
+export async function removeZone(clip: string, id: number): Promise<void> {
+  const name = trackById(clip, id)?.name ?? "zone";
   await patchTrack(clip, id, { disabled: true });
-  review.removed.push({ clip, id, label: `${kindLabel[kind] ?? kind} n° ${id}` });
+  review.removed.push({ clip, id, label: `${name} n° ${id}` });
   resume();
 }
 

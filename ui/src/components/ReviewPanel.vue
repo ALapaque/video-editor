@@ -2,11 +2,11 @@
 // Onglet « Vérification » : écran de choix, passages un par un, relecture complète, bilan.
 import { computed } from "vue";
 import {
-  addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, entries, explain, extra, finish, leave,
+  addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
   markEntries, missing, next, previous, relocate, replay, restoreZone, resume, review, startQueue, startSweep,
   unvalidate, validate,
 } from "../review";
-import { busy, duration, formatTime, kindLabel, needsAnalysis, player, state, time } from "../store";
+import { busy, droppedHere, duration, formatTime, kindLabel, needsAnalysis, objectNames, player, state, time } from "../store";
 import Icon from "./Icon.vue";
 
 const speeds = [
@@ -21,6 +21,18 @@ const progress = computed(() => {
   return doubtEntries.value.length ? doubtDone.value / doubtEntries.value.length : 0;
 });
 const reasons = computed(() => (entry.value?.item ? explain(entry.value.item.reasons) : []));
+/** Étiquettes du passage : catégories détectées, et nom de chaque objet désigné à la main. */
+const tags = computed(() => {
+  const item = entry.value?.item;
+  if (!item) return [];
+  const out: { kind: string; label: string }[] = [];
+  for (const k of item.kinds) {
+    if (k !== "dash") out.push({ kind: k, label: kindLabel[k] ?? k });
+  }
+  const names = new Set(item.tracks.map((id) => objectNames.value.get(`${item.clip}:${id}`)).filter((n): n is string => !!n));
+  for (const n of names) out.push({ kind: "dash", label: n });
+  return out;
+});
 const sweepEnded = computed(() => !state.playing && time.value >= duration.value - 0.2);
 
 function plural(n: number, one: string, many: string): string {
@@ -89,7 +101,7 @@ function stopSweep(): void {
         </div>
         <div class="card-when">
           <span class="mono">{{ formatTime(entry.at, 1) }}<template v-if="entry.end > entry.at"> → {{ formatTime(entry.end, 1) }}</template></span>
-          <template v-if="entry.item"><span v-for="k in entry.item.kinds" :key="k" class="tag"><span class="dot" :class="k"></span>{{ kindLabel[k] ?? k }}</span></template>
+          <span v-for="t in tags" :key="t.kind + t.label" class="tag"><span class="dot" :class="t.kind"></span>{{ t.label }}</span>
         </div>
         <ul v-if="reasons.length" class="why">
           <li v-for="r in reasons" :key="r.text" :title="`Détail technique : ${r.raw}`">{{ r.text }}</li>
@@ -120,6 +132,19 @@ function stopSweep(): void {
         <div v-else-if="review.sub === 'missing'" class="substate">
           <strong>Il manque un flou</strong>
           <p>Tracez un rectangle sur l'image, à l'endroit à flouter. Il couvrira tout le passage, puis la boucle reprendra.</p>
+          <template v-if="droppedInPassage">
+            <button v-if="!state.showDropped" class="wide wrap" @click="state.showDropped = true">Le logiciel a écarté {{ droppedInPassage }} {{ droppedInPassage > 1 ? "détections" : "détection" }} ici : les afficher</button>
+            <template v-else>
+              <p>Les détections écartées sont entourées en gris. Si l'une d'elles couvre ce qui manque, floutez-la :</p>
+              <p v-if="!droppedHere.length" class="dim">Aucune sur cette image. Avancez image par image (touche →) pour en voir d'autres.</p>
+              <ul class="list dropped">
+                <li v-for="tr in droppedHere" :key="tr.id">
+                  <span class="grow"><strong>{{ tr.name }}</strong> <span class="dim">n° {{ tr.id }} · {{ tr.best_score.toFixed(2) }}</span></span>
+                  <button class="small" :disabled="busy" @click="forceZone(entry.clip, tr.id)">Flouter quand même</button>
+                </li>
+              </ul>
+            </template>
+          </template>
           <button @click="resume">Annuler</button>
         </div>
         <div v-else class="substate">

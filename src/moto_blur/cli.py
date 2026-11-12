@@ -194,14 +194,14 @@ def cmd_dash(args: argparse.Namespace) -> int:
     project = pj.load(Path(args.project_file))
     clip = project.clip(args.clip) if args.clip else project.clips[0]
     if args.clear:
-        n = dash.clear_dash(project, clip)
-        print(f"{n} zone(s) de compteur supprimée(s) sur {clip.id}.")
+        n = dash.clear_dash(project, clip, args.name)
+        print(f"{n} zone(s) supprimée(s) sur {clip.id}.")
     elif not args.box:
         raise SystemExit("Erreur : indiquez --box X,Y,LARGEUR,HAUTEUR (ou --clear).")
     elif args.fixed:
         box = _parse_box(args.box, clip.video)
-        dash.set_fixed_zone(project, clip, box)
-        print(f"Zone fixe du compteur enregistrée sur {clip.id} : {box}")
+        dash.set_fixed_zone(project, clip, box, args.name)
+        print(f"Zone fixe « {dash.object_name(args.name)} » enregistrée sur {clip.id} : {box}")
     else:
         box = _parse_box(args.box, clip.video)
         seed = sec_to_pts(args.at or 0.0, clip.video)
@@ -209,11 +209,12 @@ def cmd_dash(args: argparse.Namespace) -> int:
         if span is None:
             raise SystemExit(f"Erreur : le clip {clip.id} n'a aucun passage gardé.")
         total = round((span[1] - span[0]) * clip.video.tb * clip.video.fps_fraction)
-        progress = Progress(f"Suivi du compteur {clip.id}", total, float(clip.video.fps_fraction))
-        track = dash.track_from_click(project, clip, seed, box, args.direction, progress)
+        name = dash.object_name(args.name)
+        progress = Progress(f"Suivi de « {name} » {clip.id}", total, float(clip.video.fps_fraction))
+        track = dash.track_from_click(project, clip, seed, box, args.direction, progress, name)
         print(progress.close())
         lost = sum(1 for o in track.obs if o[5] < dash.LOST_SCORE)
-        print(f"Compteur suivi sur {len(track.obs)} images ; suivi incertain sur {lost} image(s).")
+        print(f"« {name} » suivi sur {len(track.obs)} images ; suivi incertain sur {lost} image(s).")
     refresh_review(project)
     pj.save(project)
     _write_report(project)
@@ -355,14 +356,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exit-with-parent", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_ui)
 
-    p = sub.add_parser("dash", help="flouter le compteur : zone fixe ou suivi à partir d'une image")
+    p = sub.add_parser("dash", help="flouter le compteur ou un autre objet désigné : zone fixe ou suivi à partir d'une image")
     p.add_argument("project_file", metavar="PROJET")
     p.add_argument("--box", metavar="X,Y,L,H", help="rectangle du compteur en pixels : coin haut-gauche, largeur, hauteur")
     p.add_argument("--at", type=parse_time, metavar="TEMPS", help="instant (temps source) de l'image où le rectangle est donné (défaut : début)")
     p.add_argument("--clip", help="identifiant du clip (défaut : le premier)")
+    p.add_argument("--name", metavar="NOM", help="nom de l'objet : compteur (défaut), téléphone, GPS… Chaque nom est suivi séparément")
     p.add_argument("--fixed", action="store_true", help="zone fixe sur tout le clip, sans suivi")
     p.add_argument("--direction", choices=["both", "forward", "backward"], default="both", help="sens du suivi à partir de l'image donnée")
-    p.add_argument("--clear", action="store_true", help="supprimer les zones de compteur du clip")
+    p.add_argument("--clear", action="store_true", help="supprimer les zones de l'objet nommé (ou de tous les objets sans --name)")
     p.set_defaults(func=cmd_dash)
 
     p = sub.add_parser("probe", help="afficher les caractéristiques d'une vidéo")

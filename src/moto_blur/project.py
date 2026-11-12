@@ -23,6 +23,7 @@ from pathlib import Path
 
 PROJECT_VERSION = 1
 KINDS = ("face", "plate")  # catégories détectées automatiquement
+DEFAULT_OBJECT = "compteur"  # nom d'un objet suivi quand aucun n'est donné
 KIND_LABELS = {"face": "visage", "plate": "plaque", "dash": "compteur", "manual": "zone manuelle"}
 
 
@@ -172,6 +173,16 @@ class Track:
     forced: bool = False
     extend_before_s: float | None = None
     extend_after_s: float | None = None
+    # Nom de l'objet suivi ou de la zone fixe (catégorie "dash") : « compteur », « téléphone »…
+    # Les pistes de même nom dans un clip forment un seul objet. Vide = « compteur ».
+    label: str = ""
+
+    @property
+    def name(self) -> str:
+        """Nom à afficher : celui de l'objet suivi, sinon celui de la catégorie."""
+        if self.kind == "dash":
+            return self.label or DEFAULT_OBJECT
+        return KIND_LABELS.get(self.kind, self.kind)
 
 
 @dataclass
@@ -276,6 +287,8 @@ def _track_to_json(t: Track) -> str:
         doc["extend_before_s"] = t.extend_before_s
     if t.extend_after_s is not None:
         doc["extend_after_s"] = t.extend_after_s
+    if t.label:
+        doc["label"] = t.label
     doc["obs"] = obs
     return json.dumps(doc, separators=(",", ":"))
 
@@ -341,6 +354,7 @@ def load(path: Path) -> Project:
             Track(
                 t["id"], t["kind"], t["obs"], t.get("source", "auto"), t.get("disabled", False),
                 t.get("forced", False), t.get("extend_before_s"), t.get("extend_after_s"),
+                t.get("label", ""),
             )
             for t in a.get("tracks", [])
         ]
