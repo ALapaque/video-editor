@@ -551,7 +551,13 @@ def test_training_images_from_a_reviewed_project(tmp_path):
         assert tile[round(cy * h), round((cx - bw / 2) * w) + 3].min() > 200
         checked += 1
     assert checked >= 4
-    assert (out / "data.yaml").exists() and "ne publiez pas" in (out / "LISEZMOI.txt").read_text()
+    assert "train: train.txt" in (out / "data.yaml").read_text() and "ne publiez pas" in (out / "LISEZMOI.txt").read_text()
+    listed = (out / "train.txt").read_text().split() + (out / "val.txt").read_text().split()
+    # trop peu d'images ici pour en réserver à la mesure : les deux listes sont les mêmes
+    assert len(set(listed)) == result["images"] and all((out / line).exists() for line in listed)
+    again = export_dataset(project, every_s=0.5)  # un second export complète sans doublon
+    assert again["images"] == result["images"]
+    assert len(set((out / "train.txt").read_text().split())) == len((out / "train.txt").read_text().split())
     # une détection retirée à la main devient un contre-exemple : image sans étiquette
     plate.disabled = True
     result = export_dataset(project, tmp_path / "neg")

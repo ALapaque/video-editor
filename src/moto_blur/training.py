@@ -34,6 +34,7 @@ README = """Images d'entraînement moto-blur (plaques)
 
 images/  tuiles découpées dans vos vidéos (plaques NON floutées : ne publiez pas ce dossier)
 labels/  une ligne par plaque : « 0 centre_x centre_y largeur hauteur » (valeurs de 0 à 1)
+train.txt, val.txt  images servant à entraîner le modèle, et images gardées pour le mesurer
 data.yaml  description du jeu de données pour l'entraînement
 
 Les tuiles sans plaque sont voulues : elles apprennent au modèle ce qui n'est PAS une plaque
@@ -103,6 +104,8 @@ def export_dataset(
     progress = progress or Progress("Images d'entraînement", total, 0, unit="images")
     images = labels = negatives = 0
     rng = np.random.default_rng(0)
+    lists: dict[str, list[str]] = {"train": [], "val": []}
+    moment_index = 0
     for clip, kept, rejected, unsure, moments in plan:
         v = clip.video
         # Mêmes tuiles que la détection (l'image entière si elle n'est pas découpée).
@@ -121,6 +124,10 @@ def export_dataset(
                 pts = moments[index]
                 index += 1
                 progress.step()
+                # Une image sur cinq sert à mesurer le modèle (jamais à l'entraîner) ; toutes
+                # les tuiles d'une même image vont du même côté.
+                subset = "val" if moment_index % 5 == 4 else "train"
+                moment_index += 1
                 bgr = frame.to_ndarray(format="bgr24")
                 good = [b for t in kept if (b := _box_at(t, pts))]
                 bad = [b for t in rejected if (b := _box_at(t, pts))]
@@ -164,11 +171,21 @@ def export_dataset(
                     tile = bgr[crop.y0 : crop.y0 + crop.h, crop.x0 : crop.x0 + crop.w]
                     cv2.imwrite(str(out / "images" / f"{stem}.jpg"), tile, [cv2.IMWRITE_JPEG_QUALITY, 92])
                     (out / "labels" / f"{stem}.txt").write_text("\n".join(lines) + ("\n" if lines else ""))
+                    lists[subset].append(f"./images/{stem}.jpg")
                     images += 1
                     labels += len(lines)
                     negatives += not lines
+    for subset, paths in lists.items():
+        # Un même dossier peut recevoir plusieurs projets : les listes se complètent.
+        file = out / f"{subset}.txt"
+        known = file.read_text(encoding="utf-8").split() if file.exists() else []
+        lists[subset] = list(dict.fromkeys(known + paths))
+    if not lists["val"]:  # trop peu d'images pour en réserver : mesure sur les mêmes
+        lists["val"] = lists["train"]
+    for subset, paths in lists.items():
+        (out / f"{subset}.txt").write_text("\n".join(paths) + "\n", encoding="utf-8")
     (out / "data.yaml").write_text(
-        f"path: {out.as_posix()}\ntrain: images\nval: images\nnames:\n  0: plaque\n", encoding="utf-8"
+        f"path: {out.as_posix()}\ntrain: train.txt\nval: val.txt\nnames:\n  0: plaque\n", encoding="utf-8"
     )
     (out / "LISEZMOI.txt").write_text(README, encoding="utf-8")
     return {"path": str(out), "images": images, "labels": labels, "negatives": negatives}
