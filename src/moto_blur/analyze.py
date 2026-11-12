@@ -331,9 +331,12 @@ def estimate(project: pj.Project, device: str = "auto", samples: int = 8) -> dic
     every = max(1, project.analysis_settings.detect_every)
     decode_s = detect_s = 0.0
     n = detections = 0
+    # Avancement image par image : la mesure peut ainsi être annulée depuis l'interface.
+    measure = Progress("Mesure de la vitesse d'analyse", samples * every, 0, unit="essais")
     with av.open(str(project.clip_path(clip))) as container:
         frames = iter_frames(container, start, end)
         while n < samples * every:
+            measure.step()
             t0 = time.perf_counter()
             frame = next(frames, None)
             if frame is None:

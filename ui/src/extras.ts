@@ -41,13 +41,13 @@ export const presetInfo: Record<Preset, { label: string; text: string; warning: 
   normal: { label: "Normal", text: "Le bon équilibre pour la plupart des vidéos.", warning: "" },
   difficile: {
     label: "Conditions difficiles",
-    text: "Nuit, pluie, contre-jour, plaques sales ou lointaines : la détection est plus sensible.",
+    text: "Nuit, pluie, contre-jour, plaques sales ou lointaines : la détection est plus sensible.",
     warning: "Analyse nettement plus longue, et davantage de flous à vérifier.",
   },
   rapide: {
     label: "Rapide",
-    text: "Pour une vidéo simple ou un premier essai : analyse environ deux fois plus courte.",
-    warning: "Moins sûr : un visage ou une plaque petits ou furtifs peuvent être manqués. Relisez la vidéo avant de la publier.",
+    text: "Pour une vidéo simple ou un premier essai : analyse environ deux fois plus courte.",
+    warning: "Moins sûr : un visage ou une plaque petits ou furtifs peuvent être manqués. Relisez la vidéo avant de la publier.",
   },
 };
 
@@ -143,9 +143,9 @@ export async function snapshot(clip: string, frame: number, blur = true): Promis
 
 export const exportPresets: { id: ExportPreset; label: string; text: string }[] = [
   { id: "source", label: "Comme l'original", text: "Même taille et même format que vos vidéos. Le choix par défaut." },
-  { id: "youtube", label: "YouTube", text: "Taille d'origine, qualité maximale : YouTube recompresse de toute façon." },
-  { id: "social", label: "Réseaux sociaux", text: "1920 pixels au plus, H.264 : accepté partout, fichier raisonnable." },
-  { id: "leger", label: "Fichier léger", text: "1280 pixels au plus : pour envoyer par messagerie." },
+  { id: "youtube", label: "YouTube", text: "Taille d'origine, qualité maximale : YouTube recompresse de toute façon." },
+  { id: "social", label: "Réseaux sociaux", text: "1920 pixels au plus, H.264 : accepté partout, fichier raisonnable." },
+  { id: "leger", label: "Fichier léger", text: "1280 pixels au plus : pour envoyer par messagerie." },
 ];
 
 export async function render(options: RenderOptions): Promise<void> {
@@ -199,7 +199,7 @@ export async function saveProfile(): Promise<void> {
   try {
     await call("POST", "/api/profile/save");
     await refresh();
-    notify("Profil enregistré : il pourra être appliqué à vos prochaines vidéos.");
+    notify("Réglages enregistrés\u00a0: ils pourront être repris pour vos prochaines vidéos.");
   } catch (error) {
     notify((error as Error).message, "error");
   }

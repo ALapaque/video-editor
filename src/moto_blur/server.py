@@ -847,8 +847,7 @@ class Engine:
         project = self.require()
 
         def work(job: Job) -> str:
-            p = progress.Progress("Recherche des objets du profil", library.PROFILE_SAMPLES * max(1, len(project.clips)), 0, unit="étapes")
-            notes = library.apply_profile(project, p)
+            notes = library.apply_profile(project)
             self.history.clear()  # les réglages d'analyse ont pu changer
             refresh_review(project)
             pj.save(project)
@@ -948,11 +947,19 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, data, status: int = 200) -> None:
         self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
-    def _body(self) -> dict:
+    def _read_body(self) -> None:
+        """Lit le corps de la requête dès son arrivée, que la route s'en serve ou non.
+
+        Sur une connexion gardée ouverte, un corps laissé non lu serait pris pour le début de la
+        requête suivante (« {}GET … » : réponse 501, et l'interface croit le moteur injoignable)."""
         length = int(self.headers.get("Content-Length") or 0)
-        if not length:
+        self._raw = self.rfile.read(length) if length > 0 else b""
+
+    def _body(self) -> dict:
+        raw = getattr(self, "_raw", b"")
+        if not raw.strip():
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        return json.loads(raw.decode("utf-8"))
 
     def _local_only(self) -> None:
         """Refuse les requêtes émises par une autre page web que l'interface elle-même."""
@@ -1020,6 +1027,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
         route = url.path
+        self._read_body()
         try:
             self._local_only()
             if route == "/api/state" and method == "GET":
