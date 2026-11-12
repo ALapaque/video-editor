@@ -37,9 +37,13 @@ class Crop:
     pad_y: float = 0.0
 
 
-def auto_tile_size(width: int, input_size: int) -> int:
-    """Taille de tuile par défaut : un tiers de la largeur, au moins l'entrée du modèle."""
-    return max(input_size, round(width / 3))
+def auto_tile_size(width: int, height: int, input_size: int) -> int:
+    """Taille de tuile par défaut : un tiers du grand côté, au moins l'entrée du modèle.
+
+    Le grand côté, et non la largeur : une vidéo verticale serait sinon découpée en tuiles
+    inutilement petites, donc nombreuses et lentes à analyser.
+    """
+    return max(input_size, round(max(width, height) / 3))
 
 
 def _positions(length: int, tile: int, overlap: float) -> list[int]:
@@ -59,7 +63,7 @@ def make_crops(
     """
     crops: list[Crop] = []
     if tile_size == 0:
-        tile_size = auto_tile_size(width, input_size)
+        tile_size = auto_tile_size(width, height, input_size)
     covers_all = False
     if tile_size > 0:
         tile = min(tile_size, width, height)
@@ -81,7 +85,9 @@ def render_crop(rgb: np.ndarray, crop: Crop, input_size: int) -> np.ndarray:
     src = rgb[crop.y0 : crop.y0 + crop.h, crop.x0 : crop.x0 + crop.w]
     new_w = max(1, round(crop.w * crop.scale))
     new_h = max(1, round(crop.h * crop.scale))
-    interp = cv2.INTER_AREA if crop.scale < 1 else cv2.INTER_LINEAR
+    # Forte réduction (image entière) : l'interpolation simple suffit et va bien plus vite ;
+    # les objets y sont grands. Réduction modérée (tuiles) : moyenne de zone, plus fidèle.
+    interp = cv2.INTER_AREA if 0.4 <= crop.scale < 1 else cv2.INTER_LINEAR
     if (new_w, new_h) != (crop.w, crop.h):
         src = cv2.resize(src, (new_w, new_h), interpolation=interp)
     if new_w == input_size and new_h == input_size:
@@ -279,8 +285,9 @@ class Detector:
             self.note += " : processeur retenu"
 
     def _blob(self, images: list[np.ndarray]) -> np.ndarray:
-        batch = np.stack(images).transpose(0, 3, 1, 2)
-        return np.ascontiguousarray(batch, dtype=np.float32) / 255.0
+        # Conversion en nombres flottants et passage au format lot-canaux-hauteur-largeur,
+        # faits par OpenCV : nettement plus rapide que les mêmes opérations avec NumPy.
+        return cv2.dnn.blobFromImages(images, 1 / 255.0, swapRB=False)
 
     def _decode(self, output: np.ndarray) -> list[np.ndarray]:
         """Sortie du modèle -> une liste de boîtes (n, 5) par image du lot."""

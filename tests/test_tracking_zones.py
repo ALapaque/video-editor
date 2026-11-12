@@ -219,7 +219,7 @@ def test_build_review_merges_close_passages(video_info):
 # --- Tuiles ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("size", [(3840, 2160), (1920, 1080), (2720, 1530), (640, 360), (1080, 1920)])
+@pytest.mark.parametrize("size", [(3840, 2160), (1920, 1080), (2720, 1530), (640, 360), (1080, 1920), (1440, 2560)])
 def test_tiles_cover_every_pixel_with_overlap(size):
     w, h = size
     crops = make_crops(w, h, 640, 0, 0.2, full_pass=True)
@@ -347,3 +347,10 @@ def test_review_passages_are_capped_in_busy_scenes(video_info):
     assert len(review) >= 4
     assert all((r["end_pts"] - r["start_pts"]) / 15360 < 8 for r in review)
     assert sorted(t for r in review for t in r["tracks"]) == list(range(40))
+
+
+def test_portrait_video_is_not_over_tiled():
+    """Vidéo verticale 1440x2560 : 2 x 4 tuiles et l'image entière, pas 16 ou 19 zones."""
+    assert len(make_crops(1440, 2560, 640, 0, 0.2, True)) == 9
+    assert len(make_crops(1440, 2560, 608, 0, 0.2, True)) == 9
+    assert len(make_crops(2560, 1440, 640, 0, 0.2, True)) == 9

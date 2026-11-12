@@ -701,9 +701,24 @@ class Handler(BaseHTTPRequestHandler):
         self._handle("DELETE")
 
 
+class QuietServer(ThreadingHTTPServer):
+    """Serveur qui ne signale pas les connexions fermées par le navigateur.
+
+    Un navigateur ouvre des connexions d'avance et les abandonne sans prévenir, surtout pendant
+    la lecture vidéo : c'est normal et sans conséquence, inutile d'afficher une erreur.
+    """
+
+    def handle_error(self, request, client_address) -> None:
+        import sys
+
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(engine: Engine, port: int = 0) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"engine": engine})
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = QuietServer(("127.0.0.1", port), handler)
     server.daemon_threads = True
     return server
 
