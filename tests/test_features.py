@@ -77,6 +77,9 @@ def test_busy_passage_is_split_into_one_item_per_object(video_info):
     assert [r["tracks"] for r in many] == [[1], [2], [3], [4], [5], [6]]
     # deux objets sur le même intervalle : deux clés différentes
     assert len({pj.review_key(r) for r in many}) == 6
+    # une foule reste un seul passage : un par un serait interminable (la planche sert à cela)
+    crowd = build_review("c1", [weak(i, 60 * i) for i in range(1, 13)], video_info)
+    assert len(crowd) == 1 and len(crowd[0]["tracks"]) == 12
 
 
 # --- Flou manuel qui suit -------------------------------------------------------

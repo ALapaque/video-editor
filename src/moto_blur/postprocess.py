@@ -539,7 +539,12 @@ def track_reasons(
 
 
 MAX_PASSAGE_S = 6.0
+# Un passage qui réunit de 4 à 8 objets douteux est présenté objet par objet : la question
+# « faut-il flouter ceci ? » est plus simple que « tout est-il bien flouté ? ». Au-delà (foule),
+# un par un serait interminable : le passage reste entier, et la planche de vignettes de
+# l'interface permet de trier tous ses objets d'un coup.
 MAX_OBJECTS_PER_PASSAGE = 3
+MAX_SPLIT_OBJECTS = 8
 
 
 def build_review(
@@ -596,7 +601,7 @@ def build_review(
     out: list[dict] = []
     for p in passages:
         parts = p.pop("_parts")
-        if len(parts) <= MAX_OBJECTS_PER_PASSAGE:
+        if len(parts) <= MAX_OBJECTS_PER_PASSAGE or len(parts) > MAX_SPLIT_OBJECTS:
             out.append(p)
             continue
         for start, end, kind, reasons, track_id in parts:
