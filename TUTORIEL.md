@@ -97,7 +97,7 @@ tester vite.
    fluide (barre de progression en haut). Pour une vidéo 4K de 10 minutes, comptez quelques
    minutes ; ce n'est fait qu'une fois par vidéo.
 3. **Ne garder qu'un extrait.** Placez la tête de lecture (clic dans la timeline) au début du
-   passage voulu, cliquez « ✂ Couper ici ». Placez-la à la fin, « ✂ Couper ici » encore.
+   passage voulu, cliquez « Couper ici ». Placez-la à la fin, « Couper ici » encore.
    Cliquez les passages à jeter puis « Supprimer le passage ».
 4. **Analyser.** Cliquez « Analyser » (bouton orange). Au premier lancement, les modèles de
    détection sont téléchargés (environ 65 Mo). Le logiciel mesure ensuite, pendant quelques
@@ -120,20 +120,22 @@ tester vite.
 | Image précédente / suivante | `◀|` et `|▶` | ← et → |
 | Reculer / avancer d'une seconde | | Maj + ← et Maj + → |
 | Aller à un instant | clic ou glisser dans la timeline | Début, Fin |
+| Régler le volume de l'aperçu | curseur à côté du haut-parleur (50 % au départ) ; un clic sur le haut-parleur coupe ou rétablit le son | |
 
 Sous la vidéo, vous lisez l'instant dans le montage, le nom du clip, le numéro d'image et
-l'instant dans le fichier source.
+l'instant dans le fichier source. Le volume ne concerne que l'écoute dans l'aperçu : il ne change
+ni le projet ni la vidéo exportée (pour couper le son d'un passage à l'export, voir « Muet » plus bas).
 
 ### Montage
 
 | Vous voulez | Faites |
 |---|---|
 | Rogner le début ou la fin | glissez le bord gauche ou droit du passage dans la timeline |
-| Supprimer un passage au milieu | « ✂ Couper ici » au début et à la fin, cliquez le passage, « Supprimer le passage » (ou touche Suppr) |
+| Supprimer un passage au milieu | « Couper ici » au début et à la fin, cliquez le passage, « Supprimer le passage » (ou touche Suppr) |
 | Récupérer ce qui a été coupé | glissez le bord du passage voisin vers l'extérieur |
 | Ajouter un autre clip | « Ajouter un clip… » ; il se place à la fin |
 | Changer l'ordre | cliquez un passage, puis « ◀ Déplacer » ou « Déplacer ▶ » |
-| Couper le son sur un passage | tête de lecture au début, « 🔇 Muet : début » (ou M) ; tête à la fin, « 🔇 Muet : fin » |
+| Couper le son sur un passage | tête de lecture au début, « Muet : début » (ou M) ; tête à la fin, « Muet : fin » |
 | Retirer un passage muet | panneau « Zones », en bas, « Retirer » |
 
 Chaque modification est enregistrée aussitôt dans le fichier projet. Si vous rallongez un

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { reactive } from "vue";
+import { onBeforeUnmount, onMounted, reactive } from "vue";
 import { project, start } from "../store";
+import Icon from "./Icon.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const p = project.value!;
@@ -12,29 +13,37 @@ async function run(): Promise<void> {
   await start("/api/render", { ...form, output });
   emit("close");
 }
+
+function onKey(event: KeyboardEvent): void {
+  if (event.key === "Escape") emit("close");
+}
+onMounted(() => window.addEventListener("keydown", onKey));
+onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
   <div class="modal" @pointerdown.self="emit('close')">
-    <div class="dialog">
-      <h3>Exporter la vidéo</h3>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="export-title">
+      <h3 id="export-title"><Icon name="export" :size="18" />Exporter la vidéo</h3>
       <p v-if="p.problem" class="error">{{ p.problem }}</p>
       <label>Fichier de sortie (dans le dossier du projet, ou chemin complet)
         <input v-model="form.output" type="text" spellcheck="false" />
       </label>
-      <label>Qualité : {{ form.quality }}
+      <label><span class="split">Qualité <span class="mono value">{{ form.quality }}</span></span>
         <input v-model.number="form.quality" type="range" min="40" max="100" step="5" />
       </label>
-      <label>Codec
-        <select v-model="form.codec"><option value="source">comme la source</option><option value="h264">H.264</option><option value="hevc">H.265</option></select>
-      </label>
-      <label>Encodeur
-        <select v-model="form.encoder"><option value="auto">automatique (matériel si possible)</option><option value="hardware">matériel uniquement</option><option value="software">logiciel uniquement</option></select>
-      </label>
+      <div class="cols">
+        <label>Codec
+          <select v-model="form.codec"><option value="source">comme la source</option><option value="h264">H.264</option><option value="hevc">H.265</option></select>
+        </label>
+        <label>Encodeur
+          <select v-model="form.encoder"><option value="auto">automatique (matériel si possible)</option><option value="hardware">matériel uniquement</option><option value="software">logiciel uniquement</option></select>
+        </label>
+      </div>
       <label class="check"><input v-model="form.debug" type="checkbox" /> Vidéo de contrôle : cadres et scores dessinés, sans flou</label>
       <div class="row end">
         <button @click="emit('close')">Annuler</button>
-        <button class="primary" :disabled="!!p.problem" @click="run">Exporter</button>
+        <button class="primary" :disabled="!!p.problem" @click="run"><Icon name="export" />Exporter</button>
       </div>
     </div>
   </div>

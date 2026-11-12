@@ -10,7 +10,9 @@ const scroller = ref<HTMLDivElement>();
 const width = ref(800);
 const pxPerSecond = computed(() => (state.zoom > 0 ? state.zoom : Math.max(1, (width.value - 24) / Math.max(duration.value, 0.1))));
 const total = computed(() => Math.max(width.value - 24, duration.value * pxPerSecond.value));
-const palette = ["#3b82f6", "#a855f7", "#14b8a6", "#f59e0b", "#ef4444", "#84cc16"];
+// Une teinte par clip, volontairement sourde : l'orange (à vérifier) et le rose (compteur) restent
+// réservés aux repères, le blanc à la tête de lecture et à la sélection.
+const palette = ["#3f6fc4", "#2a8f83", "#75893a", "#a85f45", "#8a62a8", "#5f6e82"];
 
 // Rognage en cours : aperçu local, envoyé au moteur au relâchement.
 const trim = ref<{ index: number; edge: "start" | "end"; frame: number } | null>(null);
@@ -83,7 +85,7 @@ function blockStyle(s: Resolved) {
       w -= delta;
     } else w += delta;
   }
-  return { left: `${left}px`, width: `${Math.max(w, 2)}px`, background: colorOf(s) };
+  return { left: `${left}px`, width: `${Math.max(w, 2)}px`, backgroundColor: colorOf(s) };
 }
 
 const observer = new ResizeObserver((entries) => (width.value = entries[0].contentRect.width));
@@ -99,8 +101,8 @@ onBeforeUnmount(() => observer.disconnect());
       </div>
       <div class="segments">
         <div
-          v-for="s in segments" :key="s.index" class="segment" :class="{ selected: state.selected === s.index }"
-          :style="blockStyle(s)" :title="`${s.clip.name} — source ${formatTime(s.inFrame / s.fps)} → ${formatTime(s.outFrame / s.fps)}`"
+          v-for="s in segments" :key="s.index" class="segment"
+          :class="{ selected: state.selected === s.index, trimming: trim?.index === s.index }" :style="blockStyle(s)" :title="`${s.clip.name} — source ${formatTime(s.inFrame / s.fps)} → ${formatTime(s.outFrame / s.fps)}`"
           @pointerdown="state.selected = s.index"
         >
           <span class="handle left" title="Glisser pour rogner ou rallonger le début" @pointerdown="trimStart($event, s, 'start')"></span>
@@ -119,7 +121,8 @@ onBeforeUnmount(() => observer.disconnect());
         ></div>
       </div>
       <div v-if="state.muteIn !== null" class="mutein" :style="{ left: `${state.muteIn * pxPerSecond}px` }"></div>
-      <div class="playhead" :style="{ left: `${time * pxPerSecond}px` }"></div>
+      <!-- déplacée par transform : aucune remise en page pendant la lecture -->
+      <div class="playhead" :style="{ transform: `translateX(${time * pxPerSecond}px)` }"></div>
     </div>
   </div>
 </template>
