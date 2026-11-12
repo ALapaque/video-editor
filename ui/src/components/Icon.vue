@@ -41,6 +41,14 @@ const paths = {
   folderOpen: '<path d="M1.75 12V4.25a1 1 0 0 1 1-1h3l1.5 1.75h5a1 1 0 0 1 1 1v1"/><path d="M1.9 12.5 3.6 8a1 1 0 0 1 .95-.7h9.2a.6.6 0 0 1 .57.8l-1.4 4.2a1 1 0 0 1-.95.7H2.75a.9.9 0 0 1-.85-.5z"/>',
   pen: '<path d="M2.75 13.25 3.4 10.4l7.35-7.35a1.2 1.2 0 0 1 1.7 0l.5.5a1.2 1.2 0 0 1 0 1.7L5.6 12.6z"/><path d="m9.6 4.2 2.2 2.2"/>',
   zoom: '<circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25 13.5 13.5"/>',
+  /* === mode avancé : ajouts === */
+  undo: '<path d="M5.5 3 2.5 6l3 3"/><path d="M2.75 6h6.5a4 4 0 0 1 0 8H6.5"/>',
+  redo: '<path d="m10.5 3 3 3-3 3"/><path d="M13.25 6h-6.5a4 4 0 0 0 0 8H9.5"/>',
+  camera: '<path d="M1.75 5.25a1 1 0 0 1 1-1h1.9l1-1.5h4.7l1 1.5h1.9a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/><circle cx="8" cy="8.4" r="2.4"/>',
+  grid: '<rect x="2.25" y="2.25" width="4.75" height="4.75" rx="1"/><rect x="9" y="2.25" width="4.75" height="4.75" rx="1"/><rect x="2.25" y="9" width="4.75" height="4.75" rx="1"/><rect x="9" y="9" width="4.75" height="4.75" rx="1"/>',
+  grip: '<path d="M6 4v.1M10 4v.1M6 8v.1M10 8v.1M6 12v.1M10 12v.1" stroke-width="2"/>',
+  user: '<circle cx="8" cy="5.6" r="2.6"/><path d="M2.9 13.4a5.2 5.2 0 0 1 10.2 0"/>',
+  /* === fin des ajouts du mode avancé === */
 } as const;
 export type IconName = keyof typeof paths;
 </script>

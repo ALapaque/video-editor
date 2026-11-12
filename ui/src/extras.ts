@@ -114,7 +114,7 @@ export function filmstripUrl(clip: string, count = 40, height = 54): string {
 const waves = new Map<string, Promise<number[]>>();
 /** Niveau sonore du clip : `points` valeurs entre 0 et 1, réparties sur toute sa durée (vide : pas de son). */
 export function waveform(clip: string, points = 1500): Promise<number[]> {
-  const key = `${clip}:${points}`;
+  const key = `${project.value?.path}:${clip}:${points}`; // « c1 » désigne un autre fichier dans un autre projet
   let wave = waves.get(key);
   if (!wave) {
     wave = call<{ peaks: number[] }>("GET", `/api/waveform?clip=${encodeURIComponent(clip)}&points=${points}`)

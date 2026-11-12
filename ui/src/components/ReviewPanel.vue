@@ -1,20 +1,28 @@
 <script setup lang="ts">
 // Onglet « Vérification » : écran de choix, passages un par un, relecture complète, bilan.
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import { thumbUrl } from "../extras";
 import {
-  addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
-  markEntries, missing, next, objectHere, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue, startSweep,
-  unvalidate, validate,
+  addMark, currentEntry, currentIndex, dismiss, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
+  markEntries, missing, next, objectHere, openSheet, previous, relocate, replay, restoreZone, resume, resumeSweep, review, sheetItems, showObject, soloTrack, speeds,
+  startQueue, startSweep, sweepResume, unvalidate, validate,
 } from "../review";
-import { busy, droppedHere, duration, formatTime, kindLabel, needsAnalysis, objectNames, player, state, time } from "../store";
+import { busy, droppedHere, duration, formatTime, kindLabel, needsAnalysis, objectNames, player, project, state, time } from "../store";
+import ContactSheet from "./ContactSheet.vue";
 import Icon from "./Icon.vue";
 
-const speeds = [
-  { value: 1, label: "1×" },
-  { value: 0.5, label: "0,5×" },
-  { value: 0.25, label: "0,25×" },
-];
 const entry = currentEntry;
+/** Vignette de l'objet, quand l'élément affiché ne porte que sur un seul. */
+const soloThumb = computed(() => (entry.value && soloTrack.value ? thumbUrl(entry.value.clip, soloTrack.value.id) : ""));
+const thumbFailed = ref(""); // adresse de la vignette qui n'a pas pu être chargée
+const sweepDone = computed(() => project.value?.sweep?.done === true);
+/** Passage chargé : nombre de ses flous automatiques, quand il réunit plus de 8 objets (sinon 0). */
+const crowd = computed(() => {
+  const item = entry.value?.item;
+  if (!item || item.tracks.length <= 8) return 0;
+  const ids = new Set(item.tracks);
+  return sheetItems.value.filter((i) => i.clip === item.clip && ids.has(i.track.id)).length;
+});
 const total = computed(() => entries.value.length);
 const progress = computed(() => {
   if (review.scope === "marks") return 0;
@@ -67,16 +75,28 @@ function stopSweep(): void {
             <small v-else>Le logiciel n'a hésité nulle part dans ce montage.</small>
           </span>
         </button>
-        <button class="choice" :class="{ suggested: doubtLeft === 0 && !markEntries.length }" :disabled="busy" @click="startSweep()">
+        <button class="choice" :class="{ suggested: doubtLeft === 0 && !markEntries.length && !sweepDone }" :disabled="busy" @click="resumeSweep()">
           <span>
-            <span class="choice-title">Relecture complète</span>
-            <small>Vous regardez tout le montage avec le flou affiché et vous signalez d'une touche ce qui n'est pas flouté. C'est le seul moyen de repérer ce que le logiciel n'a jamais détecté.</small>
+            <span class="choice-title">Relecture complète <span v-if="sweepDone" class="tag ok"><Icon name="check" :size="12" />faite</span></span>
+            <small v-if="sweepResume !== null">Vous vous étiez arrêté à {{ formatTime(Math.floor(sweepResume), 0) }} sur {{ formatTime(duration, 0) }}. Vous regardez le montage avec le flou affiché et vous signalez d'une touche ce qui n'est pas flouté.</small>
+            <small v-else>Vous regardez tout le montage avec le flou affiché et vous signalez d'une touche ce qui n'est pas flouté. C'est le seul moyen de repérer ce que le logiciel n'a jamais détecté.</small>
           </span>
         </button>
+        <div v-if="sweepResume !== null" class="row pair sweep-resume">
+          <button class="on" :disabled="busy" @click="resumeSweep()"><Icon name="play" :size="12" />Reprendre à {{ formatTime(Math.floor(sweepResume), 0) }}</button>
+          <button :disabled="busy" @click="startSweep(true)">Depuis le début</button>
+        </div>
         <button v-if="markEntries.length" class="choice" :class="{ suggested: doubtLeft === 0 }" :disabled="busy" @click="startQueue('marks')">
           <span>
             <span class="choice-title">Signalements à traiter <b class="count">{{ markEntries.length }}</b></span>
             <small>Les endroits que vous avez signalés pendant la relecture, un par un.</small>
+          </span>
+        </button>
+        <button class="choice" :disabled="!sheetItems.length" @click="openSheet()">
+          <span>
+            <span class="choice-title"><Icon name="grid" />Planche des flous <b class="count">{{ sheetItems.length }}</b></span>
+            <small v-if="sheetItems.length">Tous les flous du logiciel en vignettes, les plus douteux d'abord. Cochez les faux flous et retirez-les d'un coup.</small>
+            <small v-else>Aucun flou automatique dans ce montage pour l'instant.</small>
           </span>
         </button>
       </div>
@@ -103,10 +123,24 @@ function stopSweep(): void {
           <span class="mono">{{ formatTime(entry.at, 1) }}<template v-if="entry.end > entry.at"> → {{ formatTime(entry.end, 1) }}</template></span>
           <span v-for="t in tags" :key="t.kind + t.label" class="tag"><span class="dot" :class="t.kind"></span>{{ t.label }}</span>
         </div>
+        <!-- élément qui ne porte que sur un objet : on le montre, pour savoir de quoi il est question -->
+        <div v-if="soloTrack" class="card-object">
+          <img v-if="soloThumb && thumbFailed !== soloThumb" :src="soloThumb" alt="" width="220" height="165" @error="thumbFailed = soloThumb" />
+          <span class="grow">
+            <strong>{{ soloTrack.name }} n° {{ soloTrack.id }}</strong>
+            <small v-if="soloTrack.source === 'auto'">meilleur score {{ soloTrack.best_score.toFixed(2).replace(".", ",") }}</small>
+            <small v-else>{{ soloTrack.source === "tracker" ? "objet suivi" : "zone tracée à la main" }}</small>
+            <small>La question porte sur ce seul flou, encadré ici là où il est le plus net.</small>
+          </span>
+        </div>
         <ul v-if="reasons.length" class="why">
           <li v-for="r in reasons" :key="r.text" :title="`Détail technique : ${r.raw}`">{{ r.text }}</li>
         </ul>
         <p v-else class="why-text">Vous avez signalé cet endroit pendant la relecture.</p>
+        <!-- passage chargé (foule) : la planche, limitée à ses flous, permet de les trier d'un coup -->
+        <button v-if="crowd" class="quiet small wrap sheet-link" :disabled="busy" @click="openSheet({ clip: entry.clip, ids: entry.item!.tracks })">
+          <Icon name="grid" />Beaucoup d'objets ici ({{ crowd }}) : triez-les d'un coup avec la planche
+        </button>
 
         <div class="loop-row">
           <span class="dim">Le passage tourne en boucle, flou affiché.</span>
@@ -128,6 +162,9 @@ function stopSweep(): void {
             <button :disabled="busy" title="Tracer un flou là où il en manque un" @click="missing">Il manque un flou</button>
             <button :disabled="busy" title="Retirer un flou posé à tort" @click="extra">Un flou est en trop</button>
           </div>
+          <button v-if="soloTrack?.source === 'auto' && entry.type === 'doubt'" class="wide" :disabled="busy" :title="`Faux flou : retirer « ${soloTrack.name} n° ${soloTrack.id} », et lui seul, puis passer au suivant`" @click="dismiss">
+            <Icon name="close" />Ce n'est pas à flouter
+          </button>
           <button v-if="objectHere" class="wide" :disabled="busy" title="Entourer l'objet sur cette image : son suivi est refait sur ce plan seulement" @click="showObject">
             <Icon name="target" />Montrer « {{ objectHere }} » ici
           </button>
@@ -221,10 +258,17 @@ function stopSweep(): void {
         <p v-if="markEntries.length" class="why-text">{{ plural(markEntries.length, "signalement", "signalements") }} de relecture à traiter.</p>
         <button v-if="doubtLeft" class="wide" :class="{ primary: doubtLeft > 0 }" @click="startQueue('doubt')">Revoir les passages restants</button>
         <button v-if="markEntries.length" class="wide" :class="{ primary: !doubtLeft }" @click="startQueue('marks')">Traiter {{ plural(markEntries.length, "le signalement", "les signalements") }}</button>
-        <button class="wide" @click="startSweep(true)">Relecture complète</button>
+        <button v-if="sweepResume !== null" class="wide" @click="resumeSweep()">Reprendre la relecture à {{ formatTime(Math.floor(sweepResume), 0) }}</button>
+        <button class="wide" @click="startSweep(true)">{{ sweepResume !== null ? "Relecture complète depuis le début" : "Relecture complète" }}</button>
+        <button v-if="sheetItems.length" class="wide" @click="openSheet()"><Icon name="grid" />Planche des flous</button>
         <button class="wide" :class="{ primary: !doubtLeft && !markEntries.length }" @click="toExport">Passer à l'export</button>
       </div>
       <p class="note"><Icon name="info" />Le logiciel ne signale que ce qu'il a détecté : pour ne rien laisser passer, faites aussi la relecture complète.</p>
     </template>
+    <Teleport to="body">
+      <Transition name="modal">
+        <ContactSheet v-if="review.sheet" />
+      </Transition>
+    </Teleport>
   </section>
 </template>

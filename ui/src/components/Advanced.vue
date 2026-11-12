@@ -1,18 +1,20 @@
 <script setup lang="ts">
 // Mode avancé : toute l'interface de montage (timeline, panneau latéral, dialogues).
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ExportDialog from "./ExportDialog.vue";
 import FilePicker from "./FilePicker.vue";
 import JobDialog from "./JobDialog.vue";
 import Icon from "./Icon.vue";
 import Logo from "./Logo.vue";
 import Player from "./Player.vue";
+import PresetChoice from "./PresetChoice.vue";
 import SidePanel from "./SidePanel.vue";
 import Timeline from "./Timeline.vue";
 import WelcomeArt from "./WelcomeArt.vue";
-import { addMark, doubtDone, doubtEntries, doubtLeft, guided, leave, markEntries, pending, review, startQueue, summary, validate } from "../review";
+import { followBlur, formatDuration, measureEstimate, redo, undo } from "../extras";
+import { addMark, doubtDone, doubtEntries, doubtLeft, guided, leave, markEntries, pending, resume, review, startQueue, summary, validate } from "../review";
 import {
-  addMute, busy, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, project, refresh, segments, send,
+  addMute, busy, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, project, refresh, saveManual, segments, send,
   setMode, splitAtPlayhead, start, state, time,
 } from "../store";
 
@@ -149,6 +151,68 @@ async function dashChoice(mode: "track" | "fixed" | "cancel"): Promise<void> {
   await start("/api/dash", { ...pending, mode, label, direction: "both" });
 }
 
+// --- Flou ajouté à la main : il suit ce qui est entouré, ou reste fixe ----------
+const followButton = ref<HTMLButtonElement>();
+/** Suivi lancé depuis le dialogue : clip de la zone à sélectionner à la fin, et retour à la boucle de vérification. */
+let followed: { clip: string; guided: boolean } | null = null;
+watch(() => state.pendingBlur, (pending) => {
+  if (pending) void nextTick(() => followButton.value?.focus()); // Entrée = le choix par défaut
+});
+
+async function blurChoice(mode: "follow" | "fixed" | "cancel"): Promise<void> {
+  const pending = state.pendingBlur;
+  state.pendingBlur = null;
+  if (!pending) return;
+  const retry = () => {
+    // vérification guidée : on reste sur « Il manque un flou », prêt pour un nouveau tracé
+    if (pending.guided && review.sub === "missing") state.tool = "manual";
+  };
+  if (mode === "cancel") return retry();
+  if (mode === "follow") {
+    followed = { clip: pending.clip, guided: pending.guided };
+    await followBlur(pending.clip, pending.time, pending.box, pending.start, pending.end);
+    if (!busy.value) {
+      followed = null; // refusé par le moteur : son message est affiché
+      retry();
+    }
+    return;
+  }
+  await saveManual(pending.clip, pending.fixed);
+  if (pending.guided) {
+    notify("Zone ajoutée sur tout le passage. Regardez la boucle : si l'objet bouge, retracez-la à un autre instant avec « Déplacer ici… » dans l'onglet « Zones ».");
+    resume();
+  } else notify("Zone ajoutée pour 2 s. Réglez son début et sa fin dans le panneau « Zones ».");
+}
+
+// Fin d'un traitement court : le suivi d'un flou ajouté et la mesure de vitesse n'ont pas besoin
+// d'un écran de résultat. Leur dialogue se ferme seul ; en cas d'échec il reste, avec le message.
+watch(() => job.value?.state, (now, before) => {
+  const j = job.value;
+  if (before !== "running" || !j || now === "running") return;
+  if (j.kind === "follow") {
+    const from = followed;
+    followed = null;
+    if (j.state === "done") {
+      state.jobOpen = false;
+      state.jobFinished = false;
+      if (from && j.created !== null && j.created !== undefined) state.selectedTrack = { clip: from.clip, id: j.created };
+      notify(`${j.message.replace(/(\d)\.(\d)/g, "$1,$2")} ${from?.guided ? "Regardez la boucle : s'il ne couvre pas tout, ajoutez-en un autre." : "Il est sélectionné : réglez-le dans l'onglet « Zones »."}`);
+      if (from?.guided) resume();
+    } else if (from?.guided && review.sub === "missing") state.tool = "manual";
+  } else if (j.kind === "estimate" && j.state === "done") {
+    state.jobOpen = false; // le résultat s'affiche à côté du bouton « Analyser »
+    state.jobFinished = false;
+  }
+});
+
+// --- Estimation de la durée d'analyse -------------------------------------------
+const estimateText = computed(() => {
+  const e = project.value?.estimate;
+  if (!e) return "";
+  const speed = e.fps > 0 ? `, à ${e.fps.toFixed(1).replace(".", ",")} images par seconde` : "";
+  return `Analyse : ${formatDuration(e.seconds)}${speed}`;
+});
+
 /** « Annuler » de l'indicateur réduit : l'analyse et l'export demandent une confirmation, dans le dialogue. */
 function cancelJob(): void {
   const kind = job.value?.kind;
@@ -167,6 +231,9 @@ function toSimple(): void {
   leave();
   state.tool = "none";
   state.pendingDash = null;
+  state.pendingBlur = null;
+  review.sheet = false;
+  if (review.speed > 1) review.speed = 1; // l'assistant ne propose que « Normal » et « Ralenti »
   setMode("simple");
 }
 
@@ -176,8 +243,13 @@ function onKey(event: KeyboardEvent): void {
     void dashChoice("cancel");
     return;
   }
+  if (event.key === "Escape" && state.pendingBlur) {
+    void blurChoice("cancel");
+    return;
+  }
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || busy.value) return;
-  if (picker.value || exporting.value || state.pendingDash || state.jobOpen) return; // un dialogue est ouvert
+  if (picker.value || exporting.value || state.pendingDash || state.pendingBlur || review.sheet || state.jobOpen) return; // un dialogue est ouvert
+  if (event.ctrlKey || event.metaKey || event.altKey) return; // Ctrl+Z, Ctrl+C… ne sont pas des raccourcis de montage
   // vérification guidée : Entrée valide le passage affiché, S pose un signalement pendant la relecture
   if (event.key === "Enter" && review.mode === "queue" && target.tagName !== "BUTTON" && target.tagName !== "A") {
     event.preventDefault();
@@ -213,6 +285,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         </button>
       </nav>
       <span class="spacer"></span>
+      <span v-if="project" class="joined history">
+        <button
+          class="icon-btn" :disabled="busy || !project.history?.undo" :title="project.history?.undo ? `Annuler : ${project.history.undo} (Ctrl+Z)` : 'Rien à annuler'"
+          :aria-label="project.history?.undo ? `Annuler : ${project.history.undo}` : 'Annuler (rien à annuler)'" @click="undo()"
+        ><Icon name="undo" /></button>
+        <button
+          class="icon-btn" :disabled="busy || !project.history?.redo" :title="project.history?.redo ? `Rétablir : ${project.history.redo} (Ctrl+Y)` : 'Rien à rétablir'"
+          :aria-label="project.history?.redo ? `Rétablir : ${project.history.redo}` : 'Rétablir (rien à rétablir)'" @click="redo()"
+        ><Icon name="redo" /></button>
+      </span>
       <button :disabled="busy" @click="picker = 'open'"><Icon name="folder" />Ouvrir…</button>
       <button v-if="project" :disabled="busy" @click="picker = 'add'"><Icon name="plus" />Ajouter un clip…</button>
       <button class="mode-switch" title="L'assistant pas à pas, une question à la fois. Le projet ouvert est conservé." @click="toSimple"><Icon name="steps" />Passer en mode simple</button>
@@ -263,7 +345,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             <span class="guide-step">Étape {{ step }}</span>
             <p class="guide-text">{{ guide.text }}</p>
             <button v-if="guide.action === 'add'" class="primary" @click="picker = 'add'"><Icon name="plus" />Ajouter un clip…</button>
-            <button v-else-if="guide.action === 'analyse'" class="primary" title="Détecter les visages et les plaques dans les passages gardés qui ne l'ont pas encore été" @click="analyse"><Icon name="scan" />Analyser</button>
+            <template v-else-if="guide.action === 'analyse'">
+              <span v-if="estimateText" class="estimate" title="Durée estimée d'après la vitesse mesurée sur quelques images, avec les réglages actuels"><Icon name="clock" />{{ estimateText }}</span>
+              <button v-else title="Mesurer la vitesse de l'analyse sur quelques images pour savoir combien de temps elle prendra. Quelques secondes." @click="measureEstimate()"><Icon name="clock" />Estimer la durée</button>
+              <button class="primary" title="Détecter les visages et les plaques dans les passages gardés qui ne l'ont pas encore été" @click="analyse"><Icon name="scan" />Analyser</button>
+            </template>
             <button v-else-if="guide.action === 'continue'" class="primary" @click="goStep(autoStep)">Continuer<Icon name="arrowRight" /></button>
             <button v-else-if="guide.action === 'review'" class="primary" @click="beginReview">{{ doubtDone ? "Reprendre la vérification" : "Commencer la vérification" }}<Icon name="arrowRight" /></button>
             <button v-else-if="guide.action === 'marks'" class="primary" @click="goStep(3), startQueue('marks')">Traiter les signalements<Icon name="arrowRight" /></button>
@@ -275,6 +361,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             <button v-else-if="guide.action === 'export'" class="primary" @click="exporting = true"><Icon name="export" />Exporter…</button>
           </template>
         </div>
+        <!-- là où on lance l'analyse : le préréglage, avec son avertissement -->
+        <div v-if="guide.action === 'analyse' && !busy && !(job && state.jobFinished)" class="analysis-bar"><PresetChoice compact /></div>
         <Player />
         <div class="tools">
           <button :disabled="busy || locked" :title="locked ? lockedTip : 'Couper le passage à la tête de lecture (C)'" @click="splitAtPlayhead"><Icon name="scissors" />Couper ici</button>
@@ -339,6 +427,19 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             <button :disabled="!chosenName" @click="dashChoice('fixed')"><span>Zone fixe<small>Le même rectangle sur tout le clip. À choisir si l'objet ne bouge pas dans l'image (caméra fixée à la moto, cadrage constant).</small></span></button>
           </div>
           <div class="row end"><button @click="dashChoice('cancel')">Annuler</button></div>
+        </div>
+      </div>
+    </Transition>
+    <Transition name="modal">
+      <div v-if="state.pendingBlur" class="modal">
+        <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="blur-title">
+          <h3 id="blur-title"><Icon name="plus" :size="18" />Ajouter un flou</h3>
+          <p>Que faire du rectangle que vous venez de tracer ?</p>
+          <div class="choices">
+            <button ref="followButton" class="primary" @click="blurChoice('follow')"><span>Suivre ce que j'ai entouré<small>Le flou suit ce que vous avez entouré, image par image, dans tout ce passage du montage. Il s'arrête seul à un changement de plan. À choisir pour une personne, une plaque, tout ce qui bouge dans l'image.</small></span></button>
+            <button @click="blurChoice('fixed')"><span>Zone fixe<small>{{ state.pendingBlur.guided ? "Le même rectangle, immobile, pendant tout le passage vérifié." : "Le même rectangle, immobile, pendant 2 s. Vous réglerez son début et sa fin dans l'onglet « Zones »." }}</small></span></button>
+          </div>
+          <div class="row end"><button @click="blurChoice('cancel')">Annuler</button></div>
         </div>
       </div>
     </Transition>

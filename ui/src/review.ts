@@ -3,8 +3,9 @@
 // des signalements. Les validations et les signalements sont enregistrés dans le fichier projet
 // par le moteur ; ce module ne garde que l'état de la séance en cours.
 
-import { computed, reactive } from "vue";
-import type { Mark, ReviewItem } from "./api";
+import { computed, reactive, watch } from "vue";
+import type { Mark, ReviewItem, Track } from "./api";
+import { saveSweep } from "./extras";
 import {
   current, duration, formatTime, mapRange, patchTrack, player, project, seekTime, send,
   state, time, trackById,
@@ -32,7 +33,12 @@ export const review = reactive({
   flash: "", // confirmation brève du dernier signalement
   savedPreview: "" as "" | "boxes" | "blur" | "off",
   last: null as { clip: string; at: number; end: number } | null, // dernière position connue de l'élément affiché
+  sheet: false, // planche des flous ouverte (mode avancé)
+  sheetFilter: null as { clip: string; ids: number[] } | null, // planche limitée aux flous d'un passage
 });
+
+/** Vitesses de l'aperçu proposées, en vérification comme en lecture normale. */
+export const speeds = [0.25, 0.5, 1, 1.5, 2].map((value) => ({ value, label: `${String(value).replace(".", ",")}×` }));
 
 // Seuls les passages encore présents dans le montage sont proposés (un passage coupé ne sort pas).
 export const doubtEntries = computed<Entry[]>(() => {
@@ -147,6 +153,7 @@ function show(id: string): void {
 }
 
 export function finish(): void {
+  endSweep();
   player.pause();
   review.mode = "end";
   review.current = "";
@@ -156,6 +163,7 @@ export function finish(): void {
 
 /** Ouvre la file des passages douteux ou des signalements, au premier élément non réglé. */
 export function startQueue(scope: "doubt" | "marks"): void {
+  endSweep();
   review.scope = scope;
   state.tab = "review";
   const first = entries.value.find((e) => !e.done) ?? entries.value[0];
@@ -292,9 +300,134 @@ export async function restoreZone(zone: { clip: string; id: number }): Promise<v
   resume();
 }
 
+// --- Planche des flous ----------------------------------------------------------
+
+/** Un flou automatique actif du montage, et l'instant du montage où aller le voir. */
+export interface SheetItem {
+  key: string;
+  clip: string;
+  track: Track;
+  at: number;
+}
+
+/** Tous les flous automatiques actifs (ni retirés, ni écartés par le score) encore présents dans
+ *  le montage, les plus douteux d'abord : meilleur score le plus bas. */
+export const sheetItems = computed<SheetItem[]>(() => {
+  const out: SheetItem[] = [];
+  for (const [clip, tracks] of Object.entries(project.value?.tracks ?? {})) {
+    for (const track of tracks) {
+      if (track.source !== "auto" || track.disabled || track.below_min_score) continue;
+      const part = mapRange({ clip, start: track.start, end: track.end })[0];
+      if (part) out.push({ key: `${clip}:${track.id}`, clip, track, at: (part.start + part.end) / 2 });
+    }
+  }
+  return out.sort((a, b) => a.track.best_score - b.track.best_score || a.track.score - b.track.score || a.at - b.at);
+});
+
+/** Ouvre la planche des flous : tous les flous, ou seulement ceux d'un passage chargé. */
+export function openSheet(filter?: { clip: string; ids: number[] }): void {
+  player.pause();
+  review.sheetFilter = filter ?? null;
+  review.sheet = true;
+}
+
+/** Ferme la planche. Pendant la vérification d'un passage, la boucle reprend (le passage a pu changer). */
+export function closeSheet(): void {
+  review.sheet = false;
+  review.sheetFilter = null;
+  if (review.mode === "queue" && review.sub === "ask") {
+    relocate();
+    if (review.mode === "queue") replay();
+  }
+}
+
+// --- Un seul objet dans l'élément affiché -------------------------------------
+
+/** Objet de l'élément affiché, quand il ne porte que sur un seul (passage chargé découpé objet par objet). */
+export const soloTrack = computed<Track | undefined>(() => {
+  const item = currentEntry.value?.item;
+  return item && item.tracks.length === 1 ? trackById(item.clip, item.tracks[0]) : undefined;
+});
+
+/** « Ce n'est pas à flouter » : retire le seul flou de l'élément affiché, puis passe à l'élément suivant. */
+export async function dismiss(): Promise<void> {
+  const e = currentEntry.value;
+  const track = soloTrack.value;
+  if (!e || !track || review.sub !== "ask") return;
+  const index = currentIndex.value;
+  if (!(await send("PATCH", "/api/tracks", { clip: e.clip, id: track.id, disabled: true }))) return;
+  // l'élément a quitté la file (son seul flou est retiré) : le suivant a pris sa place
+  showAt(entries.value[index]?.id === e.id ? index + 1 : index);
+  if (review.mode === "queue") review.removed = [{ clip: e.clip, id: track.id, label: `${track.name} n° ${track.id}` }];
+}
+
 // --- Relecture complète -----------------------------------------------------
+// Le moteur mémorise où en est la relecture (`project.sweep`) : la position est envoyée à la
+// pause, en quittant et toutes les 5 s de lecture ; `done` passe à vrai à la fin du montage.
+
+/** Demandes envoyées l'une après l'autre : une réponse ancienne n'écrase jamais un état plus récent. */
+let queue: Promise<unknown> = Promise.resolve();
+function inOrder<T>(work: () => Promise<T>): Promise<T> {
+  const run = queue.then(work, work);
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+let sweepPath = ""; // projet de la relecture en cours
+let sweepSaved = { position: -1, done: false };
+
+function sweepNow(): { position: number; done: boolean } | null {
+  const p = project.value;
+  if (!p || p.path !== sweepPath || !duration.value) return null;
+  const ended = time.value >= duration.value - 0.2;
+  return { position: Math.round((ended ? duration.value : time.value) * 100) / 100, done: p.sweep?.done === true || ended };
+}
+
+function rememberSweep(): void {
+  const now = sweepNow();
+  if (!now || (now.position === sweepSaved.position && now.done === sweepSaved.done)) return;
+  sweepSaved = now;
+  void inOrder(() => saveSweep(now.position, now.done));
+}
+
+/** À appeler avant de quitter la relecture complète : la position atteinte est mémorisée. */
+function endSweep(): void {
+  if (review.mode === "sweep") rememberSweep();
+}
+
+let sweepTimer = 0;
+watch(() => review.mode === "sweep", (on) => {
+  window.clearInterval(sweepTimer);
+  if (on) sweepTimer = window.setInterval(() => state.playing && review.mode === "sweep" && rememberSweep(), 5000);
+});
+watch(() => state.playing, (playing) => {
+  if (!playing && review.mode === "sweep") rememberSweep(); // pause, ou fin du montage
+});
+// fenêtre fermée ou page rechargée en pleine relecture : dernier envoi, sans attendre la réponse
+window.addEventListener("pagehide", () => {
+  const now = review.mode === "sweep" ? sweepNow() : null;
+  if (!now) return;
+  void fetch("/api/sweep", { method: "PUT", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify(now) }).catch(() => undefined);
+});
+
+/** Où reprendre la relecture complète (secondes du montage) ; null s'il n'y a rien à reprendre. */
+export const sweepResume = computed<number | null>(() => {
+  const s = project.value?.sweep;
+  if (!s || s.done || s.position < 1 || s.position > duration.value - 0.5) return null;
+  return s.position;
+});
+
+/** Reprend la relecture complète là où elle s'était arrêtée (depuis le début s'il n'y a rien à reprendre). */
+export function resumeSweep(): void {
+  const at = sweepResume.value;
+  if (at === null) return startSweep(true);
+  seekTime(at);
+  startSweep();
+}
 
 export function startSweep(fromStart = false): void {
+  sweepPath = project.value?.path ?? "";
+  sweepSaved = { position: -1, done: false };
   review.mode = "sweep";
   review.current = "";
   review.sub = "ask";
@@ -311,7 +444,8 @@ export async function addMark(): Promise<void> {
   const s = current.value;
   if (!s || review.mode !== "sweep") return;
   const at = time.value;
-  if (!(await send("POST", "/api/marks", { clip: s.clip.id, time: state.frame / s.fps }))) return;
+  const mark = { clip: s.clip.id, time: state.frame / s.fps };
+  if (!(await inOrder(() => send("POST", "/api/marks", mark)))) return;
   review.flash = `Signalé à ${formatTime(at, 1)}`;
   window.clearTimeout(flashTimer);
   flashTimer = window.setTimeout(() => (review.flash = ""), 1600);
@@ -319,6 +453,7 @@ export async function addMark(): Promise<void> {
 
 /** Quitte la vérification guidée : retour à l'écran de choix, aperçu remis comme avant. */
 export function leave(): void {
+  endSweep();
   player.pause();
   review.mode = "home";
   review.current = "";
