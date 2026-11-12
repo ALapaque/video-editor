@@ -114,16 +114,38 @@ def _corner(zone: Zone) -> float:
     return float(zone.radius) if zone.shape == "rounded" else 0.0
 
 
-def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
-    """Réunit les flous qui se recouvrent, sans jamais découvrir un pixel qui était flouté.
+def _groups(zones: list[Zone]) -> list[list[int]]:
+    """Regroupe les zones dont les boîtes se touchent, directement ou de proche en proche.
 
-    - Une zone entièrement couverte par une autre disparaît : elle n'ajoutait rien.
-    - Deux zones qui se recouvrent largement sont remplacées par un seul rectangle arrondi
-      englobant les deux (donc un peu plus grand que leur réunion).
-    Les zones qui se touchent à peine restent séparées.
+    Seules les zones d'un même groupe peuvent fusionner. Dans une scène chargée, presque toutes
+    les zones sont isolées : les repérer d'un coup (calcul vectorisé) évite de comparer chaque
+    paire une à une, ce qui coûtait plusieurs millisecondes par image.
     """
+    boxes = np.array([z.box for z in zones], dtype=np.float64)
+    touch = (
+        (boxes[:, None, 0] < boxes[None, :, 2]) & (boxes[None, :, 0] < boxes[:, None, 2])
+        & (boxes[:, None, 1] < boxes[None, :, 3]) & (boxes[None, :, 1] < boxes[:, None, 3])
+    )
+    np.fill_diagonal(touch, False)
+    parent = list(range(len(zones)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, j in zip(*np.nonzero(np.triu(touch)), strict=True):
+        parent[find(int(i))] = find(int(j))
+    groups: dict[int, list[int]] = {}
+    for i in range(len(zones)):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
+def _merge_group(zones: list[Zone], min_overlap: float) -> list[Zone]:
+    """Fusionne un petit groupe de zones qui se touchent (voir `merge_zones`)."""
     out = sorted(zones, key=lambda z: -(z.box[2] - z.box[0]) * (z.box[3] - z.box[1]))
-    out = [replace(z, tracks=z.tracks or (z.track_id,)) for z in out]
     changed = True
     while changed:
         changed = False
@@ -154,6 +176,32 @@ def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
                 break
             if changed:
                 break
+    return out
+
+
+def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
+    """Réunit les flous qui se recouvrent, sans jamais découvrir un pixel qui était flouté.
+
+    - Une zone entièrement couverte par une autre disparaît : elle n'ajoutait rien.
+    - Deux zones qui se recouvrent largement sont remplacées par un seul rectangle arrondi
+      englobant les deux (donc un peu plus grand que leur réunion).
+    Les zones qui se touchent à peine restent séparées.
+    """
+    if len(zones) < 2:
+        return [replace(z, tracks=z.tracks or (z.track_id,)) for z in zones]
+    tagged = [replace(z, tracks=z.tracks or (z.track_id,)) for z in zones]
+    out: list[Zone] = []
+    for group in _groups(tagged):
+        if len(group) == 1:
+            out.append(tagged[group[0]])
+        else:
+            out.extend(_merge_group([tagged[i] for i in group], min_overlap))
+    # La boîte englobante créée par une fusion peut atteindre une zone d'un autre groupe :
+    # on recommence tant que le nombre de zones diminue (rare, et toujours sur peu de zones).
+    if len(out) < len(tagged) and len(out) > 1:
+        again = merge_zones(out, min_overlap)
+        if len(again) < len(out):
+            return again
     return out
 
 
