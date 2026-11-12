@@ -46,7 +46,7 @@ def api(tmp_path):
 @pytest.fixture
 def doubtful(tmp_path):
     """Même projet, mais la plaque est détectée avec une confiance faible : un passage à vérifier."""
-    call = _serve(tmp_path, FakeDetector(score=0.22))
+    call = _serve(tmp_path, FakeDetector(score=0.32))  # douteux (sous 0,40) mais au-dessus du score minimal
     yield call
     call.close()
 
