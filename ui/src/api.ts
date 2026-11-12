@@ -51,6 +51,8 @@ export interface Track {
   end: number;
   extend_before_s: number | null;
   extend_after_s: number | null;
+  /** Objet suivi dont le contour précis a été calculé (flou qui épouse l'objet). */
+  contour?: boolean;
   score: number;
   count: number;
   keyframes?: number[][];
@@ -83,6 +85,58 @@ export interface Project {
   mismatch: boolean;
   /** Choix d'alignement : "" (pas encore choisi), "first" ou "largest". */
   conform: string;
+  /** Préréglage d'analyse : "normal", "difficile" (conditions difficiles) ou "rapide". */
+  preset: Preset;
+  /** Relecture complète : position atteinte (secondes du montage) et relecture terminée ou non. */
+  sweep: { position: number; done: boolean };
+  /** Nom de la modification que « Annuler » / « Rétablir » défera ou refera (null : rien). */
+  history: { undo: string | null; redo: string | null };
+  /** Dernière estimation de durée d'analyse encore valable (null : pas mesurée ou périmée). */
+  estimate: Estimate | null;
+}
+
+export type Preset = "normal" | "difficile" | "rapide";
+
+export interface Estimate {
+  frames: number; // images restant à analyser
+  seconds: number; // durée estimée de l'analyse
+  fps: number; // vitesse mesurée, en images par seconde
+}
+
+/** Profil « ma moto » enregistré sur cet ordinateur. */
+export interface Profile {
+  saved_at: number; // secondes Unix
+  preset: Preset;
+  kinds: string[];
+  objects: string[]; // noms des objets suivis mémorisés (« compteur », « téléphone »…)
+}
+
+export interface Recent {
+  path: string;
+  name: string;
+  folder: string;
+  modified: number; // secondes Unix
+}
+
+export interface Storage {
+  previews: { path: string; name: string; size: number; current: boolean; orphan: boolean }[];
+  models: number; // octets
+  freed?: number;
+}
+
+/** Préréglages d'export : même format que la source, qualité maximale, réseaux sociaux, fichier léger. */
+export type ExportPreset = "source" | "youtube" | "social" | "leger";
+
+export interface RenderOptions {
+  output: string;
+  preset?: ExportPreset;
+  quality?: number;
+  codec?: string;
+  encoder?: string;
+  max_side?: number;
+  debug?: boolean;
+  /** Extrait de contrôle : début et durée, en secondes du montage. Le fichier prend le suffixe « _extrait ». */
+  window?: { start: number; duration: number };
 }
 
 export interface Job {
@@ -93,6 +147,8 @@ export interface Job {
   fps: number;
   state: "running" | "done" | "error" | "cancelled";
   message: string;
+  /** Identifiant de la zone créée par le traitement (flou ajouté qui suit), sinon null. */
+  created: number | null;
 }
 
 export interface State {
@@ -100,10 +156,19 @@ export interface State {
   job: Job | null;
   version: number;
   created?: number;
+  profile: Profile | null;
+  /** Fonctions disponibles sur cette installation (contour précis des objets suivis…). */
+  features?: { contour: boolean };
+  /** Modèles utilisables, y compris ceux ajoutés par l'utilisateur. */
+  models?: { face: string[]; plate: string[] };
+  undone?: string;
+  redone?: string;
 }
 
-/** Zone sur une image : x1, y1, x2, y2, forme, rayon, catégorie, piste, score (null si interpolée). */
-export type ZoneTuple = [number, number, number, number, string, number, string, number, number | null];
+/** Zone sur une image : x1, y1, x2, y2, forme, rayon, catégorie, piste, score (null si interpolée),
+ *  pistes réunies dans la zone, puis — seulement pour la forme "contour" — le contour précis :
+ *  liste de points [x, y] en pixels de l'image source, à tracer comme un polygone fermé. */
+export type ZoneTuple = [number, number, number, number, string, number, string, number, number | null, number[]?, number[][]?];
 
 /** Détection écartée sur une image : x1, y1, x2, y2 (boîte brute), catégorie, piste, score. */
 export type DroppedTuple = [number, number, number, number, string, number, number | null];

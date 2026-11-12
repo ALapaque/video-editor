@@ -11,7 +11,7 @@ import hashlib
 import os
 import sys
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .progress import Progress
@@ -79,10 +79,48 @@ def models_dir() -> Path:
     return Path(env) if env else Path.home() / ".moto-blur" / "models"
 
 
+def custom_dir(kind: str) -> Path:
+    """Dossier des modèles ajoutés par l'utilisateur pour une catégorie (« plate », « face »)."""
+    return models_dir() / "perso" / kind
+
+
+def custom_models(kind: str) -> list[str]:
+    try:
+        return sorted(p.stem for p in custom_dir(kind).glob("*.onnx") if not p.name.endswith(".lot.onnx"))
+    except OSError:
+        return []
+
+
+def available(kind: str) -> list[str]:
+    """Modèles utilisables pour une catégorie : ceux de moto-blur, puis ceux de l'utilisateur."""
+    return [m.name for m in MODELS.values() if m.kind == kind] + custom_models(kind)
+
+
+def _custom_spec(name: str, kind: str) -> ModelSpec | None:
+    """Modèle personnel : un fichier ONNX exporté par Ultralytics (une seule classe), posé dans
+    `~/.moto-blur/models/perso/<catégorie>/<nom>.onnx`. Jamais téléchargé."""
+    path = custom_dir(kind) / f"{name}.onnx"
+    if not path.is_file():
+        return None
+    size, dynamic = 640, True
+    try:
+        import onnx
+
+        dims = onnx.load(str(path), load_external_data=False).graph.input[0].type.tensor_type.shape.dim
+        dynamic = not all(d.HasField("dim_value") and d.dim_value > 0 for d in dims)
+        if len(dims) == 4 and dims[2].HasField("dim_value") and dims[2].dim_value > 0:
+            size = int(dims[2].dim_value)
+    except Exception:  # noqa: BLE001 - en-tête illisible : valeurs habituelles
+        pass
+    return ModelSpec(name, kind, "", "", path.stat().st_size / 1e6, size, "ultralytics", dynamic, "modèle personnel")
+
+
 def get_spec(name: str, kind: str) -> ModelSpec:
     spec = MODELS.get(name)
     if spec is None or spec.kind != kind:
-        choices = ", ".join(m.name for m in MODELS.values() if m.kind == kind)
+        spec = _custom_spec(name, kind)
+    if spec is None:
+        choices = ", ".join(available(kind))
         raise ValueError(f"modèle inconnu pour « {kind} » : {name}. Choix possibles : {choices}")
     return spec
 
@@ -95,8 +133,104 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def batchable(spec: ModelSpec, path: Path) -> tuple[ModelSpec, Path]:
+    """Version du modèle qui traite toutes les tuiles d'une image en un seul appel.
+
+    Les modèles de plaques sont publiés avec la suppression des doublons intégrée et une seule
+    image par appel : il fallait donc un appel par tuile. On en extrait ici la partie détection
+    (sortie brute, avant suppression des doublons, faite ensuite par moto-blur comme pour les
+    visages) et on libère la taille du lot. La conversion est faite une fois, sur cette machine,
+    à partir du fichier téléchargé ; le résultat est gardé à côté de lui.
+
+    En cas d'échec, le modèle d'origine est renvoyé tel quel.
+    """
+    if spec.output != "end2end":
+        return spec, path
+    target = path.with_name(f"{spec.name}.lot.onnx")
+    converted = replace(spec, output="ultralytics", dynamic=True)
+    if target.exists():
+        return converted, target
+    try:
+        import onnx
+        from onnx import numpy_helper
+
+        model = onnx.load(str(path))
+        produced = {o: n for n in model.graph.node for o in n.output}
+        # Sortie brute : le tenseur que le bloc « end2end » reçoit du détecteur.
+        raw = [
+            i for n in model.graph.node if n.name.startswith("/end2end") for i in n.input
+            if i in produced and not produced[i].name.startswith("/end2end")
+        ]
+        if len(set(raw)) != 1:
+            raise ValueError("sortie brute introuvable")
+        partial = target.with_suffix(".part")
+        onnx.utils.extract_model(str(path), str(partial), [model.graph.input[0].name], [raw[0]])
+        model = onnx.load(str(partial))
+        graph = model.graph
+        graph.input[0].type.tensor_type.shape.dim[0].dim_param = "batch"
+        for output in graph.output:
+            output.type.tensor_type.shape.Clear()
+        del graph.value_info[:]
+        # Les « Reshape » figés sur un lot de 1 : 0 signifie « garder la taille d'entrée ».
+        initializers = {i.name: i for i in graph.initializer}
+        constants = {n.output[0]: n for n in graph.node if n.op_type == "Constant"}
+        for node in graph.node:
+            if node.op_type != "Reshape":
+                continue
+            name = node.input[1]
+            if name in initializers:
+                shape = numpy_helper.to_array(initializers[name]).copy()
+                if shape.size and shape[0] == 1:
+                    shape[0] = 0
+                    initializers[name].CopyFrom(numpy_helper.from_array(shape, name))
+            elif name in constants:
+                shape = numpy_helper.to_array(constants[name].attribute[0].t).copy()
+                if shape.size and shape[0] == 1:
+                    shape[0] = 0
+                    constants[name].attribute[0].t.CopyFrom(numpy_helper.from_array(shape))
+        onnx.save(model, str(partial))
+        os.replace(partial, target)
+        return converted, target
+    except Exception as exc:  # noqa: BLE001 - la conversion est une optimisation, jamais un blocage
+        print(f"Conversion de {spec.name} impossible ({exc}) : une tuile par appel.", file=sys.stderr)
+        return spec, path
+
+
+def _download(url: str, target: Path, sha256: str, label: str, size_mb: float) -> None:
+    """Télécharge un fichier et vérifie son empreinte ; rien n'est gardé si elle ne correspond pas."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".part")
+    request = urllib.request.Request(url, headers={"User-Agent": "moto-blur"})
+    with urllib.request.urlopen(request) as response, open(tmp, "wb") as out:
+        total = int(response.headers.get("Content-Length") or size_mb * 1e6)
+        progress = Progress(f"Téléchargement du modèle {label}", max(1, total // 100_000), 0, unit="x 100 ko")
+        while chunk := response.read(100_000):
+            out.write(chunk)
+            progress.step()
+    digest = _sha256(tmp)
+    if digest != sha256:
+        tmp.unlink()
+        raise RuntimeError(
+            f"empreinte inattendue pour {label} : {digest} (attendu {sha256}). "
+            "Le fichier téléchargé a été supprimé."
+        )
+    os.replace(tmp, target)
+
+
+def ensure_files(name: str, files: list[tuple[str, str, str, float]]) -> Path:
+    """Modèle en plusieurs fichiers (nom, adresse, empreinte, taille en Mo) : renvoie son dossier,
+    après avoir téléchargé et vérifié ce qui manque."""
+    folder = models_dir() / name
+    for filename, url, sha256, size_mb in files:
+        if not (folder / filename).exists():
+            _download(url, folder / filename, sha256, f"{name} ({filename})", size_mb)
+    return folder
+
+
 def ensure_model(spec: ModelSpec) -> Path:
     """Renvoie le chemin local du modèle ; le télécharge s'il est absent."""
+    if not spec.url:  # modèle personnel : il est là où l'utilisateur l'a posé
+        return custom_dir(spec.kind) / f"{spec.name}.onnx"
     path = models_dir() / f"{spec.name}.onnx"
     if path.exists():
         return path

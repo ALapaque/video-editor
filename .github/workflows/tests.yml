@@ -12,6 +12,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
+      # Les tests téléchargent quelques modèles (dont celui du contour précis, 155 Mo) : on les garde.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.moto-blur/models
+          key: modeles-${{ hashFiles('src/moto_blur/models.py', 'src/moto_blur/contour.py') }}
       - run: uv run ruff check src tests
       - run: uv run pytest -q
 

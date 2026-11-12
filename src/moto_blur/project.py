@@ -146,6 +146,9 @@ class BlurSettings:
     # Fusionner les flous qui se recouvrent (un même objet pris pour un visage ET une plaque,
     # ou une détection à l'intérieur d'un objet suivi) : un seul flou au lieu de deux ou trois.
     merge_overlaps: bool = True
+    # Stabiliser les flous : position lissée et taille maintenue sur quelques images, pour
+    # qu'une zone ne tremble pas. La zone lissée contient toujours la détection de l'image.
+    smooth: bool = True
     # Nombre d'images où une détection doit atteindre le score minimal pour être floutée. Un vrai
     # visage ou une vraie plaque reste plusieurs images à l'écran ; une fausse détection
     # (feuillage, reflet, carénage) clignote. Exception : une détection très nette (score
@@ -187,6 +190,10 @@ class Track:
     # Suivi d'objet : intervalle de PTS [début, fin] que la passe de suivi a parcouru, objet
     # trouvé ou non. Sert à distinguer « pas encore suivi » de « suivi mais objet perdu ».
     span: list[int] | None = None
+    # Contour précis (objet suivi) : une ligne par image de référence, [pts, u0, v0, u1, v1, …],
+    # les points étant exprimés par rapport à la boîte observée à cet instant (0 = bord gauche ou
+    # haut, 1 = bord droit ou bas ; un point peut en sortir un peu). None = forme habituelle.
+    outline: list[list[float]] | None = None
 
     @property
     def name(self) -> str:
@@ -221,6 +228,10 @@ class Project:
     # "first" (tout aligner sur le premier clip) ou "largest" (plus grande résolution et
     # plus haute fréquence d'images).
     conform: str = ""
+    # Préréglage d'analyse choisi : "normal", "difficile" (nuit, pluie) ou "rapide".
+    preset: str = "normal"
+    # Relecture complète : position atteinte dans le montage (secondes) et si elle est terminée.
+    sweep: dict = field(default_factory=lambda: {"position": 0.0, "done": False})
     path: Path | None = None
 
     def clip(self, clip_id: str) -> Clip:
@@ -242,7 +253,10 @@ class Project:
 
 def review_key(item: dict) -> str:
     """Clé d'un passage à vérifier. Elle change dès que le passage change : il est alors redemandé."""
-    return f"{item['clip']}:{item['start_pts']}:{item['end_pts']}"
+    key = f"{item['clip']}:{item['start_pts']}:{item['end_pts']}"
+    # Un passage qui ne porte que sur un objet est distingué par cet objet : deux objets
+    # douteux peuvent couvrir exactement le même intervalle.
+    return f"{key}:{item['tracks'][0]}" if len(item.get("tracks", [])) == 1 else key
 
 
 def prune_review_state(project: Project) -> None:
@@ -304,6 +318,8 @@ def _track_to_json(t: Track) -> str:
         doc["reacquired_at"] = int(t.reacquired_at)
     if t.span is not None:
         doc["span"] = [int(t.span[0]), int(t.span[1])]
+    if t.outline:
+        doc["outline"] = [[int(row[0]), *[round(float(x), 3) for x in row[1:]]] for row in t.outline]
     doc["obs"] = obs
     return json.dumps(doc, separators=(",", ":"))
 
@@ -320,6 +336,8 @@ def dumps(project: Project) -> str:
             "blur": asdict(project.blur_settings),
         },
         "conform": project.conform,
+        "preset": project.preset,
+        "sweep": project.sweep,
         "review_done": project.review_done,
         "marks": project.marks,
         "review": project.review,
@@ -369,7 +387,7 @@ def load(path: Path) -> Project:
             Track(
                 t["id"], t["kind"], t["obs"], t.get("source", "auto"), t.get("disabled", False),
                 t.get("forced", False), t.get("extend_before_s"), t.get("extend_after_s"),
-                t.get("label", ""), t.get("reacquired_at"), t.get("span"),
+                t.get("label", ""), t.get("reacquired_at"), t.get("span"), t.get("outline"),
             )
             for t in a.get("tracks", [])
         ]
@@ -388,5 +406,8 @@ def load(path: Path) -> Project:
             for m in doc.get("marks", [])
         ],
         conform=doc.get("conform", ""),
+        preset=doc.get("preset", "normal"),
+        sweep={"position": float(doc.get("sweep", {}).get("position", 0.0)),
+               "done": bool(doc.get("sweep", {}).get("done", False))},
         path=path,
     )

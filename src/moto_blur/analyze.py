@@ -20,7 +20,7 @@ import numpy as np
 from . import dash, intervals
 from . import project as pj
 from .detect import Detector, gpu_has_worked
-from .models import ensure_model, get_spec
+from .models import batchable, ensure_model, get_spec
 from .postprocess import build_review
 from .progress import Progress
 from .timeline import kept_intervals, resolve_segments
@@ -55,7 +55,7 @@ def _load(spec, size, s: pj.AnalysisSettings, device: str, worked_before: bool) 
     """Charge un modèle. Refuse de continuer si la carte graphique, déjà utilisée avec succès
     dans cette session, ne répond plus : mieux vaut une erreur claire qu'une analyse qui passe
     sans prévenir sur le processeur et dure des heures."""
-    path = ensure_model(spec)
+    spec, path = batchable(spec, ensure_model(spec))
     args = (spec, path, size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device)
     detector = Detector(*args)
     if detector.fell_back and worked_before:
@@ -269,3 +269,86 @@ def refresh_review(project: pj.Project) -> None:
             review.extend(dash.build_dash_review(clip, state.tracks))
     project.review = review
     pj.prune_review_state(project)
+
+
+# --- Préréglages et estimation ---------------------------------------------
+
+PRESETS = ("normal", "difficile", "rapide")
+
+
+def apply_preset(project: pj.Project, name: str) -> None:
+    """Applique un préréglage d'analyse. Les catégories à détecter ne changent pas.
+
+    - normal : réglages par défaut.
+    - difficile (nuit, pluie, contre-jour) : seuils plus bas, tuiles plus petites et modèle de
+      visages le plus précis ; plus lent, et davantage de faux flous.
+    - rapide : modèles légers et une image sur deux ; plus de risque de manquer un objet.
+    """
+    if name not in PRESETS:
+        raise ValueError(f"préréglage inconnu : {name}")
+    base = pj.AnalysisSettings(kinds=list(project.analysis_settings.kinds))
+    blur = pj.BlurSettings()
+    a, b = project.analysis_settings, project.blur_settings
+    values = {
+        "face_model": base.face_model, "plate_model": base.plate_model, "conf_new": base.conf_new,
+        "conf_keep": base.conf_keep, "tile_size": base.tile_size, "detect_every": base.detect_every,
+    }
+    scores = {"face_min_score": blur.face_min_score, "plate_min_score": blur.plate_min_score,
+              "min_hits": blur.min_hits}
+    if name == "difficile":
+        long_side = max((max(c.video.width, c.video.height) for c in project.clips), default=1920)
+        values.update(face_model="yolo11m-face", conf_new=0.12, conf_keep=0.03,
+                      tile_size=max(640, round(long_side / 4)))
+        scores.update(face_min_score=0.30, plate_min_score=0.18, min_hits=2)
+    elif name == "rapide":
+        values.update(face_model="yolo11n-face", plate_model="yolo-v9-t-640", detect_every=2)
+    for key, value in values.items():
+        setattr(a, key, value)
+    for key, value in scores.items():
+        setattr(b, key, value)
+    project.preset = name
+
+
+def frames_to_analyze(project: pj.Project) -> int:
+    total = 0
+    for clip in project.clips:
+        v = clip.video
+        total += round(intervals.total(needed_intervals(project, clip)) * v.tb * v.fps_fraction)
+    return total
+
+
+def estimate(project: pj.Project, device: str = "auto", samples: int = 8) -> dict:
+    """Mesure la vitesse d'analyse sur quelques images et en déduit la durée totale.
+
+    Les modèles chargés ici restent en mémoire : l'analyse qui suit démarre aussitôt.
+    """
+    total = frames_to_analyze(project)
+    if not total:
+        return {"frames": 0, "seconds": 0.0, "fps": 0.0}
+    clip = next(c for c in project.clips if needed_intervals(project, c))
+    start, end = needed_intervals(project, clip)[0]
+    detect, _ = make_detect_fn(project, clip, device)
+    every = max(1, project.analysis_settings.detect_every)
+    decode_s = detect_s = 0.0
+    n = detections = 0
+    with av.open(str(project.clip_path(clip))) as container:
+        frames = iter_frames(container, start, end)
+        while n < samples * every:
+            t0 = time.perf_counter()
+            frame = next(frames, None)
+            if frame is None:
+                break
+            run = n % every == 0
+            rgb = frame.to_ndarray(format="rgb24") if run else None
+            t1 = time.perf_counter()
+            if run:
+                detect(rgb)
+                detections += 1
+                if detections > 1:  # la première image paie la mise en route : on ne la compte pas
+                    detect_s += time.perf_counter() - t1
+            decode_s += t1 - t0
+            n += 1
+    if n == 0:
+        return {"frames": total, "seconds": 0.0, "fps": 0.0}
+    per_frame = decode_s / n + (detect_s / max(1, detections - 1)) / every
+    return {"frames": total, "seconds": round(total * per_frame, 1), "fps": round(1 / max(per_frame, 1e-9), 2)}

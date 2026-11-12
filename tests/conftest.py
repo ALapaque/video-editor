@@ -14,6 +14,12 @@ from moto_blur import project as pj
 W, H, FPS = 320, 180, 30
 
 
+@pytest.fixture(autouse=True)
+def isolated_app_dir(tmp_path_factory, monkeypatch):
+    """Projets récents et profil rangés dans un dossier temporaire, jamais dans le vrai."""
+    monkeypatch.setenv("MOTO_BLUR_HOME", str(tmp_path_factory.mktemp("moto-blur-home")))
+
+
 def object_box(i: int) -> tuple[int, int, int, int]:
     """Position du carré blanc dans l'image numéro i (il se déplace vers la droite)."""
     x = 20 + 2 * i

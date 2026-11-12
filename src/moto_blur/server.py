@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import urllib.parse
 from dataclasses import asdict, replace
@@ -23,10 +24,20 @@ from pathlib import Path
 import av
 import cv2
 
-from . import dash, progress
+from . import contour, dash, library, media, progress, training
 from . import project as pj
-from .analyze import analyze_project, needed_intervals, refresh_review
-from .blur import SUPPORTED_FORMATS, blur_frame
+from .analyze import (
+    PRESETS,
+    analyze_project,
+    apply_preset,
+    estimate,
+    frames_to_analyze,
+    needed_intervals,
+    refresh_review,
+)
+from .blur import SUPPORTED_FORMATS, blur_frame, zone_outline
+from .history import History, snapshot
+from .models import available
 from .postprocess import ZoneIndex, below_min_score
 from .proxy import build_proxy, proxy_path
 from .render import RenderError, check_ready, formats_differ, render_project, used_clips
@@ -35,6 +46,14 @@ from .video import iter_frames, probe
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".mts", ".webm"}
 UI_DIR = Path(__file__).parent / "ui"
+
+# Préréglages d'export : valeurs par défaut, que la requête peut surcharger champ par champ.
+EXPORT_PRESETS = {
+    "source": {},
+    "youtube": {"quality": 90},
+    "social": {"max_side": 1920, "codec": "h264", "quality": 75},
+    "leger": {"max_side": 1280, "codec": "h264", "quality": 60},
+}
 
 
 class ApiError(Exception):
@@ -55,11 +74,13 @@ class Job:
         self.state = "running"  # running | done | error | cancelled
         self.message = ""
         self.cancel = False
+        self.created: int | None = None  # identifiant de la zone créée par le traitement
 
     def to_json(self) -> dict:
         return {
             "kind": self.kind, "label": self.label, "done": self.done, "total": self.total,
             "fps": round(self.fps, 1), "state": self.state, "message": self.message,
+            "created": self.created,
         }
 
 
@@ -75,6 +96,9 @@ class Engine:
         self._dropped: dict[str, tuple[int, ZoneIndex]] = {}
         self._problem: tuple[int, str | None] = (-1, None)
         self.last_output: Path | None = None  # dernière vidéo écrite par un export de cette session
+        self.history = History()
+        self._last_record = ("", 0.0)
+        self._estimate: tuple[tuple, dict] | None = None  # (état mesuré, résultat)
 
     # --- Projet -----------------------------------------------------------
 
@@ -86,6 +110,50 @@ class Engine:
     def touch(self) -> None:
         self.version += 1
         pj.save(self.require())
+
+    def begin(self, label: str, coalesce: bool = False) -> int:
+        """Mémorise l'état avant une modification (pour « Annuler »). Renvoie la taille de la
+        pile avant l'appel, à passer à `settle` une fois la modification faite ou échouée."""
+        with self.lock:
+            size = len(self.history.undo)
+            if self.project is None:
+                return size
+            now = time.monotonic()
+            recent = coalesce and self._last_record[0] == label and now - self._last_record[1] < 1.5
+            self._last_record = (label, now)
+            if not (recent and self.history.undo):
+                self.history.record(self.project, label)
+            return size
+
+    def settle(self, size: int, failed: bool = False) -> None:
+        """Après une modification : oublie la mémorisation si rien n'a changé (ou si elle a échoué)."""
+        with self.lock:
+            undo = self.history.undo
+            if len(undo) <= size or self.project is None:
+                return
+            if failed or undo[-1][1] == snapshot(self.project):
+                del undo[size:]
+
+    def step(self, forward: bool) -> str:
+        """Annule (ou rétablit) la dernière modification. Renvoie son nom."""
+        project = self.require()
+        with self.lock:
+            self._busy_check()
+            label = self.history.step_forward(project) if forward else self.history.step_back(project)
+            if label is None:
+                raise ApiError("rien à rétablir." if forward else "rien à annuler.", 409)
+            self._after_zone_change()
+            return label
+
+    def set_sweep(self, body: dict) -> None:
+        """Avancement de la relecture complète : position atteinte et relecture terminée ou non."""
+        project = self.require()
+        with self.lock:
+            if "position" in body:
+                project.sweep["position"] = round(max(0.0, float(body["position"])), 3)
+            if "done" in body:
+                project.sweep["done"] = bool(body["done"])
+            self.save_review()
 
     def save_review(self) -> None:
         """Enregistre l'état de la vérification. Les zones ne changent pas : `version` reste
@@ -112,6 +180,9 @@ class Engine:
             else:
                 raise ApiError("choisissez une vidéo ou un fichier projet .json.")
             refresh_review(self.project)
+            self.history.clear()
+            self._estimate = None
+            library.remember(self.project.path)
             self.version += 1
 
     def add_clip(self, path: Path) -> None:
@@ -164,7 +235,11 @@ class Engine:
             project = self.project
             job = self.job.to_json() if self.job else None
             if project is None:
-                return {"project": None, "job": job, "version": self.version}
+                return {
+                    "project": None, "job": job, "version": self.version,
+                    "profile": library.profile_summary(), "features": {"contour": True},
+                    "models": {"face": available("face"), "plate": available("plate")},
+                }
             clips = []
             tracks = {}
             for clip in project.clips:
@@ -224,13 +299,30 @@ class Engine:
                     "review": review,
                     "marks": [dict(m) for m in project.marks],
                     "conform": project.conform,
+                    "preset": project.preset,
+                    "sweep": dict(project.sweep),
+                    "history": self.history.labels(),
+                    "estimate": self._current_estimate(),
                     "mismatch": formats_differ(used_clips(project, resolve_segments(project))),
                     "tracks": tracks,
                     "problem": problem,
                 },
                 "job": job,
                 "version": self.version,
+                "profile": library.profile_summary(),
+                "features": {"contour": True},
+                "models": {"face": available("face"), "plate": available("plate")},
             }
+
+    def _estimate_key(self) -> tuple:
+        project = self.require()
+        return (frames_to_analyze(project), project.analysis_settings.signature())
+
+    def _current_estimate(self) -> dict | None:
+        """Dernière estimation de durée, tant qu'elle correspond encore à ce qui reste à analyser."""
+        if self._estimate is None or self._estimate[0] != self._estimate_key():
+            return None
+        return self._estimate[1]
 
     def _track_json(self, t: pj.Track, clip: pj.Clip) -> dict:
         v = clip.video
@@ -243,6 +335,8 @@ class Engine:
             "extend_before_s": t.extend_before_s, "extend_after_s": t.extend_after_s,
             "score": round(scores[len(scores) // 2], 2), "count": len(t.obs),
         }
+        if t.source == "tracker":
+            doc["contour"] = bool(t.outline)
         if t.source == "manual":
             doc["keyframes"] = [[pts_to_sec(int(o[0]), v), *[round(x) for x in o[1:5]]] for o in t.obs]
         return doc
@@ -317,15 +411,17 @@ class Engine:
     def patch_track(self, body: dict) -> None:
         with self.lock:
             self._busy_check()
-            _, track = self._find_track(body["clip"], int(body["id"]))
-            if "disabled" in body:
-                track.disabled = bool(body["disabled"])
-            if "forced" in body:
-                track.forced = bool(body["forced"])
-            for key in ("extend_before_s", "extend_after_s"):
-                if key in body:
-                    value = body[key]
-                    setattr(track, key, None if value is None else max(0.0, min(float(value), 600.0)))
+            ids = body["ids"] if "ids" in body else [body["id"]]  # une zone, ou plusieurs d'un coup
+            for track_id in ids:
+                _, track = self._find_track(body["clip"], int(track_id))
+                if "disabled" in body:
+                    track.disabled = bool(body["disabled"])
+                if "forced" in body:
+                    track.forced = bool(body["forced"])
+                for key in ("extend_before_s", "extend_after_s"):
+                    if key in body:
+                        value = body[key]
+                        setattr(track, key, None if value is None else max(0.0, min(float(value), 600.0)))
             self._after_zone_change()
 
     def delete_track(self, clip_id: str, track_id: int) -> None:
@@ -380,6 +476,10 @@ class Engine:
                 if body["conform"] not in ("", "first", "largest"):
                     raise ApiError("choix d'alignement inconnu.")
                 project.conform = body["conform"]
+            if "preset" in body:
+                if body["preset"] not in PRESETS:
+                    raise ApiError("préréglage inconnu.")
+                apply_preset(project, body["preset"])
             for block, target in (("analysis", project.analysis_settings), ("blur", project.blur_settings)):
                 for key, value in body.get(block, {}).items():
                     if not hasattr(target, key):
@@ -468,7 +568,10 @@ class Engine:
                     obs = item.observation(pts) if item else None
                     score = None if obs is None else round(obs[4], 2)
                     # 10e valeur : toutes les pistes réunies dans cette zone.
-                    items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))])
+                    entry = [*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))]
+                    if z.shape == "contour":
+                        entry.append(zone_outline(z))  # 11e valeur : tracé de ce qui est flouté
+                    items.append(entry)
                 if items:
                     frames[k] = items
             out = {"version": self.version, "frames": frames}
@@ -492,8 +595,8 @@ class Engine:
                 out["dropped"] = extra
             return out
 
-    def frame_jpeg(self, clip_id: str, frame_index: int, blur: bool, max_width: int) -> bytes:
-        """Image source exacte, en pleine résolution, avec ou sans le flou du rendu final."""
+    def frame_image(self, clip_id: str, frame_index: int, blur: bool):
+        """Image source exacte (tableau BGR, pleine résolution), avec ou sans le flou du rendu."""
         project = self.require()
         clip = project.clip(clip_id)
         v = clip.video
@@ -512,7 +615,11 @@ class Engine:
                 frame.make_writable()
                 b = project.blur_settings
                 blur_frame(frame, zones, b.cells, b.style, b.feather)
-        image = frame.to_ndarray(format="bgr24")
+        return frame.to_ndarray(format="bgr24")
+
+    def frame_jpeg(self, clip_id: str, frame_index: int, blur: bool, max_width: int) -> bytes:
+        """Image source exacte, en pleine résolution, avec ou sans le flou du rendu final."""
+        image = self.frame_image(clip_id, frame_index, blur)
         if 0 < max_width < image.shape[1]:
             height = round(image.shape[0] * max_width / image.shape[1])
             image = cv2.resize(image, (max_width, height), interpolation=cv2.INTER_AREA)
@@ -521,15 +628,37 @@ class Engine:
             raise ApiError("encodage de l'image impossible.", 500)
         return data.tobytes()
 
+    def snapshot_image(self, body: dict) -> dict:
+        """Enregistre l'image affichée en PNG pleine résolution, dans le dossier du projet."""
+        project = self.require()
+        clip = project.clip(body["clip"])
+        index = int(body["frame"])
+        blur = bool(body.get("blur", True))
+        image = self.frame_image(clip.id, index, blur)
+        seconds = index / float(clip.video.fps_fraction)
+        stamp = f"{int(seconds // 60):02d}m{seconds % 60:05.2f}s".replace(".", "-")
+        name = project.path.name.replace(".motoblur.json", "").replace(".json", "")
+        target = project.path.parent / f"{name}_image_{stamp}{'' if blur else '_nette'}.png"
+        if not cv2.imwrite(str(target), image):
+            raise ApiError("enregistrement de l'image impossible.", 500)
+        return {"path": str(target), "width": int(image.shape[1]), "height": int(image.shape[0])}
+
+    def thumbnail(self, clip_id: str, track_id: int, width: int) -> bytes:
+        project = self.require()
+        _, track = self._find_track(clip_id, track_id)
+        return media.track_thumbnail(project, project.clip(clip_id), track, max(80, min(width, 480)))
+
     # --- Traitements en arrière-plan --------------------------------------
 
     def _busy_check(self) -> None:
         if self.job and self.job.state == "running":
             raise ApiError("un traitement est déjà en cours.", 409)
 
-    def start(self, kind: str, label: str, work) -> None:
+    def start(self, kind: str, label: str, work, undo: str | None = None) -> None:
+        """Lance un traitement en arrière-plan. `undo` : nom sous lequel il pourra être annulé."""
         with self.lock:
             self._busy_check()
+            undo_size = self.begin(undo) if undo else None
             job = Job(kind, label)
             self.job = job
 
@@ -554,6 +683,8 @@ class Engine:
                 job.state, job.message = "error", f"{type(exc).__name__} : {exc}"
             finally:
                 progress.hook = None
+                if undo_size is not None:
+                    self.settle(undo_size, failed=job.state == "error")
                 with self.lock:
                     self.version += 1
 
@@ -577,6 +708,11 @@ class Engine:
 
         def work(job: Job) -> str:
             job.label = "Chargement des modèles"
+            if frames_to_analyze(project):
+                # Nouvelles détections : l'historique ne peut plus être rejoué, et la relecture
+                # complète est à refaire.
+                self.history.clear()
+                project.sweep = {"position": 0.0, "done": False}
             complete = analyze_project(project, device=device)
             note = " ".join(getattr(project, "notes", []))
             if not complete:
@@ -620,7 +756,105 @@ class Engine:
             pj.save(project)
             return dash.describe(name, tracks, clip)
 
-        self.start("dash", f"Suivi : {name}", work)
+        self.start("dash", f"Suivi : {name}", work, undo=f"suivi de « {name} »")
+
+    def start_follow(self, body: dict) -> None:
+        """Flou ajouté à la main qui suit ce qui a été entouré, dans une portion du clip."""
+        project = self.require()
+        clip = project.clip(body["clip"])
+        v = clip.video
+        box = tuple(float(x) for x in body["box"])
+        if box[2] - box[0] < 4 or box[3] - box[1] < 4:
+            raise ApiError("zone trop petite.")
+        seed = sec_to_pts(float(body["time"]), v, "floor")
+        start = sec_to_pts(float(body.get("start", 0.0)), v, "floor")
+        end = sec_to_pts(float(body.get("end", v.duration_s)), v, "ceil")
+        if end <= start:
+            raise ApiError("portion vide.")
+
+        def work(job: Job) -> str:
+            total = round((end - start) * v.tb * v.fps_fraction)
+            p = progress.Progress("Suivi du flou ajouté", total, float(v.fps_fraction))
+            track = dash.follow_region(project, clip, seed, box, start, end, p)
+            refresh_review(project)
+            pj.save(project)
+            seconds = float((track.obs[-1][0] - track.obs[0][0]) * v.tb)
+            job.created = track.id
+            return f"Flou ajouté et suivi pendant {seconds:.1f} s."
+
+        self.start("follow", "Suivi du flou ajouté", work, undo="flou ajouté")
+
+    def start_contour(self, body: dict) -> None:
+        """Contour précis d'un objet suivi (par son nom) ou d'un flou ajouté qui suit (par son
+        identifiant) : le flou épouse l'objet. Avec `clear`, retour à la forme habituelle."""
+        project = self.require()
+        clip = project.clip(body["clip"])
+        if "id" in body:
+            tracks = [self._find_track(clip.id, int(body["id"]))[1]]
+            name = tracks[0].name
+        else:
+            name = dash.object_name(body.get("label"))
+            tracks = dash.dash_tracks(project, clip, "tracker", name)
+        tracks = [t for t in tracks if t.source == "tracker"]
+        if not tracks:
+            raise ApiError("cet objet n'est pas suivi : le contour précis s'applique à un objet suivi.")
+        if body.get("clear"):
+            with self.lock:
+                self._busy_check()
+                contour.clear(tracks)
+                self._after_zone_change()
+            return
+
+        def work(job: Job) -> str:
+            result = contour.refine(project, clip, tracks)
+            pj.save(project)
+            if not result["kept"]:
+                return f"Aucun contour fiable trouvé pour « {name} » : la forme habituelle est gardée."
+            note = ""
+            if result["kept"] < result["total"]:
+                note = (f" Sur {result['total'] - result['kept']} image(s) de référence, le contour"
+                        " n'était pas fiable : la forme habituelle y est gardée.")
+            return f"Contour précis calculé pour « {name} ».{note} Vérifiez le résultat sur la vidéo."
+
+        self.start("contour", f"Contour précis : {name}", work, undo=f"contour précis de « {name} »")
+
+    def start_dataset(self) -> None:
+        project = self.require()
+
+        def work(job: Job) -> str:
+            result = training.export_dataset(project)
+            return (f"{result['images']} images d'entraînement écrites ({result['labels']} plaques, "
+                    f"{result['negatives']} sans plaque) dans {result['path']}")
+
+        self.start("dataset", "Images d'entraînement", work)
+
+    def start_estimate(self, device: str) -> None:
+        project = self.require()
+
+        def work(job: Job) -> str:
+            job.label = "Mesure de la vitesse d'analyse"
+            key = self._estimate_key()
+            result = estimate(project, device=device)
+            self._estimate = (key, result)
+            if not result["frames"]:
+                return "Rien à analyser."
+            minutes = result["seconds"] / 60
+            return f"Analyse estimée à environ {max(1, round(minutes))} min ({result['fps']:.1f} images par seconde)."
+
+        self.start("estimate", "Mesure de la vitesse d'analyse", work)
+
+    def start_profile(self) -> None:
+        project = self.require()
+
+        def work(job: Job) -> str:
+            p = progress.Progress("Recherche des objets du profil", library.PROFILE_SAMPLES * max(1, len(project.clips)), 0, unit="étapes")
+            notes = library.apply_profile(project, p)
+            self.history.clear()  # les réglages d'analyse ont pu changer
+            refresh_review(project)
+            pj.save(project)
+            return " ".join(notes)
+
+        self.start("profile", "Application du profil", work)
 
     def start_render(self, body: dict) -> None:
         project = self.require()
@@ -631,14 +865,26 @@ class Engine:
             output = project.path.parent / output
         if output.suffix.lower() not in (".mp4", ".mov", ".mkv"):
             output = output.with_name(output.name + ".mp4")
-        quality = max(0, min(int(body.get("quality", 80)), 100))
-        codec, encoder = body.get("codec", "source"), body.get("encoder", "auto")
+        preset = body.get("preset", "source")
+        if preset not in EXPORT_PRESETS:
+            raise ApiError("préréglage d'export inconnu.")
+        options = {"quality": 80, "codec": "source", "max_side": 0, **EXPORT_PRESETS[preset]}
+        options.update({k: body[k] for k in ("quality", "codec", "max_side") if k in body})
+        quality = max(0, min(int(options["quality"]), 100))
+        codec, encoder = options["codec"], body.get("encoder", "auto")
+        max_side = max(0, int(options["max_side"]))
         debug = bool(body.get("debug", False))
+        window = None
+        if body.get("window"):
+            start = max(0.0, float(body["window"].get("start", 0.0)))
+            window = (start, start + max(0.5, float(body["window"].get("duration", 10.0))))
+            if "extrait" not in output.stem:
+                output = output.with_name(f"{output.stem}_extrait{output.suffix}")
 
         def work(job: Job) -> str:
-            render_project(project, output, quality, codec, encoder, debug)
+            render_project(project, output, quality, codec, encoder, debug, window=window, max_side=max_side)
             self.last_output = output.resolve()
-            return f"Vidéo écrite : {output}"
+            return f"{'Extrait écrit' if window else 'Vidéo écrite'} : {output}"
 
         self.start("render", "Rendu", work)
 
@@ -757,6 +1003,18 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass  # le lecteur vidéo a changé de position : normal
 
+    def _edit(self, label: str, action, coalesce: bool = False) -> None:
+        """Exécute une modification annulable, puis renvoie l'état complet (et ce que l'action
+        a renvoyé : identifiant créé, par exemple)."""
+        size = self.engine.begin(label, coalesce)
+        try:
+            extra = action()
+        except Exception:
+            self.engine.settle(size, failed=True)
+            raise
+        self.engine.settle(size)
+        self._json({**self.engine.state(), **(extra if isinstance(extra, dict) else {})})
+
     def _handle(self, method: str) -> None:
         engine = self.engine
         url = urllib.parse.urlparse(self.path)
@@ -775,31 +1033,83 @@ class Handler(BaseHTTPRequestHandler):
                 engine.add_clip(Path(self._body()["path"]))
                 self._json(engine.state())
             elif route == "/api/montage" and method == "PUT":
-                engine.set_montage(self._body())
-                self._json(engine.state())
+                self._edit("montage", lambda: engine.set_montage(self._body()))
             elif route == "/api/settings" and method == "PUT":
-                engine.set_settings(self._body())
-                self._json(engine.state())
+                body = self._body()
+                if "analysis" in body or "preset" in body:
+                    # Un réglage d'analyse ne s'annule pas : il refait l'analyse.
+                    engine.set_settings(body)
+                    engine.history.clear()
+                    self._json(engine.state())
+                else:
+                    self._edit("réglages", lambda: engine.set_settings(body), coalesce=True)
             elif route == "/api/tracks" and method == "PATCH":
-                engine.patch_track(self._body())
-                self._json(engine.state())
+                self._edit("correction d'un flou", lambda: engine.patch_track(self._body()))
             elif route == "/api/tracks" and method == "DELETE":
-                engine.delete_track(query["clip"], int(query["id"]))
-                self._json(engine.state())
+                self._edit("flou retiré", lambda: engine.delete_track(query["clip"], int(query["id"])))
             elif route == "/api/manual" and method == "POST":
-                track_id = engine.save_manual(self._body())
-                self._json({**engine.state(), "created": track_id})
+                self._edit("flou ajouté", lambda: {"created": engine.save_manual(self._body())})
             elif route == "/api/review" and method == "PUT":
-                engine.set_review_done(self._body())
-                self._json(engine.state())
+                self._edit("validation", lambda: engine.set_review_done(self._body()))
             elif route == "/api/marks" and method == "POST":
-                mark_id = engine.add_mark(self._body())
-                self._json({**engine.state(), "created": mark_id})
+                self._edit("signalement", lambda: {"created": engine.add_mark(self._body())})
             elif route == "/api/marks" and method == "DELETE":
-                engine.delete_mark(int(query["id"]))
-                self._json(engine.state())
+                self._edit("signalement retiré", lambda: engine.delete_mark(int(query["id"])))
             elif route == "/api/dash" and method == "POST":
-                engine.start_dash(self._body())
+                body = self._body()
+                if body.get("mode") in ("fixed", "clear"):
+                    self._edit(f"objet « {dash.object_name(body.get('label'))} »", lambda: engine.start_dash(body))
+                else:
+                    engine.start_dash(body)  # le suivi s'annule comme un tout, à la fin du traitement
+                    self._json(engine.state())
+            elif route == "/api/follow" and method == "POST":
+                engine.start_follow(self._body())
+                self._json(engine.state())
+            elif route == "/api/contour" and method == "POST":
+                body = self._body()
+                if body.get("clear"):
+                    self._edit("retour à la forme simple", lambda: engine.start_contour(body))
+                else:
+                    engine.start_contour(body)
+                    self._json(engine.state())
+            elif route == "/api/dataset" and method == "POST":
+                engine.start_dataset()
+                self._json(engine.state())
+            elif route == "/api/undo" and method == "POST":
+                label = engine.step(forward=False)  # avant de lire l'état, qui doit en tenir compte
+                self._json({**engine.state(), "undone": label})
+            elif route == "/api/redo" and method == "POST":
+                label = engine.step(forward=True)
+                self._json({**engine.state(), "redone": label})
+            elif route == "/api/sweep" and method == "PUT":
+                engine.set_sweep(self._body())
+                self._json(engine.state())
+            elif route == "/api/estimate" and method == "POST":
+                engine.start_estimate(self._body().get("device", "auto"))
+                self._json(engine.state())
+            elif route == "/api/thumb" and method == "GET":
+                data = engine.thumbnail(query["clip"], int(query["id"]), int(query.get("w", 220)))
+                self._send(200, data, "image/jpeg")
+            elif route == "/api/filmstrip" and method == "GET":
+                project = engine.require()
+                data = media.filmstrip(project, project.clip(query["clip"]), int(query.get("count", 40)), int(query.get("h", 54)))
+                self._send(200, data, "image/jpeg")
+            elif route == "/api/waveform" and method == "GET":
+                project = engine.require()
+                self._json({"peaks": media.waveform(project, project.clip(query["clip"]), int(query.get("points", 1500)))})
+            elif route == "/api/snapshot" and method == "POST":
+                self._json(engine.snapshot_image(self._body()))
+            elif route == "/api/recent" and method == "GET":
+                self._json({"projects": library.recent()})
+            elif route == "/api/storage" and method == "GET":
+                self._json(library.storage(engine.project))
+            elif route == "/api/storage" and method == "DELETE":
+                freed = library.delete_previews(query["path"], engine.project)
+                self._json({**library.storage(engine.project), "freed": freed})
+            elif route == "/api/profile/save" and method == "POST":
+                self._json({"profile": library.save_profile(engine.require())})
+            elif route == "/api/profile/apply" and method == "POST":
+                engine.start_profile()
                 self._json(engine.state())
             elif route == "/api/zones" and method == "GET":
                 self._json(

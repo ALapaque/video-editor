@@ -144,6 +144,25 @@ def fit_frame(frame: av.VideoFrame, width: int, height: int) -> av.VideoFrame:
     return canvas
 
 
+def clip_to_window(segments: list[ResolvedSegment], start: float, end: float) -> list[ResolvedSegment]:
+    """Passages du montage restreints à [start, end) (secondes du montage), recalés à zéro."""
+    out: list[ResolvedSegment] = []
+    offset = Fraction(0)
+    lo, hi = Fraction(start).limit_denominator(100000), Fraction(end).limit_denominator(100000)
+    for s in segments:
+        a, b = max(s.offset, lo), min(s.end, hi)
+        if b <= a:
+            continue
+        in_pts = s.in_pts + round((a - s.offset) / s.tb)
+        out_pts = min(s.out_pts, s.in_pts + round((b - s.offset) / s.tb))
+        if out_pts <= in_pts:
+            continue
+        piece = ResolvedSegment(s.clip_id, in_pts, out_pts, s.tb, offset)
+        out.append(piece)
+        offset = piece.end
+    return out
+
+
 def can_copy_everything(project: pj.Project, segments: list[ResolvedSegment]) -> bool:
     """Vrai si le montage ne contient aucune coupe : un clip entier, sans passage muet."""
     if len(segments) != 1:
@@ -507,13 +526,32 @@ def render_project(
     codec: str = "source",
     encoder: str = "auto",
     debug: bool = False,
+    window: tuple[float, float] | None = None,
+    max_side: int = 0,
 ) -> None:
+    """Produit la vidéo finale.
+
+    `window` : (début, fin) en secondes du montage, pour n'exporter qu'un extrait de contrôle.
+    `max_side` : plus grand côté de la sortie en pixels (0 = taille de la source) ; l'image est
+    floutée à sa résolution d'origine puis réduite.
+    """
     output = Path(output)
     segments = resolve_segments(project)
     check_ready(project, segments, output)
+    if window is not None:
+        segments = clip_to_window(segments, *window)
+        if not segments:
+            raise RenderError("l'extrait demandé est vide.")
     first_clip = project.clip(segments[0].clip_id)
     clips = used_clips(project, segments)
     video, color_clip = target_format(project, clips)
+    if max_side and max(video.width, video.height) > max_side:
+        k = max_side / max(video.width, video.height)
+        video = replace(
+            video, width=max(2, round(video.width * k / 2) * 2), height=max(2, round(video.height * k / 2) * 2),
+            bit_rate=int(video.bit_rate * k * k),
+        )
+        print(f"Sortie réduite à {video.width}x{video.height}.")
     size = (video.width, video.height)
     if formats_differ(clips):
         print(
@@ -530,6 +568,7 @@ def render_project(
     has_audio = any(project.clip(s.clip_id).audio for s in segments)
     copy_audio = (
         has_audio
+        and window is None
         and can_copy_everything(project, segments)
         and (first_clip.audio.codec in COPYABLE_AUDIO or output.suffix.lower() == ".mkv")
     )

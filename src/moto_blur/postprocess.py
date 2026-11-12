@@ -22,6 +22,7 @@ import bisect
 from dataclasses import dataclass, replace
 from fractions import Fraction
 
+import cv2
 import numpy as np
 
 from .project import BlurSettings, Track, VideoInfo
@@ -74,11 +75,15 @@ class Zone:
 
     kind: str
     box: tuple[int, int, int, int]
-    shape: str = "rect"  # "rect", "rounded" ou "ellipse"
+    shape: str = "rect"  # "rect", "rounded", "ellipse" ou "contour"
     radius: int = 0  # rayon des coins pour "rounded"
     track_id: int = 0
     # Toutes les pistes réunies dans cette zone quand des flous ont été fusionnés.
     tracks: tuple[int, ...] = ()
+    # Forme "contour" : polygones (pixels de l'image) dont la réunion, grossie de `grow` pixels,
+    # est floutée. `box` en est le rectangle englobant.
+    polygons: tuple[tuple[tuple[float, float], ...], ...] = ()
+    grow: float = 0.0
 
 
 # Catégorie gardée quand des zones de catégories différentes fusionnent : la plus « voulue ».
@@ -90,6 +95,11 @@ def _inside(zone: Zone, x: float, y: float) -> bool:
     x1, y1, x2, y2 = zone.box
     if not (x1 <= x <= x2 and y1 <= y <= y2):
         return False
+    if zone.shape == "contour":  # sans compter le grossissement : jamais optimiste
+        return any(
+            cv2.pointPolygonTest(np.asarray(poly, dtype=np.float32), (float(x), float(y)), False) >= 0
+            for poly in zone.polygons
+        )
     if zone.shape == "ellipse":
         a, b = (x2 - x1) / 2, (y2 - y1) / 2
         if a <= 0 or b <= 0:
@@ -218,6 +228,39 @@ def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
     return out
 
 
+# Écart maximal entre deux images de référence d'un contour précis pour qu'il soit utilisé entre elles.
+OUTLINE_REACH_S = 0.6
+
+
+def smooth_boxes(boxes: list[Box], half: int = 2) -> list[Box]:
+    """Stabilise une suite de boîtes sans jamais en découvrir une.
+
+    Le centre est moyenné sur les images voisines (les vibrations se compensent) ; la taille
+    prend le maximum du voisinage (elle ne « respire » plus), agrandie si nécessaire pour que
+    la boîte lissée contienne toujours la boîte d'origine de la même image.
+    """
+    arr = np.asarray(boxes, dtype=np.float64)
+    n = len(arr)
+    cx, cy = (arr[:, 0] + arr[:, 2]) / 2, (arr[:, 1] + arr[:, 3]) / 2
+    hw, hh = (arr[:, 2] - arr[:, 0]) / 2, (arr[:, 3] - arr[:, 1]) / 2
+    windows = [(max(0, i - half), min(n, i + half + 1)) for i in range(n)]
+
+    def steady(size: np.ndarray) -> np.ndarray:
+        # Plus grande taille du voisinage, puis moyenne de ces maximums : la taille varie en
+        # douceur, et reste au moins égale à celle de l'image (chaque maximum la contient).
+        top = np.array([size[lo:hi].max() for lo, hi in windows])
+        return np.array([top[lo:hi].mean() for lo, hi in windows])
+
+    sw, sh = steady(hw), steady(hh)
+    out: list[Box] = []
+    for i, (lo, hi) in enumerate(windows):
+        mx, my = cx[lo:hi].mean(), cy[lo:hi].mean()
+        w = max(sw[i], abs(cx[i] - mx) + hw[i])
+        h = max(sh[i], abs(cy[i] - my) + hh[i])
+        out.append((mx - w, my - h, mx + w, my + h))
+    return out
+
+
 class TrackZones:
     """Calcule la zone de flou d'une piste à n'importe quel instant."""
 
@@ -228,7 +271,8 @@ class TrackZones:
             settings = replace(
                 settings, margin=0.0, min_margin_px=0, extend_s=0.0, temporal_pad_frames=0
             )
-        elif track.kind == "dash":
+        elif track.source == "tracker":
+            # Objet suivi à partir d'un rectangle tracé : boîte fiable, petite marge.
             settings = replace(settings, margin=settings.dash_margin)
         self.settings = settings
         self.width, self.height = video.width, video.height
@@ -236,6 +280,15 @@ class TrackZones:
         self.pts = [int(o[0]) for o in obs]
         self.boxes: list[Box] = [(o[1], o[2], o[3], o[4]) for o in obs]
         self.scores = [float(o[5]) for o in obs]
+        self.raw = self.boxes  # détections telles quelles (affichage, mode debug)
+        # Contour précis : images de référence triées, (pts, points relatifs à la boîte observée).
+        self.outline = sorted(
+            (int(row[0]), np.asarray(row[1:], dtype=np.float64).reshape(-1, 2))
+            for row in (track.outline or []) if len(row) >= 7
+        ) if track.outline else []
+        self.outline_pts = [k[0] for k in self.outline]
+        if settings.smooth and track.source != "manual" and len(obs) >= 3:
+            self.boxes = smooth_boxes(self.boxes)
         self.frame_pts = float(video.frame_pts)
         self.pts_per_s = float(1 / video.tb)
         before = settings.extend_s if track.extend_before_s is None else track.extend_before_s
@@ -334,6 +387,9 @@ class TrackZones:
         padded = self._padded(pts)
         if padded is None or self.zone(pts) is None:
             return None
+        exact = self.contour(pts)
+        if exact is not None:
+            return exact
         (x1, y1, x2, y2), mx, my = padded
         shape = "rect" if self.track.source == "manual" else self.settings.shape_for(self.track.kind)
         radius = 0
@@ -348,11 +404,63 @@ class TrackZones:
         box = (int(np.floor(x1)), int(np.floor(y1)), int(np.ceil(x2)), int(np.ceil(y2)))
         return Zone(self.track.kind, box, shape, radius, self.track.id)
 
+    def _observed_box(self, pts: float) -> Box:
+        """Boîte observée (non stabilisée) interpolée à `pts`, pour first <= pts <= last."""
+        i = min(max(bisect.bisect_right(self.pts, pts) - 1, 0), len(self.pts) - 1)
+        if i >= len(self.pts) - 1 or self.pts[i] == pts:
+            return self.raw[i]
+        w = (pts - self.pts[i]) / (self.pts[i + 1] - self.pts[i])
+        a, b = self.raw[i], self.raw[i + 1]
+        return tuple(a[k] + (b[k] - a[k]) * w for k in range(4))  # type: ignore[return-value]
+
+    def contour(self, pts: float) -> Zone | None:
+        """Zone qui épouse l'objet, si un contour précis est connu autour de cet instant.
+
+        Entre deux images de référence, on floute la réunion des deux contours voisins, reportés
+        sur la position courante de l'objet : la forme ne peut donc pas se resserrer plus vite
+        que l'objet ne change. Sans contour fiable des deux côtés (ou hors de la partie suivie),
+        None : la forme habituelle, plus large, s'applique.
+        """
+        if not self.outline or not (self.pts[0] <= pts <= self.pts[-1]):
+            return None
+        reach = OUTLINE_REACH_S * self.pts_per_s
+        i = bisect.bisect_right(self.outline_pts, pts) - 1
+        if i >= 0 and self.outline_pts[i] == pts:
+            keys = [self.outline[i]]
+        elif 0 <= i < len(self.outline) - 1 and self.outline_pts[i + 1] - self.outline_pts[i] <= reach:
+            keys = [self.outline[i], self.outline[i + 1]]
+        else:
+            return None
+        x1, y1, x2, y2 = self._observed_box(pts)
+        w, h = x2 - x1, y2 - y1
+        if w < 2 or h < 2:
+            return None
+        polygons = tuple(
+            tuple((x1 + float(u) * w, y1 + float(v) * h) for u, v in points) for _, points in keys
+        )
+        # Grossissement : petite marge, plus le déplacement de l'objet d'une image à l'autre.
+        s = self.settings
+        grow = max(min(w, h) * s.margin, float(s.min_margin_px))
+        for off in (-self.frame_pts, self.frame_pts):
+            near = min(max(pts + off, self.pts[0]), self.pts[-1])
+            n = self._observed_box(near)
+            grow += max(abs((n[0] + n[2]) - (x1 + x2)), abs((n[1] + n[3]) - (y1 + y2))) / 4
+        xs = [p[0] for poly in polygons for p in poly]
+        ys = [p[1] for poly in polygons for p in poly]
+        pad = grow + 2
+        box = (
+            int(np.floor(min(xs) - pad)), int(np.floor(min(ys) - pad)),
+            int(np.ceil(max(xs) + pad)), int(np.ceil(max(ys) + pad)),
+        )
+        if box[2] <= 0 or box[3] <= 0 or box[0] >= self.width or box[1] >= self.height:
+            return None
+        return Zone(self.track.kind, box, "contour", 0, self.track.id, polygons=polygons, grow=grow)
+
     def observation(self, pts: int) -> list[float] | None:
         """Observation brute exactement à cet instant (pour le mode debug)."""
         i = bisect.bisect_left(self.pts, pts)
         if i < len(self.pts) and self.pts[i] == pts:
-            return [*self.boxes[i], self.scores[i]]
+            return [*self.raw[i], self.scores[i]]
         return None
 
 
@@ -431,6 +539,12 @@ def track_reasons(
 
 
 MAX_PASSAGE_S = 6.0
+# Un passage qui réunit de 4 à 8 objets douteux est présenté objet par objet : la question
+# « faut-il flouter ceci ? » est plus simple que « tout est-il bien flouté ? ». Au-delà (foule),
+# un par un serait interminable : le passage reste entier, et la planche de vignettes de
+# l'interface permet de trier tous ses objets d'un coup.
+MAX_OBJECTS_PER_PASSAGE = 3
+MAX_SPLIT_OBJECTS = 8
 
 
 def build_review(
@@ -463,6 +577,7 @@ def build_review(
         if last and start <= last["end_pts"] + merge_pts and start - last["start_pts"] < max_pts:
             last["end_pts"] = max(last["end_pts"], end)
             last["tracks"].append(track_id)
+            last["_parts"].append((start, end, kind, reasons, track_id))
             if kind not in last["kinds"]:
                 last["kinds"].append(kind)
             for r in reasons:
@@ -478,6 +593,18 @@ def build_review(
                     "kinds": [kind],
                     "reasons": list(reasons),
                     "tracks": [track_id],
+                    "_parts": [(start, end, kind, reasons, track_id)],
                 }
             )
-    return passages
+    # Passage chargé : une question par objet plutôt qu'une seule pour des dizaines de zones,
+    # à laquelle on ne peut pas répondre d'un coup d'œil.
+    out: list[dict] = []
+    for p in passages:
+        parts = p.pop("_parts")
+        if len(parts) <= MAX_OBJECTS_PER_PASSAGE or len(parts) > MAX_SPLIT_OBJECTS:
+            out.append(p)
+            continue
+        for start, end, kind, reasons, track_id in parts:
+            out.append({"clip": clip_id, "start_pts": start, "end_pts": end, "kinds": [kind],
+                        "reasons": list(reasons), "tracks": [track_id]})
+    return sorted(out, key=lambda r: (r["start_pts"], r["end_pts"]))
