@@ -75,7 +75,7 @@ def export_dataset(
     if project.path is None:
         raise ValueError("le projet doit être enregistré.")
     name = project.path.name.replace(".motoblur.json", "").replace(".json", "")
-    out = Path(out_dir) if out_dir else project.path.parent / f"{name}_entrainement"
+    out = (Path(out_dir) if out_dir else project.path.parent / f"{name}_entrainement").resolve()
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)
     spec = get_spec(project.analysis_settings.plate_model, "plate")
