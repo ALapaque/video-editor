@@ -513,7 +513,7 @@ async function keepPart(): Promise<void> {
 
 // --- 4. Type de vidéo, puis analyse ----------------------------------------------------------
 const presetIds: Preset[] = ["normal", "difficile", "rapide"];
-const presetIcons: Record<Preset, IconName> = { normal: "film", difficile: "eye", rapide: "gauge" };
+const presetIcons: Record<Preset, IconName> = { normal: "film", difficile: "eye", rapide: "gauge", perso: "sliders" };
 const typeChoice = ref<Preset>("normal");
 function initType(): void {
   typeChoice.value = p.value?.preset ?? "normal";
@@ -521,6 +521,7 @@ function initType(): void {
 const typeChanged = computed(() => !!p.value && typeChoice.value !== p.value.preset);
 const typeNote = computed(() => {
   const notes: string[] = [];
+  if (typeChoice.value === "perso") notes.push("Vos réglages ont été modifiés en mode avancé\u00a0: ils sont gardés tant que vous ne choisissez pas un type ici.");
   if (presetInfo[typeChoice.value].warning) notes.push(nb(presetInfo[typeChoice.value].warning));
   if (typeChanged.value && analysedOnce.value) notes.push("Vous avez changé ce choix : l'analyse sera refaite.");
   return notes.join(" ");

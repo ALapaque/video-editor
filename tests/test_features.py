@@ -604,3 +604,16 @@ def test_unread_request_body_does_not_break_the_next_request(api):
     assert first.status == 200 and second.status == 200
     assert "project" in json.loads(second.read())
     conn.close()
+
+
+def test_hand_made_detection_settings_show_as_custom(api):
+    state = api("PUT", "/api/settings", {"analysis": {"conf_new": 0.15}})
+    assert state["project"]["preset"] == "perso"
+    state = api("PUT", "/api/settings", {"analysis": {"conf_new": 0.20}})
+    assert state["project"]["preset"] == "normal"  # retour aux valeurs du préréglage
+    api("PUT", "/api/settings", {"preset": "rapide"})
+    state = api("PUT", "/api/settings", {"analysis": {"kinds": ["face", "plate"]}})
+    assert state["project"]["preset"] == "rapide"  # les catégories ne changent pas le préréglage
+    state = api("PUT", "/api/settings", {"blur": {"margin": 0.4}})
+    assert state["project"]["preset"] == "rapide"
+    assert api("GET", "/api/filmstrip?clip=c1&count=4&h=20", raw=True)[:2] == b"\xff\xd8"

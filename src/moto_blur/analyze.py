@@ -309,6 +309,21 @@ def apply_preset(project: pj.Project, name: str) -> None:
     project.preset = name
 
 
+def matching_preset(project: pj.Project) -> str:
+    """Préréglage dont les réglages de détection sont ceux du projet, sinon « perso »."""
+    wanted = project.analysis_settings.signature()
+    for name in PRESETS:
+        # Projet minimal (sans les détections, qui peuvent être lourdes) pour essayer le préréglage.
+        trial = pj.Project(
+            clips=project.clips,
+            analysis_settings=pj.AnalysisSettings(kinds=list(project.analysis_settings.kinds)),
+        )
+        apply_preset(trial, name)
+        if trial.analysis_settings.signature() == wanted:
+            return name
+    return "perso"
+
+
 def frames_to_analyze(project: pj.Project) -> int:
     total = 0
     for clip in project.clips:

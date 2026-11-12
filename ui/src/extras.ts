@@ -49,7 +49,15 @@ export const presetInfo: Record<Preset, { label: string; text: string; warning: 
     text: "Pour une vidéo simple ou un premier essai : analyse environ deux fois plus courte.",
     warning: "Moins sûr : un visage ou une plaque petits ou furtifs peuvent être manqués. Relisez la vidéo avant de la publier.",
   },
+  perso: {
+    label: "Personnalisé",
+    text: "Réglages de détection modifiés à la main.",
+    warning: "",
+  },
 };
+
+/** Préréglages que l'on peut choisir (« Personnalisé » ne fait que constater des réglages modifiés). */
+export const choosablePresets: Preset[] = ["normal", "difficile", "rapide"];
 
 /** Change le préréglage d'analyse. Ce qui était déjà analysé devra l'être à nouveau. */
 export async function setPreset(preset: Preset): Promise<void> {

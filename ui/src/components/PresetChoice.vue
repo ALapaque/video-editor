@@ -4,13 +4,13 @@
 // `compact` : sur une ligne, sous la consigne, là où on lance l'analyse.
 import { computed, ref, watch } from "vue";
 import type { Preset } from "../api";
-import { presetInfo, setPreset } from "../extras";
+import { choosablePresets, presetInfo, setPreset } from "../extras";
 import { busy, notify, project, segments } from "../store";
 import Icon from "./Icon.vue";
 
 defineProps<{ compact?: boolean }>();
 
-const presets = Object.keys(presetInfo) as Preset[];
+const presets = choosablePresets;
 const current = computed<Preset>(() => project.value?.preset ?? "normal");
 const choice = ref<Preset>(current.value);
 const confirming = ref(false);
@@ -57,13 +57,14 @@ function keep(): void {
     <label class="preset-pick">
       <span>Préréglage d'analyse</span>
       <select v-model="choice" :disabled="busy" aria-label="Préréglage d'analyse" title="Changer de préréglage oblige à refaire l'analyse" @change="pick">
+        <option v-if="current === 'perso'" value="perso" disabled>{{ presetInfo.perso.label }}</option>
         <option v-for="p in presets" :key="p" :value="p">{{ presetInfo[p].label }}</option>
       </select>
     </label>
     <p class="preset-text">{{ presetInfo[choice].text }}</p>
     <p v-if="presetInfo[choice].warning" class="preset-warning"><Icon name="alert" /><span>{{ presetInfo[choice].warning }}</span></p>
     <div v-if="confirming" class="preset-confirm" role="alert">
-      <span class="grow">Changer de préréglage oblige à refaire toute l'analyse : celle qui est déjà faite ne servira plus.</span>
+      <span class="grow">Changer de préréglage oblige à refaire toute l'analyse : celle qui est déjà faite ne servira plus. Les scores minimaux de flou reviennent aussi à ceux du préréglage.</span>
       <button class="small" @click="keep">Garder « {{ presetInfo[current].label }} »</button>
       <button class="small attention" :disabled="busy" @click="apply">Changer de préréglage</button>
     </div>
