@@ -33,6 +33,13 @@ const paths = {
   face: '<circle cx="8" cy="8" r="5.75"/><path d="M6 6.9v.2M10 6.9v.2M5.75 9.75c.6.8 1.4 1.2 2.25 1.2s1.65-.4 2.25-1.2"/>',
   plate: '<rect x="1.75" y="4.75" width="12.5" height="6.5" rx="1.25"/><path d="M4.5 8h1M7.5 8h1M10.5 8h1"/>',
   lock: '<rect x="3.25" y="7" width="9.5" height="6.5" rx="1.25"/><path d="M5.25 7V5.25a2.75 2.75 0 0 1 5.5 0V7"/>',
+  steps: '<circle cx="3.5" cy="8" r="1.75"/><circle cx="12.5" cy="8" r="1.75"/><path d="M5.25 8h1.5M9.25 8h1.5"/><circle cx="8" cy="8" r=".6" fill="currentColor"/>',
+  sliders: '<path d="M2.5 4.5h4M9.5 4.5h4M2.5 11.5h7M12.5 11.5h1"/><circle cx="8" cy="4.5" r="1.5"/><circle cx="11" cy="11.5" r="1.5"/>',
+  eye: '<path d="M1.5 8S4 3.75 8 3.75 14.5 8 14.5 8 12 12.25 8 12.25 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.9"/>',
+  clock: '<circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/>',
+  refresh: '<path d="M13 8a5 5 0 1 1-1.6-3.65M13 2.75v2.5h-2.5"/>',
+  folderOpen: '<path d="M1.75 12V4.25a1 1 0 0 1 1-1h3l1.5 1.75h5a1 1 0 0 1 1 1v1"/><path d="M1.9 12.5 3.6 8a1 1 0 0 1 .95-.7h9.2a.6.6 0 0 1 .57.8l-1.4 4.2a1 1 0 0 1-.95.7H2.75a.9.9 0 0 1-.85-.5z"/>',
+  pen: '<path d="M2.75 13.25 3.4 10.4l7.35-7.35a1.2 1.2 0 0 1 1.7 0l.5.5a1.2 1.2 0 0 1 0 1.7L5.6 12.6z"/><path d="m9.6 4.2 2.2 2.2"/>',
   zoom: '<circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25 13.5 13.5"/>',
 } as const;
 export type IconName = keyof typeof paths;

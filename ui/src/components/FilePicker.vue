@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // Sélecteur de fichiers servi par le moteur : un navigateur ne donne pas le chemin réel d'un
 // fichier, or le moteur en a besoin pour lire la vidéo sans la copier.
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { call, type Browse } from "../api";
 import Icon from "./Icon.vue";
 
-const props = defineProps<{ title: string; start?: string }>();
+// `simple` : présentation du mode simple, vidéos seulement, sans saisie de chemin.
+const props = defineProps<{ title: string; start?: string; simple?: boolean }>();
 const emit = defineEmits<{ pick: [path: string]; close: [] }>();
 const listing = ref<Browse | null>(null);
 const error = ref("");
@@ -20,6 +21,8 @@ async function go(dir?: string): Promise<void> {
     error.value = (e as Error).message;
   }
 }
+/** Mode simple : seulement les vidéos (un fichier projet s'ouvre en choisissant sa vidéo). */
+const shownFiles = computed(() => (listing.value?.files ?? []).filter((f) => !props.simple || !f.name.endsWith(".json")));
 function join(name: string): string {
   const l = listing.value!;
   return l.dir.endsWith(l.sep) ? l.dir + name : l.dir + l.sep + name;
@@ -46,7 +49,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   <div class="modal" @pointerdown.self="emit('close')">
     <div class="dialog picker" role="dialog" aria-modal="true" aria-labelledby="picker-title">
       <h3 id="picker-title"><Icon name="folder" :size="18" />{{ title }}</h3>
-      <form class="row" @submit.prevent="submitTyped">
+      <p v-if="simple && listing" class="picker-where"><span class="dim">Dossier :</span> <span class="mono">{{ listing.dir }}</span></p>
+      <form v-else-if="!simple" class="row" @submit.prevent="submitTyped">
         <input v-model="typed" type="text" spellcheck="false" placeholder="Chemin d'un dossier ou d'une vidéo" aria-label="Chemin d'un dossier ou d'une vidéo" />
         <button type="submit">Aller</button>
       </form>
@@ -58,10 +62,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </div>
       <ul v-if="listing" :key="listing.dir" class="files">
         <li v-for="f in listing.folders" :key="'d' + f" class="folder" @click="go(join(f))"><Icon name="folder" /><span class="fname">{{ f }}</span><Icon class="go" name="chevronRight" :size="14" /></li>
-        <li v-for="f in listing.files" :key="'f' + f.name" class="file" @click="emit('pick', join(f.name))">
+        <li v-for="f in shownFiles" :key="'f' + f.name" class="file" @click="emit('pick', join(f.name))">
           <Icon name="film" /><span class="fname">{{ f.name }}</span> <span class="dim mono">{{ size(f.size) }}</span>
         </li>
-        <li v-if="!listing.folders.length && !listing.files.length" class="dim none">Aucune vidéo ni dossier ici.</li>
+        <li v-if="!listing.folders.length && !shownFiles.length" class="dim none">Aucune vidéo ni dossier ici.</li>
       </ul>
       <div v-else-if="!error" class="files loading"><span class="spinner"></span>Lecture du dossier…</div>
       <div class="row end"><button @click="emit('close')">Annuler</button></div>

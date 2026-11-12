@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import subprocess
+import sys
 import threading
 import traceback
 import urllib.parse
@@ -72,6 +74,7 @@ class Engine:
         self._indexes: dict[str, tuple[int, ZoneIndex]] = {}
         self._dropped: dict[str, tuple[int, ZoneIndex]] = {}
         self._problem: tuple[int, str | None] = (-1, None)
+        self.last_output: Path | None = None  # dernière vidéo écrite par un export de cette session
 
     # --- Projet -----------------------------------------------------------
 
@@ -382,6 +385,9 @@ class Engine:
                     if not hasattr(target, key):
                         raise ApiError(f"réglage inconnu : {key}")
                     current = getattr(target, key)
+                    if key == "kinds":
+                        self._set_kinds(value)
+                        continue
                     if isinstance(current, bool):
                         value = bool(value)
                     elif isinstance(current, int):
@@ -391,6 +397,51 @@ class Engine:
                     setattr(target, key, value)
             refresh_review(project)  # le score minimal change les passages à vérifier
             self.touch()
+
+    def _set_kinds(self, value) -> None:
+        """Catégories à détecter (visages, plaques) : liste validée, éventuellement vide.
+
+        Quand le choix change, les détections des catégories retirées ne sont plus floutées et
+        l'analyse est à refaire pour les catégories demandées. Les objets désignés à la main et
+        les zones manuelles ne sont pas touchés."""
+        project = self.require()
+        if not isinstance(value, list) or any(k not in pj.KINDS for k in value):
+            raise ApiError("catégories à détecter inconnues (attendu : face, plate).")
+        kinds = [k for k in pj.KINDS if k in value]  # ordre fixe, sans doublon
+        if kinds == project.analysis_settings.kinds:
+            return
+        project.analysis_settings.kinds = kinds
+        for state in project.analysis.values():
+            state.tracks = [t for t in state.tracks if t.source != "auto" or t.kind in kinds]
+            state.signature, state.analyzed = "", []
+
+    def reveal(self, body: dict) -> dict:
+        """Montre un fichier dans le gestionnaire de fichiers du système.
+
+        Seuls la dernière vidéo exportée et les fichiers du dossier du projet sont acceptés."""
+        project = self.require()
+        raw = str(body.get("path", "")).strip()
+        if not raw:
+            raise ApiError("indiquez un fichier.")
+        path = Path(raw).expanduser().resolve()
+        folder = project.path.parent.resolve()
+        if path != self.last_output and folder not in path.parents:
+            raise ApiError("ce fichier ne fait pas partie du projet.", 403)
+        if not path.is_file():
+            raise ApiError(f"fichier introuvable : {path}", 404)
+        if sys.platform == "win32":
+            command = ["explorer", f"/select,{path}"]
+        elif sys.platform == "darwin":
+            command = ["open", "-R", str(path)]
+        else:
+            if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                raise ApiError(f"impossible d'ouvrir le dossier sur cette machine (pas de bureau graphique) : {path.parent}", 500)
+            command = ["xdg-open", str(path.parent)]
+        try:
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603
+        except OSError as exc:
+            raise ApiError(f"impossible d'ouvrir le dossier ({exc}) : {path.parent}", 500) from exc
+        return {"ok": True, "folder": str(path.parent)}
 
     def _after_zone_change(self) -> None:
         refresh_review(self.require())
@@ -584,6 +635,7 @@ class Engine:
 
         def work(job: Job) -> str:
             render_project(project, output, quality, codec, encoder, debug)
+            self.last_output = output.resolve()
             return f"Vidéo écrite : {output}"
 
         self.start("render", "Rendu", work)
@@ -767,6 +819,8 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/render" and method == "POST":
                 engine.start_render(self._body())
                 self._json(engine.state())
+            elif route == "/api/reveal" and method == "POST":
+                self._json(engine.reveal(self._body()))
             elif route == "/api/cancel" and method == "POST":
                 if engine.job and engine.job.state == "running":
                     engine.job.cancel = True

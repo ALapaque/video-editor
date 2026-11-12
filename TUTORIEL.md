@@ -22,7 +22,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Fermez puis rouvrez le Terminal, et continuez :
 
 ```sh
-git clone -b claude/moto-blur-video-blur-5h3zws https://github.com/ALapaque/video-editor.git
+git clone -b main https://github.com/ALapaque/video-editor.git
 cd video-editor
 uv sync
 ```
@@ -42,7 +42,7 @@ winget install --id Git.Git -e
 Fermez puis rouvrez PowerShell, et continuez :
 
 ```powershell
-git clone -b claude/moto-blur-video-blur-5h3zws https://github.com/ALapaque/video-editor.git
+git clone -b main https://github.com/ALapaque/video-editor.git
 cd video-editor
 uv sync
 ```
@@ -84,7 +84,62 @@ Vous pouvez aussi ouvrir directement une vidéo ou un projet :
 uv run moto-blur ui samples/ma-video.mp4
 ```
 
-## 3. Premier essai, pas à pas
+Au premier lancement, le logiciel demande comment vous voulez travailler :
+
+- **Mode simple** (recommandé pour commencer) : un assistant vous guide pas à pas, une question
+  par écran, un seul gros bouton à la fois. Pas de timeline, pas de réglages.
+- **Mode avancé** : tous les outils (timeline, coupes au milieu, plusieurs vidéos, réglages).
+
+Le choix est mémorisé. Vous pouvez changer à tout moment avec « Passer en mode avancé » ou
+« Passer en mode simple », en haut à droite : le projet ouvert reste ouvert et rien n'est perdu.
+
+## 3. Le mode simple, pas à pas (recommandé)
+
+Six étapes s'affichent en haut de la fenêtre. Sur chaque écran : une question, un bouton orange
+(la touche Entrée fait la même chose) et « Retour » en haut à gauche (ou la touche Échap).
+
+**Pour un premier essai, prenez une vidéo courte**, ou ne gardez qu'une minute à l'étape 3 :
+l'analyse ne porte que sur la partie gardée.
+
+1. **Quelle vidéo voulez-vous flouter ?** Cliquez « Choisir une vidéo… » et cliquez votre
+   vidéo. Le logiciel prépare un aperçu (une seule fois par vidéo). Votre vidéo d'origine n'est
+   jamais modifiée. Si vous avez déjà travaillé sur cette vidéo, vous reprenez où vous en étiez.
+2. **Que faut-il flouter ?** Cochez « Les visages », « Les plaques d'immatriculation » et/ou
+   « Un objet précis » (compteur, téléphone, GPS…), puis « Continuer ».
+   Si vous avez coché « Un objet précis » : avec le curseur sous la vidéo, choisissez un moment
+   où l'objet se voit bien, puis **entourez-le avec la souris** (cliquez, glissez, relâchez).
+   Donnez-lui un nom et répondez à « L'objet bouge-t-il dans l'image ? » : « Oui » (le logiciel
+   le suit dans toute la vidéo) ou « Non, il reste au même endroit » (caméra fixée à la moto).
+   Le résultat est montré quelques secondes : « C'est bon », « Recommencer » ou « Ajouter un
+   autre objet ».
+3. **Voulez-vous couper le début ou la fin ?** Faites glisser les deux poignées orange sous la
+   vidéo ; ce qui est grisé sera retiré. « Lire l'extrait » montre ce qui reste. Puis « Garder
+   cette partie », ou « Ne rien couper ».
+4. **Analyse.** Cliquez « Lancer l'analyse ». Le logiciel cherche les visages et les plaques
+   image par image. La durée dépend de l'ordinateur (de quelques minutes à plus d'une heure pour
+   une longue vidéo) ; le temps restant s'affiche après quelques secondes. Au tout premier
+   lancement, les modèles de détection sont téléchargés (environ 65 Mo). Vous pouvez laisser
+   l'ordinateur travailler ; à la fin, l'assistant passe seul à la suite.
+5. **Vérification.** Le logiciel vous montre un par un les endroits où il a hésité, en boucle,
+   flou affiché, avec une seule question : « Tout ce qui doit être flouté l'est-il ? ».
+   - « Oui, c'est bon » : on passe au suivant.
+   - « Il manque un flou » : entourez sur la vidéo ce qui doit être caché.
+   - « Un flou est en trop » : cliquez-le sur la vidéo ; il est retiré.
+   - « Plus tard » : on y reviendra.
+
+   Ensuite vient la question **« Voulez-vous tout regarder une dernière fois ? »**. Répondez oui
+   si la vidéo doit être publiée : c'est le seul moyen de repérer ce que le logiciel n'a jamais
+   vu. Pendant la lecture, appuyez sur « Signaler un problème ici » (ou la touche S) dès que
+   quelque chose reste lisible ; vous corrigerez chaque endroit signalé juste après.
+6. **Enregistrer la vidéo.** Un résumé rappelle la durée, ce qui est flouté et ce qui reste à
+   revoir. Cliquez « Créer la vidéo floutée ». À la fin, « Ouvrir le dossier » montre le fichier,
+   enregistré à côté de votre vidéo d'origine.
+
+Le mode simple ne coupe que le début et la fin d'une seule vidéo. Pour couper au milieu,
+assembler plusieurs vidéos, couper le son d'un passage ou changer les réglages, passez en mode
+avancé : la suite de ce guide le décrit.
+
+## 4. Le mode avancé : premier essai, pas à pas
 
 En haut de la fenêtre, quatre étapes : **1 Montage, 2 Analyse, 3 Vérification, 4 Export**. Juste
 au-dessus de la vidéo, une ligne dit quoi faire maintenant et propose le bouton de l'action
@@ -117,7 +172,7 @@ tester vite.
 6. **Exporter.** Cliquez « Passer à l'export » puis « Exporter… », gardez les réglages, validez.
    La vidéo est écrite dans le dossier du projet.
 
-## 4. L'interface en détail
+## 5. L'interface en détail
 
 ### Lecture et déplacement
 
@@ -272,7 +327,7 @@ source par défaut) et l'encodeur. Cochez « Vidéo de contrôle » pour obtenir
 cadres et les scores sont dessinés à la place du flou : pratique pour repérer ce qui a été
 manqué.
 
-## 5. Si l'analyse est trop lente
+## 6. Si l'analyse est trop lente
 
 Dans l'ordre, du moins risqué au plus risqué (onglet « Réglages », partie « Détection ») :
 
@@ -285,7 +340,7 @@ Dans l'ordre, du moins risqué au plus risqué (onglet « Réglages », partie �
 analyse ou un export, « Annuler » demande une confirmation. À la fin d'un traitement, la fenêtre
 de progression affiche le résultat (pour un export : le chemin du fichier écrit).
 
-## 6. En ligne de commande
+## 7. En ligne de commande
 
 Tout ce que fait l'interface existe aussi en commandes, pour traiter une vidéo sans y toucher :
 
@@ -300,7 +355,7 @@ uv run moto-blur dash samples/a.motoblur.json --at 0:05 --box 1500,1700,600,300
 
 Le détail des options est dans le [README](README.md).
 
-## 7. Problèmes fréquents
+## 8. Problèmes fréquents
 
 | Symptôme | Cause et solution |
 |---|---|
@@ -319,7 +374,7 @@ sont dans `~/.moto-blur/models`.
 
 Pour mettre à jour le logiciel : `git pull` puis `uv sync` dans le dossier `video-editor`.
 
-## 8. L'application de bureau
+## 9. L'application de bureau
 
 La même interface existe en application autonome : une fenêtre propre, sans terminal ni
 navigateur, et sans rien installer d'autre (ni uv, ni Python).
@@ -355,7 +410,7 @@ certificat Windows).
 - **Windows** : SmartScreen affiche un avertissement ; cliquez « Informations complémentaires »,
   puis « Exécuter quand même ».
 
-## 9. Ce qui m'aiderait après vos essais
+## 10. Ce qui m'aiderait après vos essais
 
 Sur chacune des deux machines, avec un extrait court :
 

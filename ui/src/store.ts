@@ -36,7 +36,34 @@ export const state = reactive({
   showDropped: false, // détections écartées par le score minimal : liste ouverte et contours gris sur la vidéo
   tab: "review" as "review" | "zones" | "settings", // onglet du panneau latéral
   step: 0, // étape du guide choisie à la main (1 à 4) ; 0 = étape déduite de l'état du projet
+  mode: "" as Mode, // interface choisie ; "" = pas encore choisie (l'écran de choix s'affiche)
+  loopRange: null as { from: number; to: number } | null, // extrait lu en boucle hors vérification (mode simple)
 });
+
+// --- Mode simple ou avancé ----------------------------------------------------
+// Le choix est mémorisé dans le navigateur. Il ne concerne que la présentation : le projet
+// ouvert, côté moteur, est le même dans les deux modes.
+export type Mode = "" | "simple" | "advanced";
+const MODE_KEY = "moto-blur:mode";
+
+export function loadMode(): void {
+  try {
+    const saved = localStorage.getItem(MODE_KEY);
+    state.mode = saved === "simple" || saved === "advanced" ? saved : "";
+  } catch {
+    state.mode = ""; // stockage indisponible : le choix sera redemandé
+  }
+}
+
+export function setMode(mode: Mode): void {
+  state.mode = mode;
+  if (mode === "simple") state.jobOpen = false; // l'assistant montre la progression dans sa page
+  try {
+    localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    /* stockage indisponible : le choix vaut pour cette séance seulement */
+  }
+}
 
 /** Commandes du lecteur, renseignées par le composant Player à son montage. */
 export const player = {
@@ -161,7 +188,8 @@ function apply(next: State): void {
   const now = next.job?.state === "running";
   if (now && !was) {
     // nouveau traitement : le dialogue de progression s'ouvre, même s'il avait été réduit avant
-    state.jobOpen = true;
+    // (en mode simple, la progression s'affiche dans la page de l'assistant, sans dialogue)
+    state.jobOpen = state.mode !== "simple";
     state.jobFinished = false;
   } else if (was && !now && next.job) {
     // un aperçu prêt n'a rien à dire : son dialogue se ferme seul ; sinon le résultat reste affiché,
@@ -196,7 +224,7 @@ export async function refresh(): Promise<void> {
     state.loaded = true;
     const job = next.job;
     // dialogue de progression ouvert : il affiche lui-même le résultat ; réduit : message habituel
-    if (before === "running" && job && job.state !== "running" && job.message && !state.jobOpen) {
+    if (before === "running" && job && job.state !== "running" && job.message && !state.jobOpen && state.mode !== "simple") {
       notify(job.message, job.state === "error" ? "error" : "info", true); // reste affiché jusqu'au clic
     }
     if (next.project && !job?.state.startsWith("run") && next.project.clips.some((c) => !c.proxy && !c.missing)) {

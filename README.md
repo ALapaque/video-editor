@@ -73,7 +73,9 @@ uv run moto-blur ui                      # écran d'accueil
 uv run moto-blur ui samples/sortie.mp4   # ouvre directement une vidéo ou un projet
 ```
 
-L'interface s'ouvre dans le navigateur, servie par le moteur sur `127.0.0.1` uniquement. Elle
+L'interface s'ouvre dans le navigateur, servie par le moteur sur `127.0.0.1` uniquement. Au
+premier lancement elle propose un **mode simple** (assistant pas à pas, une question par écran,
+recommandé pour commencer) ou un **mode avancé** ; on passe de l'un à l'autre à tout moment. Elle
 couvre le montage (couper, supprimer, réorganiser, rogner, passages muets), la vérification
 (passages douteux, zones manuelles, faux positifs, prolongation), le compteur, l'analyse et
 l'export. Le mode d'emploi détaillé est dans [TUTORIEL.md](TUTORIEL.md).
