@@ -139,6 +139,14 @@ class BlurSettings:
     dash_margin: float = 0.08
     # Largeur du bord adouci des ellipses, en fraction de leur rayon.
     feather: float = 0.12
+    # Score minimal qu'une piste détectée doit atteindre au moins une fois pour être floutée.
+    # Les fausses détections restent presque toujours à faible score ; un vrai objet finit par
+    # être vu nettement. Plus haut : moins de faux flous, mais plus de risque d'en manquer un vrai.
+    face_min_score: float = 0.40
+    plate_min_score: float = 0.25
+
+    def min_score_for(self, kind: str) -> float:
+        return {"face": self.face_min_score, "plate": self.plate_min_score}.get(kind, 0.0)
 
     def shape_for(self, kind: str) -> str:
         return {"face": self.face_shape, "plate": self.plate_shape, "dash": self.dash_shape}.get(
@@ -157,6 +165,8 @@ class Track:
     source: str = "auto"
     # Corrections faites à la vérification : piste ignorée (faux positif), flou prolongé.
     disabled: bool = False
+    # Floutée même si son score est sous le minimum (décision prise à la vérification).
+    forced: bool = False
     extend_before_s: float | None = None
     extend_after_s: float | None = None
 
@@ -239,6 +249,8 @@ def _track_to_json(t: Track) -> str:
         doc["source"] = t.source
     if t.disabled:
         doc["disabled"] = True
+    if t.forced:
+        doc["forced"] = True
     if t.extend_before_s is not None:
         doc["extend_before_s"] = t.extend_before_s
     if t.extend_after_s is not None:
@@ -305,7 +317,7 @@ def load(path: Path) -> Project:
         tracks = [
             Track(
                 t["id"], t["kind"], t["obs"], t.get("source", "auto"), t.get("disabled", False),
-                t.get("extend_before_s"), t.get("extend_after_s"),
+                t.get("forced", False), t.get("extend_before_s"), t.get("extend_after_s"),
             )
             for t in a.get("tracks", [])
         ]

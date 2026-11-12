@@ -354,3 +354,36 @@ def test_portrait_video_is_not_over_tiled():
     assert len(make_crops(1440, 2560, 640, 0, 0.2, True)) == 9
     assert len(make_crops(1440, 2560, 608, 0, 0.2, True)) == 9
     assert len(make_crops(2560, 1440, 640, 0, 0.2, True)) == 9
+
+
+# --- Score minimal d'une piste ------------------------------------------------
+
+
+def test_low_score_tracks_are_not_blurred_unless_forced(video_info):
+    from moto_blur.postprocess import below_min_score
+
+    weak = pj.Track(1, "face", [[i * F, 100, 100, 140, 150, 0.22] for i in range(20)])
+    real = pj.Track(2, "face", [[i * F, 600, 100, 640, 150, 0.25 if i != 7 else 0.62] for i in range(20)])
+    plate = pj.Track(3, "plate", [[i * F, 900, 500, 1000, 530, 0.3] for i in range(20)])
+    s = pj.BlurSettings()
+    assert below_min_score(weak, s) and not below_min_score(real, s) and not below_min_score(plate, s)
+    ids = {z.track_id for z in ZoneIndex([weak, real, plate], s, video_info).shaped(5 * F)}
+    assert ids == {2, 3}  # un seul bon score suffit à garder toute la piste
+    # une piste écartée ne figure pas dans les passages à vérifier
+    assert all(1 not in r["tracks"] for r in build_review("c1", [weak, real, plate], video_info, settings=s))
+    weak.forced = True
+    assert {z.track_id for z in ZoneIndex([weak, real, plate], s, video_info).shaped(5 * F)} == {1, 2, 3}
+    # réglage à zéro : comportement d'avant, tout est flouté
+    weak.forced = False
+    zero = pj.BlurSettings(face_min_score=0.0, plate_min_score=0.0)
+    assert len(ZoneIndex([weak, real, plate], zero, video_info).shaped(5 * F)) == 3
+
+
+def test_min_score_never_hides_manual_or_tracked_zones(video_info):
+    from moto_blur.postprocess import below_min_score
+
+    s = pj.BlurSettings(face_min_score=0.9, plate_min_score=0.9)
+    manual = pj.Track(1, "manual", [[0, 1, 1, 50, 50, 1.0], [10 * F, 1, 1, 50, 50, 1.0]], source="manual")
+    dash = pj.Track(2, "dash", [[i * F, 100, 100, 300, 200, 0.1] for i in range(11)], source="tracker")
+    assert not below_min_score(manual, s) and not below_min_score(dash, s)
+    assert len(ZoneIndex([manual, dash], s, video_info).shaped(5 * F)) == 2

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import project as pj
+from .postprocess import below_min_score
 from .timeline import format_time, pts_to_sec, resolve_segments, source_to_timeline
 
 
@@ -23,11 +24,17 @@ def build_report(project: pj.Project) -> str:
         items = [r for r in project.review if r["clip"] == clip.id]
         state = project.analysis.get(clip.id)
         counts = {k: 0 for k in pj.KINDS}
+        dropped = 0
         for t in state.tracks if state else []:
+            if below_min_score(t, project.blur_settings):
+                dropped += 1
+                continue
             counts[t.kind] = counts.get(t.kind, 0) + 1
         summary = ", ".join(f"{n} {pj.KIND_LABELS[k]}{'s' if n > 1 else ''}" for k, n in counts.items())
         lines.append(f"Clip {clip.id} — {clip.path}")
         lines.append(f"  objets suivis : {summary}")
+        if dropped:
+            lines.append(f"  détections écartées (score trop faible, non floutées) : {dropped}")
         visible = []
         for r in items:
             where = source_to_timeline(segments, clip.id, r["start_pts"]) or source_to_timeline(

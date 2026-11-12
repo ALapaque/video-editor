@@ -259,7 +259,10 @@ def refresh_review(project: pj.Project) -> None:
         state = project.analysis.get(clip.id)
         if state:
             review.extend(
-                build_review(clip.id, state.tracks, clip.video, project.analysis_settings.detect_every)
+                build_review(
+                    clip.id, state.tracks, clip.video, project.analysis_settings.detect_every,
+                    settings=project.blur_settings,
+                )
             )
             review.extend(dash.build_dash_review(clip, state.tracks))
     project.review = review
