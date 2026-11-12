@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import platform
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,17 @@ import cv2
 import numpy as np
 
 from .models import ModelSpec, models_dir
+
+# Un seul calcul à la fois sur la carte graphique, même quand plusieurs modèles travaillent en
+# parallèle : seule la préparation des tuiles (processeur) se recouvre. Soumettre deux calculs
+# en même temps à DirectML n'apporte rien et peut déstabiliser le pilote.
+_GPU_LOCK = threading.Lock()
+# Vrai dès qu'un modèle a été chargé avec succès sur la carte graphique dans ce processus.
+_gpu_has_worked = False
+
+
+def gpu_has_worked() -> bool:
+    return _gpu_has_worked
 
 
 @dataclass(frozen=True)
@@ -232,6 +244,12 @@ class Detector:
         self.provider = self.session.get_providers()[0]
         self.input_name = self.session.get_inputs()[0].name
         self.note = ""
+        # Accélération demandée et disponible, mais le modèle a fini sur le processeur : le
+        # chargement sur la carte graphique a échoué (ONNX Runtime se replie sans erreur).
+        self.fell_back = len(providers) > 1 and self.provider == "CPUExecutionProvider"
+        if self.provider != "CPUExecutionProvider":
+            global _gpu_has_worked
+            _gpu_has_worked = True
         if device == "auto" and self.provider != "CPUExecutionProvider":
             self._keep_fastest(model_path)
 
@@ -257,7 +275,7 @@ class Detector:
         best = float("inf")
         for i in range(3):
             t0 = time.perf_counter()
-            session.run(None, {self.input_name: blob})
+            self._run(blob, session)
             if i:
                 best = min(best, time.perf_counter() - t0)
         return best
@@ -283,6 +301,13 @@ class Detector:
         if slow < 0.9 * fast:
             self.session, self.provider = cpu, "CPUExecutionProvider"
             self.note += " : processeur retenu"
+
+    def _run(self, blob: np.ndarray, session=None) -> np.ndarray:
+        session = session or self.session
+        if session.get_providers()[0] == "CPUExecutionProvider":
+            return session.run(None, {self.input_name: blob})[0]
+        with _GPU_LOCK:
+            return session.run(None, {self.input_name: blob})[0]
 
     def _blob(self, images: list[np.ndarray]) -> np.ndarray:
         # Conversion en nombres flottants et passage au format lot-canaux-hauteur-largeur,
@@ -312,11 +337,11 @@ class Detector:
         images = [render_crop(rgb, c, size) for c in self.crops]
         per_crop: list[np.ndarray] = []
         if self.batch == len(images):
-            output = self.session.run(None, {self.input_name: self._blob(images)})[0]
+            output = self._run(self._blob(images))
             per_crop = self._decode(output)
         else:
             for image in images:
-                output = self.session.run(None, {self.input_name: self._blob([image])})[0]
+                output = self._run(self._blob([image]))
                 per_crop.extend(self._decode(output))
         found = [to_frame_coords(b, c) for b, c in zip(per_crop, self.crops, strict=False) if len(b)]
         if not found:

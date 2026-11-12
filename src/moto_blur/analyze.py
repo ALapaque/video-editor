@@ -8,6 +8,7 @@ source, modifier une coupe ne l'invalide jamais.
 
 from __future__ import annotations
 
+import gc
 import sys
 import time
 from collections.abc import Callable
@@ -18,7 +19,7 @@ import numpy as np
 
 from . import dash, intervals
 from . import project as pj
-from .detect import Detector
+from .detect import Detector, gpu_has_worked
 from .models import ensure_model, get_spec
 from .postprocess import build_review
 from .progress import Progress
@@ -45,18 +46,50 @@ def needed_intervals(project: pj.Project, clip: pj.Clip) -> list[intervals.Inter
     return intervals.subtract(wanted, [tuple(i) for i in state.analyzed])
 
 
+_loaded: dict[tuple, Detector] = {}
+
+
+def _load(spec, size, s: pj.AnalysisSettings, device: str, worked_before: bool) -> Detector:
+    """Charge un modèle. Refuse de continuer si la carte graphique, déjà utilisée avec succès
+    dans cette session, ne répond plus : mieux vaut une erreur claire qu'une analyse qui passe
+    sans prévenir sur le processeur et dure des heures."""
+    path = ensure_model(spec)
+    args = (spec, path, size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device)
+    detector = Detector(*args)
+    if detector.fell_back and worked_before:
+        del detector
+        gc.collect()
+        detector = Detector(*args)  # second essai, une fois la mémoire de la carte libérée
+        if detector.fell_back:
+            raise RuntimeError(
+                "la carte graphique ne répond plus (le chargement du modèle a échoué alors "
+                "qu'il avait réussi auparavant). Fermez moto-blur et relancez-le. Pour analyser "
+                "malgré tout sur le processeur, beaucoup plus lentement : option --device cpu."
+            )
+    return detector
+
+
 def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[DetectFn, list[str]]:
     """Charge les modèles demandés et renvoie la fonction image -> détections par catégorie."""
     s = project.analysis_settings
     size = (clip.video.width, clip.video.height)
     detectors: dict[str, Detector] = {}
     notes = []
+    wanted = {}
     for kind in s.kinds:
         spec = get_spec(s.face_model if kind == "face" else s.plate_model, kind)
-        detectors[kind] = Detector(
-            spec, ensure_model(spec), size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device
-        )
-        d = detectors[kind]
+        key = (kind, spec.name, size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device)
+        wanted[key] = (kind, spec)
+    # Les modèles déjà chargés sont réutilisés d'une analyse à l'autre : c'est plus rapide, et
+    # recharger un modèle sur la carte graphique alors que l'ancien y est encore peut échouer.
+    for key in [k for k in _loaded if k not in wanted]:
+        del _loaded[key]
+    gc.collect()
+    worked_before = gpu_has_worked()
+    for key, (kind, spec) in wanted.items():
+        if key not in _loaded:
+            _loaded[key] = _load(spec, size, s, device, worked_before)
+        d = detectors[kind] = _loaded[key]
         notes.append(
             f"  {pj.KIND_LABELS[kind]} : {spec.name}, {len(d.crops)} zones par image, "
             f"exécution {d.provider.replace('ExecutionProvider', '')}"
