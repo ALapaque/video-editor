@@ -14,7 +14,7 @@ import os
 import threading
 import traceback
 import urllib.parse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -70,6 +70,7 @@ class Engine:
         self.job: Job | None = None
         self.version = 0  # incrémenté à chaque changement des zones (cache de l'interface)
         self._indexes: dict[str, tuple[int, ZoneIndex]] = {}
+        self._dropped: dict[str, tuple[int, ZoneIndex]] = {}
         self._problem: tuple[int, str | None] = (-1, None)
 
     # --- Projet -----------------------------------------------------------
@@ -137,6 +138,20 @@ class Engine:
         state = project.analysis.get(clip.id) or pj.ClipAnalysis()
         index = ZoneIndex(state.tracks, project.blur_settings, clip.video)
         self._indexes[clip.id] = (self.version, index)
+        return index
+
+    def dropped_index(self, clip: pj.Clip) -> ZoneIndex:
+        """Index des détections écartées par le score minimal (non floutées), pour les montrer."""
+        cached = self._dropped.get(clip.id)
+        if cached and cached[0] == self.version:
+            return cached[1]
+        project = self.require()
+        state = project.analysis.get(clip.id) or pj.ClipAnalysis()
+        settings = project.blur_settings
+        tracks = [t for t in state.tracks if not t.disabled and below_min_score(t, settings)]
+        # mêmes durées que si elles étaient floutées, mais sans le filtre qui les écarte
+        index = ZoneIndex(tracks, replace(settings, face_min_score=0.0, plate_min_score=0.0), clip.video)
+        self._dropped[clip.id] = (self.version, index)
         return index
 
     # --- État envoyé à l'interface ----------------------------------------
@@ -381,8 +396,11 @@ class Engine:
         refresh_review(self.require())
         self.touch()
 
-    def zones(self, clip_id: str, first: int, last: int) -> dict:
-        """Zones de flou pour les images `first` à `last` (indices) d'un clip."""
+    def zones(self, clip_id: str, first: int, last: int, dropped: bool = False) -> dict:
+        """Zones de flou pour les images `first` à `last` (indices) d'un clip.
+
+        Avec `dropped`, ajoute les détections écartées par le score minimal : pour chaque image,
+        [x1, y1, x2, y2, catégorie, piste, score] avec la boîte brute interpolée, sans marge."""
         project = self.require()
         with self.lock:
             clip = project.clip(clip_id)
@@ -401,7 +419,26 @@ class Engine:
                     items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, None if obs is None else round(obs[4], 2)])
                 if items:
                     frames[k] = items
-            return {"version": self.version, "frames": frames}
+            out = {"version": self.version, "frames": frames}
+            if dropped:
+                extra = {}
+                other = self.dropped_index(clip)
+                for k in range(max(0, first), last + 1):
+                    pts = v.start_pts + round(k * v.frame_pts)
+                    items = []
+                    for item in other.active(pts):
+                        box = item.raw_box(pts)
+                        if box is None:
+                            continue
+                        obs = item.observation(pts)
+                        items.append(
+                            [*[round(x) for x in box], item.track.kind, item.track.id,
+                             None if obs is None else round(obs[4], 2)]
+                        )
+                    if items:
+                        extra[k] = items
+                out["dropped"] = extra
+            return out
 
     def frame_jpeg(self, clip_id: str, frame_index: int, blur: bool, max_width: int) -> bytes:
         """Image source exacte, en pleine résolution, avec ou sans le flou du rendu final."""
@@ -710,7 +747,11 @@ class Handler(BaseHTTPRequestHandler):
                 engine.start_dash(self._body())
                 self._json(engine.state())
             elif route == "/api/zones" and method == "GET":
-                self._json(engine.zones(query["clip"], int(query["from"]), int(query["to"])))
+                self._json(
+                    engine.zones(
+                        query["clip"], int(query["from"]), int(query["to"]), query.get("dropped") == "1"
+                    )
+                )
             elif route == "/api/frame" and method == "GET":
                 data = engine.frame_jpeg(
                     query["clip"], int(query["frame"]), query.get("blur") == "1", int(query.get("w", 0))

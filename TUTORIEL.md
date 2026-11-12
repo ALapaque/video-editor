@@ -98,7 +98,9 @@ tester vite.
    la vidéo. Un fichier projet `ma-video.motoblur.json` est créé à côté d'elle. Vos vidéos
    d'origine ne sont jamais modifiées.
 2. **Attendre l'aperçu.** Le logiciel fabrique une copie légère de la vidéo pour une lecture
-   fluide (barre de progression au-dessus de la vidéo). Pour une vidéo 4K de 10 minutes, comptez quelques
+   fluide. Une fenêtre de progression s'ouvre : pourcentage, images traitées, vitesse, temps
+   restant. « Réduire » (ou Échap) la ferme sans arrêter le traitement ; un clic sur la barre de
+   progression au-dessus de la vidéo la rouvre. Pour une vidéo 4K de 10 minutes, comptez quelques
    minutes ; ce n'est fait qu'une fois par vidéo.
 3. **Ne garder qu'un extrait.** Placez la tête de lecture (clic dans la timeline) au début du
    passage voulu, cliquez « Couper ici ». Placez-la à la fin, « Couper ici » encore.
@@ -106,7 +108,7 @@ tester vite.
 4. **Analyser.** Cliquez « Analyser » (bouton orange, au-dessus de la vidéo). Au premier lancement, les modèles de
    détection sont téléchargés (environ 65 Mo). Le logiciel mesure ensuite, pendant quelques
    secondes, l'accélération matérielle contre le processeur et garde le plus rapide. À la fin,
-   un bandeau indique la vitesse en images par seconde, ce qui a servi (`CoreML`, `Dml` ou
+   la fenêtre de progression indique la vitesse en images par seconde, ce qui a servi (`CoreML`, `Dml` ou
    `CPU`) et les deux temps mesurés. **Notez cette ligne**, elle m'intéresse.
 5. **Vérifier.** Cliquez « Commencer la vérification ». Le logiciel vous montre un par un les
    passages où il a hésité : chacun tourne en boucle avec le flou affiché, et vous répondez à
@@ -125,6 +127,7 @@ tester vite.
 | Image précédente / suivante | `◀|` et `|▶` | ← et → |
 | Reculer / avancer d'une seconde | | Maj + ← et Maj + → |
 | Aller à un instant | clic ou glisser dans la timeline | Début, Fin |
+| Ralentir l'aperçu | menu « 1× » à côté de « Lecture » : 0,5× ou 0,25× (sans effet sur l'export) | |
 | Régler le volume de l'aperçu | curseur à côté du haut-parleur (50 % au départ) ; un clic sur le haut-parleur coupe ou rétablit le son | |
 
 Sous la vidéo, vous lisez l'instant dans le montage, le nom du clip, le numéro d'image et
@@ -176,12 +179,16 @@ sous la timeline (en rose pour le compteur).
 | Réponse | Effet |
 |---|---|
 | « Oui, c'est bon » (touche Entrée) | le passage est validé, le suivant s'affiche |
-| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image. Il couvre tout le passage, puis la boucle reprend pour que vous contrôliez |
+| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image. Il couvre tout le passage, puis la boucle reprend pour que vous contrôliez. Si le logiciel a écarté des détections à cet endroit (score trop faible), il propose de les afficher : « Flouter quand même » suffit alors |
 | « Un flou est en trop » | la lecture s'arrête ; cliquez le flou à retirer dans l'image. « Rétablir » l'annule |
 | « Plus tard » | passe au suivant sans valider ; le passage reste « à revoir » |
 | « Précédent » | revient au passage d'avant |
 
 4. À la fin, un bilan indique combien de passages sont validés et combien restent à revoir.
+
+Pendant la vérification (passages douteux ou relecture), le montage est verrouillé : « Couper
+ici », « Supprimer le passage », « Déplacer », « Muet » et leurs touches (C, Suppr, M) sont
+inactifs, pour éviter une coupe par erreur. « Quitter » les rend.
 
 Si vous corrigez les zones d'un passage déjà validé (flou retiré ou rétabli), il vous est
 redemandé : c'est voulu.
@@ -219,17 +226,26 @@ la liste ou directement dans l'image pour la sélectionner.
 | Faire durer un flou plus longtemps | sélectionnez la zone, boutons + de « Avant » ou « Après » |
 | Supprimer une zone manuelle | « Supprimer » |
 
-### Compteur
+### Compteur, téléphone et autres objets
 
-1. Placez-vous sur une image où le compteur est bien visible.
-2. Onglet « Zones », bouton « Compteur… », tracez un rectangle autour du compteur (ou seulement
-   de l'affichage de la vitesse).
-3. Choisissez :
-   - **Suivre le compteur** si le cadrage bouge (cas d'une vidéo recadrée depuis le 360). Le
-     compteur est suivi image par image, vers l'avant et l'arrière.
-   - **Zone fixe** si la caméra est fixée à la moto et que le compteur ne bouge pas dans l'image.
-4. Si le suivi décroche, le passage apparaît parmi les « Passages douteux », en rose sur la timeline. Placez-vous au début
-   du passage fautif et recommencez l'étape 2 : le suivi repart de là.
+Le logiciel ne détecte seul que les visages et les plaques. Tout autre objet à cacher (compteur,
+téléphone, GPS…) se désigne à la main, une fois par clip ; chaque objet porte un nom.
+
+1. Placez-vous sur une image où l'objet est bien visible.
+2. Onglet « Zones », bouton « Suivre un objet… », tracez un rectangle autour de l'objet (pour le
+   compteur, l'affichage de la vitesse peut suffire).
+3. Donnez son nom : « Compteur », « Téléphone », « GPS », ou un autre nom tapé dans le champ.
+4. Choisissez :
+   - **Suivre l'objet** s'il bouge dans l'image (cas d'une vidéo recadrée depuis le 360). Il est
+     suivi image par image, vers l'avant et l'arrière.
+   - **Zone fixe** si la caméra est fixée à la moto et que l'objet ne bouge pas dans l'image.
+5. Si le suivi décroche, le passage apparaît parmi les « Passages douteux », en rose sur la
+   timeline. Placez-vous au début du passage fautif et recommencez l'étape 2 avec le même nom :
+   le suivi repart de là.
+
+Reprendre un nom déjà utilisé dans le clip remplace les zones de cet objet (le dialogue le dit) ;
+un autre nom ajoute un objet. Le bloc « Objets suivis », en bas de l'onglet « Zones », liste les
+objets du clip affiché ; « Supprimer » retire toutes les zones d'un objet, après confirmation.
 
 ### Réglages
 
@@ -242,6 +258,12 @@ La partie « Détection » refait toute l'analyse.
 | Prolongation avant / après | durée de flou ajoutée avant l'apparition et après la disparition d'un objet |
 | Type de flou | mosaïque lissée, ou aplat de couleur (le plus sûr) |
 | Forme | ellipse pour les visages, rectangle arrondi pour les plaques par défaut |
+| Score minimal des visages, des plaques | une détection n'est floutée que si son meilleur score atteint ce minimum (0,40 pour les visages, 0,25 pour les plaques au départ). Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué. Le changement s'applique tout de suite, sans réanalyse ; le nombre de détections écartées s'affiche sous le curseur |
+
+Les détections écartées par le score minimal ne sont pas floutées. Pour les voir, ouvrez
+« Détections écartées » dans l'onglet « Zones » : elles sont entourées en gris sur l'image, et
+« Flouter quand même » en rétablit une (elle porte alors l'étiquette « forcée » ; « Ne plus
+forcer » annule).
 
 ### Export
 
@@ -259,7 +281,9 @@ Dans l'ordre, du moins risqué au plus risqué (onglet « Réglages », partie �
    image, mais les objets lointains sont moins bien vus).
 3. « Détecter une image sur 2 » : raisonnable à 60 images par seconde.
 
-« Annuler » pendant une analyse conserve ce qui est fait ; « Analyser » reprend ensuite.
+« Annuler » pendant une analyse conserve ce qui est fait ; « Analyser » reprend ensuite. Pour une
+analyse ou un export, « Annuler » demande une confirmation. À la fin d'un traitement, la fenêtre
+de progression affiche le résultat (pour un export : le chemin du fichier écrit).
 
 ## 6. En ligne de commande
 

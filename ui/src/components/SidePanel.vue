@@ -1,13 +1,13 @@
 <script setup lang="ts">
 // Panneau latéral : vérification guidée, zones de l'image courante, réglages.
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import type { Track } from "../api";
 import { pending } from "../review";
 import Icon from "./Icon.vue";
 import ReviewPanel from "./ReviewPanel.vue";
 import {
-  busy, current, deleteTrack, formatTime, kindLabel, notify, patchTrack, project, removeMute, saveManual,
-  send, state,
+  busy, current, deleteTrack, droppedHere, formatTime, notify, patchTrack, project, removeMute, saveManual,
+  send, state, tracksNow,
 } from "../store";
 
 const tab = computed({ get: () => state.tab, set: (value) => (state.tab = value) });
@@ -15,19 +15,32 @@ const tabIndex = computed(() => ["review", "zones", "settings"].indexOf(tab.valu
 
 // --- Zones de l'image courante ---
 const sourceTime = computed(() => (current.value ? state.frame / current.value.fps : 0));
-const tracksHere = computed<Track[]>(() => {
+// zones floutées (ou désactivées à la main) à l'image courante ; les détections écartées par le
+// score minimal sont listées à part
+const tracksHere = computed<Track[]>(() =>
+  tracksNow.value.filter((tr) => !tr.below_min_score).sort((a, b) => Number(a.disabled) - Number(b.disabled) || a.id - b.id),
+);
+
+// --- Objets désignés à la main dans le clip affiché (compteur, téléphone…) ---
+const objects = computed(() => {
   const s = current.value;
-  if (!s || !project.value) return [];
-  const t = sourceTime.value;
-  const general = Number(project.value.settings.blur.extend_s ?? 0.3);
-  return (project.value.tracks[s.clip.id] ?? [])
-    .filter((tr) => {
-      const before = tr.source === "manual" ? 0 : (tr.extend_before_s ?? general);
-      const after = tr.source === "manual" ? 0 : (tr.extend_after_s ?? general);
-      return t >= tr.start - before - 0.05 && t <= tr.end + after + 0.05;
-    })
-    .sort((a, b) => Number(a.disabled) - Number(b.disabled) || a.id - b.id);
+  const out = new Map<string, { name: string; tracked: boolean; start: number; end: number }>();
+  for (const t of s ? (project.value?.tracks[s.clip.id] ?? []) : []) {
+    if (t.kind !== "dash") continue;
+    const o = out.get(t.name) ?? { name: t.name, tracked: false, start: t.start, end: t.end };
+    o.tracked = o.tracked || t.source === "tracker";
+    o.start = Math.min(o.start, t.start);
+    o.end = Math.max(o.end, t.end);
+    out.set(t.name, o);
+  }
+  return [...out.values()];
 });
+const confirmDelete = ref(""); // nom de l'objet dont la suppression attend une confirmation
+async function clearObject(name: string): Promise<void> {
+  confirmDelete.value = "";
+  if (current.value) await send("POST", "/api/dash", { clip: current.value.clip.id, label: name, mode: "clear" });
+}
+
 function isSelected(tr: Track): boolean {
   return state.selectedTrack?.id === tr.id && state.selectedTrack.clip === current.value?.clip.id;
 }
@@ -66,6 +79,31 @@ watch(() => project.value?.settings, (settings) => {
   Object.assign(blur, settings.blur);
   Object.assign(analysis, settings.analysis);
 }, { immediate: true, deep: true });
+// Scores minimaux : appliqués en direct pendant le glissement (envoi regroupé toutes les 200 ms).
+// Tant qu'un envoi est en attente, l'état reçu du moteur ne remet pas le curseur en arrière.
+const minScore = reactive({ face: 0.4, plate: 0.25 });
+let minTimer = 0;
+let minDirtyUntil = 0;
+watch(() => project.value?.settings.blur, (b) => {
+  if (!b || Date.now() < minDirtyUntil) return;
+  minScore.face = Number(b.face_min_score ?? 0.4);
+  minScore.plate = Number(b.plate_min_score ?? 0.25);
+}, { immediate: true, deep: true });
+function setMinScore(): void {
+  minDirtyUntil = Date.now() + 700;
+  window.clearTimeout(minTimer);
+  minTimer = window.setTimeout(() => {
+    void send("PUT", "/api/settings", { blur: { face_min_score: minScore.face, plate_min_score: minScore.plate } });
+  }, 200);
+}
+function droppedCount(kind: string): number {
+  const s = current.value;
+  return s ? (project.value?.tracks[s.clip.id] ?? []).filter((t) => t.kind === kind && t.below_min_score).length : 0;
+}
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n > 1 ? many : one}`;
+}
+
 async function saveBlur(): Promise<void> {
   await send("PUT", "/api/settings", { blur: { ...blur } });
 }
@@ -90,16 +128,32 @@ async function saveAnalysis(): Promise<void> {
       <section v-else-if="tab === 'zones'" key="zones" class="pane">
         <div class="row pair">
           <button :class="{ on: state.tool === 'manual' }" :disabled="busy" title="Tracer un rectangle à flouter sur l'image courante" @click="state.tool = state.tool === 'manual' ? 'none' : 'manual'">+ Zone manuelle</button>
-          <button :class="{ on: state.tool === 'dash' }" :disabled="busy" title="Désigner le compteur sur l'image courante" @click="state.tool = state.tool === 'dash' ? 'none' : 'dash'"><Icon name="gauge" />Compteur…</button>
+          <button :class="{ on: state.tool === 'dash' }" :disabled="busy" title="Désigner sur l'image courante un objet à flouter : compteur, téléphone, GPS…" @click="state.tool = state.tool === 'dash' ? 'none' : 'dash'"><Icon name="target" />Suivre un objet…</button>
         </div>
+        <template v-if="objects.length">
+          <h4 class="plain">Objets suivis</h4>
+          <ul class="list objects">
+            <li v-for="o in objects" :key="o.name">
+              <span class="dot dash"></span>
+              <span class="grow"><strong>{{ o.name }}</strong> <span class="dim">· {{ o.tracked ? "suivi" : "zone fixe" }}</span><small>source <span class="mono">{{ formatTime(o.start, 1) }} → {{ formatTime(o.end, 1) }}</span></small></span>
+              <template v-if="confirmDelete === o.name">
+                <button class="small danger" :disabled="busy" @click="clearObject(o.name)">Confirmer</button>
+                <button class="small" @click="confirmDelete = ''">Annuler</button>
+              </template>
+              <button v-else class="small danger" :disabled="busy" :title="`Supprimer toutes les zones de « ${o.name} » dans ce clip`" @click="confirmDelete = o.name">Supprimer</button>
+            </li>
+          </ul>
+        </template>
+        <h4 v-if="objects.length" class="plain">Zones de cette image</h4>
         <p class="help">Zones actives sur l'image affichée. Cliquez une zone dans l'image pour la sélectionner.</p>
         <p v-if="!tracksHere.length" class="blank">Aucune zone sur cette image.</p>
         <ul class="list zones">
           <li v-for="tr in tracksHere" :key="tr.id" :class="{ selected: isSelected(tr), off: tr.disabled }" @click="select(tr)">
             <div class="head">
               <span class="dot" :class="tr.kind"></span>
-              <strong>{{ kindLabel[tr.kind] ?? tr.kind }}</strong>
-              <span class="dim">n° {{ tr.id }}<template v-if="tr.source === 'auto'"> · score {{ tr.score.toFixed(2) }}</template><template v-else-if="tr.source === 'manual'"> · manuelle</template><template v-else> · suivi</template></span>
+              <strong>{{ tr.name }}</strong>
+              <span class="dim">n° {{ tr.id }}<template v-if="tr.source === 'auto'"> · score {{ tr.score.toFixed(2) }}</template><template v-else-if="tr.kind === 'dash' && tr.source === 'manual'"> · zone fixe</template><template v-else-if="tr.source === 'manual'"> · manuelle</template><template v-else> · suivi</template></span>
+              <span v-if="tr.forced" class="tag" title="Floutée bien que son score soit sous le minimum">forcée</span>
             </div>
             <div class="dim span">source <span class="mono">{{ formatTime(tr.start, 1) }} → {{ formatTime(tr.end, 1) }}</span></div>
             <div v-if="isSelected(tr)" class="actions">
@@ -122,11 +176,30 @@ async function saveAnalysis(): Promise<void> {
                 </div>
                 <button v-if="!tr.disabled" class="danger" :disabled="busy" title="Faux positif : ne pas flouter cette zone" @click.stop="patchTrack(current!.clip.id, tr.id, { disabled: true })">Ne pas flouter</button>
                 <button v-else :disabled="busy" @click.stop="patchTrack(current!.clip.id, tr.id, { disabled: false })">Rétablir le flou</button>
+                <button v-if="tr.forced" :disabled="busy" title="Revenir à la règle du score minimal pour cette détection" @click.stop="patchTrack(current!.clip.id, tr.id, { forced: false })">Ne plus forcer</button>
                 <button v-if="tr.source === 'tracker'" class="danger" :disabled="busy" @click.stop="deleteTrack(current!.clip.id, tr.id)"><Icon name="trash" />Supprimer le suivi</button>
               </template>
             </div>
           </li>
         </ul>
+        <!-- Détections écartées par le score minimal : repliées par défaut ; ouvertes, elles sont entourées en gris sur la vidéo -->
+        <div class="fold" :class="{ open: state.showDropped }">
+          <button class="fold-head" :aria-expanded="state.showDropped" @click="state.showDropped = !state.showDropped">
+            <Icon :name="state.showDropped ? 'chevronDown' : 'chevronRight'" :size="14" />Détections écartées <b class="count">{{ droppedHere.length }}</b>
+          </button>
+          <template v-if="state.showDropped">
+            <p class="help">Détections dont le meilleur score est sous le minimum (onglet « Réglages ») : elles ne sont pas floutées. Elles sont entourées en gris sur l'image.</p>
+            <p v-if="!droppedHere.length" class="dim">Aucune sur cette image.</p>
+            <ul class="list dropped">
+              <li v-for="tr in droppedHere" :key="tr.id">
+                <span class="dot off"></span>
+                <span class="grow"><strong>{{ tr.name }}</strong> <span class="dim">n° {{ tr.id }} · meilleur score {{ tr.best_score.toFixed(2) }}</span></span>
+                <button class="small" :disabled="busy" title="Flouter cette détection malgré son score" @click="patchTrack(current!.clip.id, tr.id, { forced: true })">Flouter quand même</button>
+              </li>
+            </ul>
+          </template>
+        </div>
+
         <template v-if="mutesList.length">
           <h4>Passages muets</h4>
           <ul class="list mutes">
@@ -153,6 +226,17 @@ async function saveAnalysis(): Promise<void> {
         <label>Forme pour les plaques
           <select v-model="blur.plate_shape" @change="saveBlur"><option value="rounded">rectangle arrondi</option><option value="rect">rectangle</option><option value="ellipse">ellipse</option></select>
         </label>
+        <div class="slider-row">
+          <label for="min-face">Score minimal des visages <span class="mono value">{{ minScore.face.toFixed(2) }}</span></label>
+          <input id="min-face" v-model.number="minScore.face" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
+          <small class="dim">{{ plural(droppedCount("face"), "détection écartée", "détections écartées") }} dans ce clip</small>
+        </div>
+        <div class="slider-row">
+          <label for="min-plate">Score minimal des plaques <span class="mono value">{{ minScore.plate.toFixed(2) }}</span></label>
+          <input id="min-plate" v-model.number="minScore.plate" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
+          <small class="dim">{{ plural(droppedCount("plate"), "détection écartée", "détections écartées") }} dans ce clip</small>
+        </div>
+        <p class="help">Une détection n'est floutée que si son meilleur score atteint ce minimum. Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué.</p>
         <template v-if="project?.mismatch">
           <h4>Clips de formats différents</h4>
           <label>Aligner sur

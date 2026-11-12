@@ -202,3 +202,26 @@ def test_older_project_files_load_without_review_state(api):
     assert old.review_done == [] and old.marks == []
     state = Engine(old).state()
     assert state["project"]["marks"] == [] and all(r["done"] is False for r in state["project"]["review"])
+
+
+def test_dropped_detections_can_be_shown_and_forced(doubtful):
+    # la plaque est détectée à 0,32 : avec un minimum de 0,5 pour les plaques, elle est écartée
+    state = doubtful("PUT", "/api/settings", {"blur": {"plate_min_score": 0.5}})
+    (track,) = state["project"]["tracks"]["c1"]
+    assert track["below_min_score"] is True and track["best_score"] == 0.32
+    plain = doubtful("GET", "/api/zones?clip=c1&from=10&to=11")
+    assert plain["frames"] == {} and "dropped" not in plain
+    shown = doubtful("GET", "/api/zones?clip=c1&from=10&to=11&dropped=1")
+    assert shown["frames"] == {} and set(shown["dropped"]) == {"10", "11"}
+    x1, y1, x2, y2, kind, track_id, score = shown["dropped"]["10"][0]
+    assert kind == "plate" and track_id == track["id"] and score == 0.32 and x2 > x1 and y2 > y1
+    # « Flouter quand même » : la zone revient parmi les zones floutées et quitte les écartées
+    doubtful("PATCH", "/api/tracks", {"clip": "c1", "id": track_id, "forced": True})
+    forced = doubtful("GET", "/api/zones?clip=c1&from=10&to=11&dropped=1")
+    assert set(forced["frames"]) == {"10", "11"} and forced["dropped"] == {}
+    # un minimum abaissé la rétablit aussi, sans la forcer
+    doubtful("PATCH", "/api/tracks", {"clip": "c1", "id": track_id, "forced": False})
+    assert doubtful("GET", "/api/zones?clip=c1&from=10&to=11&dropped=1")["frames"] == {}
+    doubtful("PUT", "/api/settings", {"blur": {"plate_min_score": 0.2}})
+    lowered = doubtful("GET", "/api/zones?clip=c1&from=10&to=11&dropped=1")
+    assert set(lowered["frames"]) == {"10", "11"} and lowered["dropped"] == {}
