@@ -141,7 +141,7 @@ Règles du montage :
   le premier clip) ou `--conform largest` (plus grande résolution et plus haute fréquence). Les
   autres clips sont mis à l'échelle avec bandes noires, leurs images dupliquées ou sautées.
 
-### Compteur
+### Compteur, téléphone et autres objets
 
 ```sh
 # Suivre le compteur à partir du rectangle donné sur l'image située à 5 s (x, y, largeur, hauteur)
@@ -150,11 +150,15 @@ uv run moto-blur dash samples/sortie.motoblur.json --at 0:05 --box 1500,1700,600
 # Zone fixe sur tout le clip (caméra fixée à la moto)
 uv run moto-blur dash samples/sortie.motoblur.json --fixed --box 1500,1700,600,300
 
-# Supprimer les zones de compteur
-uv run moto-blur dash samples/sortie.motoblur.json --clear
+# Suivre un autre objet, désigné par son nom (chaque nom est suivi séparément)
+uv run moto-blur dash samples/sortie.motoblur.json --name téléphone --at 0:05 --box 900,1200,300,500
+
+# Supprimer les zones d'un objet (sans --name : de tous les objets)
+uv run moto-blur dash samples/sortie.motoblur.json --name téléphone --clear
 ```
 
-Dans l'interface, le rectangle se trace à la souris (onglet « Zones », bouton « Compteur… »).
+Dans l'interface, le rectangle se trace à la souris (onglet « Zones », bouton « Suivre un
+objet… »), puis un dialogue demande le nom de l'objet.
 
 ### Réglages utiles
 

@@ -6,7 +6,7 @@ import type { ZoneTuple } from "../api";
 import Icon from "./Icon.vue";
 import { loop, outline, rate, removeZone, resume, review } from "../review";
 import {
-  current, duration, formatTime, kindLabel, notify, player, project, saveManual, seekTime, segments,
+  current, droppedNow, duration, formatTime, kindLabel, notify, objectNames, player, project, saveManual, seekTime, segments,
   state, time, trackById, zonesNow,
 } from "../store";
 
@@ -19,6 +19,7 @@ let loadedClip = "";
 let frameCallback = 0;
 let drag: { x0: number; y0: number; x1: number; y1: number } | null = null;
 const scratch = document.createElement("canvas");
+const droppedCount = ref(0); // nombre de contours de détections écartées tracés au dernier dessin
 
 // Volume de l'aperçu : ne concerne que l'écoute dans le lecteur, jamais le projet ni l'export.
 // Mémorisé dans le navigateur ; 50 % à la première utilisation.
@@ -233,7 +234,9 @@ function draw(): void {
       ctx.stroke();
       ctx.setLineDash([]);
       if (state.preview === "boxes") {
-        const label = `${kindLabel[kind] ?? kind}${score === null ? "" : " " + score.toFixed(2)}`;
+        // un objet désigné à la main porte son nom (compteur, téléphone…)
+        const name = kind === "dash" ? (objectNames.value.get(`${s.clip.id}:${id}`) ?? kindLabel[kind]) : (kindLabel[kind] ?? kind);
+        const label = `${name}${score === null ? "" : " " + score.toFixed(2)}`;
         ctx.font = `${11 * ratio}px system-ui, sans-serif`;
         const tw = ctx.measureText(label).width + 6 * ratio;
         const ty = Math.max(13 * ratio, y1 * k - 3 * ratio);
@@ -243,6 +246,26 @@ function draw(): void {
         ctx.fillText(label, x1 * k + 3 * ratio, ty - 1 * ratio);
       }
     }
+  }
+  if (state.showDropped) {
+    // détections écartées par le score minimal : contours gris fins, pour décider de les flouter ou non
+    const dropped = droppedNow(s.clip.id, state.frame, draw) ?? [];
+    ctx.lineWidth = 1 * ratio;
+    ctx.strokeStyle = "#c3c9d1";
+    ctx.setLineDash([4 * ratio, 4 * ratio]);
+    ctx.font = `${10 * ratio}px system-ui, sans-serif`;
+    for (const [x1, y1, x2, y2, , id] of dropped) {
+      ctx.strokeRect(x1 * k, y1 * k, (x2 - x1) * k, (y2 - y1) * k);
+      const label = `n° ${id}`;
+      const tw = ctx.measureText(label).width + 6 * ratio;
+      const ty = Math.max(12 * ratio, y1 * k - 3 * ratio);
+      ctx.fillStyle = "rgba(0,0,0,.6)";
+      ctx.fillRect(x1 * k, ty - 10 * ratio, tw, 12 * ratio);
+      ctx.fillStyle = "#c3c9d1";
+      ctx.fillText(label, x1 * k + 3 * ratio, ty - 1 * ratio);
+    }
+    ctx.setLineDash([]);
+    if (droppedCount.value !== dropped.length) droppedCount.value = dropped.length;
   }
   if (drag) {
     ctx.lineWidth = 2 * ratio;
@@ -275,7 +298,7 @@ function pointerDown(event: PointerEvent): void {
       .sort((a, b) => (a[2] - a[0]) * (a[3] - a[1]) - (b[2] - b[0]) * (b[3] - b[1]));
     if (review.sub === "extra") {
       // « Un flou est en trop » : le clic retire la zone visée
-      if (hits.length) void removeZone(s.clip.id, hits[0][7], hits[0][6]);
+      if (hits.length) void removeZone(s.clip.id, hits[0][7]);
       else notify("Cliquez directement sur un flou entouré dans l'image.");
       return;
     }
@@ -338,6 +361,7 @@ async function pointerUp(): Promise<void> {
 function onKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
+  if (state.jobOpen) return; // dialogue de progression ouvert : le clavier lui appartient
   const s = current.value;
   if (!s) return;
   if (event.code === "Space") toggle();
@@ -363,7 +387,7 @@ watch(() => [state.seg, state.frame, state.data.version, state.preview, state.se
 watch(() => current.value?.clip.proxy, () => nextTick(sync));
 watch(exact, (value) => (exactLoading.value = !!value));
 watch(rate, (value) => video.value && (video.value.playbackRate = value));
-watch(() => [review.sub, review.current], draw);
+watch(() => [review.sub, review.current, state.showDropped], draw);
 watch([volume, userMuted], () => {
   applyVolume();
   try {
@@ -400,11 +424,11 @@ defineExpose({ toggle, step, pause });
         <div class="frame" :style="{ aspectRatio: `${clip.width} / ${clip.height}` }">
           <video ref="video" playsinline preload="auto" @seeked="draw" @loadeddata="sync" @ended="onEnded"></video>
           <img v-if="exactUrl && !state.playing" class="exact" :src="exactUrl" alt="" @load="exactLoading = false" />
-          <canvas ref="canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"></canvas>
+          <canvas ref="canvas" :data-dropped="state.showDropped ? droppedCount : undefined" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"></canvas>
           <div v-if="!clip.proxy" class="veil"><span class="spinner"></span>Préparation de l'aperçu de ce clip…</div>
           <Transition name="hint">
             <div v-if="state.tool !== 'none'" class="hint tool">
-              {{ state.tool === "dash" ? "Tracez un rectangle autour du compteur" : "Tracez un rectangle sur la zone à flouter" }} — Échap pour annuler
+              {{ state.tool === "dash" ? "Tracez un rectangle autour de l'objet à flouter" : "Tracez un rectangle sur la zone à flouter" }} — Échap pour annuler
             </div>
             <div v-else-if="review.sub === 'extra'" class="hint tool">Cliquez le flou à retirer — Échap pour annuler</div>
             <div v-else-if="exactLoading && exact && !state.playing" class="hint"><span class="spinner small"></span>Chargement de l'image exacte…</div>
@@ -423,6 +447,11 @@ defineExpose({ toggle, step, pause });
         <button class="primary play" title="Lecture / pause (Espace)" @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>
         <button class="icon-btn" title="Image suivante (→)" aria-label="Image suivante" @click="step(1)"><Icon name="stepForward" /></button>
       </span>
+      <select v-model.number="review.speed" class="speed-select" aria-label="Vitesse de l'aperçu" title="Vitesse de l'aperçu (sans effet sur l'export)">
+        <option :value="1">1×</option>
+        <option :value="0.5">0,5×</option>
+        <option :value="0.25">0,25×</option>
+      </select>
       <span class="timecode">
         <span class="clock">{{ formatTime(time) }} <span class="clock-total">/ {{ formatTime(duration) }}</span></span>
         <span v-if="current" class="dim meta" :title="`${current.clip.name} · image ${state.frame} · source ${formatTime(state.frame / current.fps)}`">{{ current.clip.name }} · image {{ state.frame }} · source {{ formatTime(state.frame / current.fps) }}</span>

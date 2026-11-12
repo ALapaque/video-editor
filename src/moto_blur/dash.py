@@ -1,6 +1,7 @@
-"""Floutage du compteur (phase 2).
+"""Floutage du compteur et de tout autre objet désigné à la main (téléphone, GPS…).
 
-Deux modes sont implémentés :
+Chaque objet porte un nom ; plusieurs objets peuvent être suivis dans le même clip, chacun
+indépendamment des autres. Deux modes sont implémentés :
 
 1. Zone fixe : un rectangle donné par ses coordonnées, valable pour tout le clip. Convient à
    une caméra fixée à la moto avec un cadrage constant.
@@ -48,45 +49,77 @@ def dash_span(project: pj.Project, clip: pj.Clip) -> tuple[int, int] | None:
     return (max(clip.video.start_pts, kept[0][0] - pad), min(clip.video.end_pts, kept[-1][1] + pad))
 
 
-def dash_tracks(project: pj.Project, clip: pj.Clip, source: str | None = None) -> list[pj.Track]:
+def object_name(label: str | None) -> str:
+    """Nom normalisé d'un objet suivi (« compteur » par défaut)."""
+    return (label or "").strip()[:40] or pj.DEFAULT_OBJECT
+
+
+def dash_tracks(
+    project: pj.Project, clip: pj.Clip, source: str | None = None, label: str | None = None
+) -> list[pj.Track]:
+    """Pistes d'objets désignés à la main dans un clip, filtrées par origine et par nom."""
     state = project.analysis.get(clip.id)
     if not state:
         return []
-    return [t for t in state.tracks if t.kind == "dash" and (source is None or t.source == source)]
+    return [
+        t for t in state.tracks
+        if t.kind == "dash"
+        and (source is None or t.source == source)
+        and (label is None or t.name == object_name(label))
+    ]
 
 
-def missing_span(project: pj.Project, clip: pj.Clip) -> list[intervals.Interval]:
-    """Parties à suivre qui ne sont pas encore couvertes par le suivi du compteur."""
-    tracked = dash_tracks(project, clip, "tracker")
+def object_names(project: pj.Project, clip: pj.Clip, source: str | None = None) -> list[str]:
+    return list(dict.fromkeys(t.name for t in dash_tracks(project, clip, source)))
+
+
+def missing_span(
+    project: pj.Project, clip: pj.Clip, label: str | None = None
+) -> list[intervals.Interval]:
+    """Parties à suivre que le suivi ne couvre pas encore, pour un objet ou pour tous."""
     span = dash_span(project, clip)
-    if not tracked or span is None:
+    if span is None:
         return []
+    names = [object_name(label)] if label is not None else object_names(project, clip, "tracker")
     step = round(clip.video.frame_pts * 1.5) + 1
-    covered = [(int(t.obs[0][0]) - step, int(t.obs[-1][0]) + step) for t in tracked if t.obs]
-    return intervals.subtract([span], covered)
+    missing: list[intervals.Interval] = []
+    for name in names:
+        tracked = [t for t in dash_tracks(project, clip, "tracker", name) if t.obs]
+        if not tracked:
+            continue
+        covered = [(int(t.obs[0][0]) - step, int(t.obs[-1][0]) + step) for t in tracked]
+        missing += intervals.subtract([span], covered)
+    return intervals.normalize(missing)
 
 
-def set_fixed_zone(project: pj.Project, clip: pj.Clip, box: tuple[int, int, int, int]) -> pj.Track:
-    """Mode 1 : zone fixe sur tout le clip. Remplace toute zone de compteur existante."""
+def set_fixed_zone(
+    project: pj.Project, clip: pj.Clip, box: tuple[int, int, int, int], label: str | None = None
+) -> pj.Track:
+    """Mode 1 : zone fixe sur tout le clip. Remplace les zones existantes du même objet."""
+    name = object_name(label)
     state = project.analysis.setdefault(clip.id, pj.ClipAnalysis())
-    state.tracks = [t for t in state.tracks if t.kind != "dash"]
+    state.tracks = [t for t in state.tracks if not (t.kind == "dash" and t.name == name)]
     x1, y1, x2, y2 = box
     v = clip.video
     track = pj.Track(
         project.next_track_id(), "dash",
         [[v.start_pts, x1, y1, x2, y2, 1.0], [v.end_pts, x1, y1, x2, y2, 1.0]],
-        source="manual",
+        source="manual", label=name,
     )
     state.tracks.append(track)
     return track
 
 
-def clear_dash(project: pj.Project, clip: pj.Clip) -> int:
+def clear_dash(project: pj.Project, clip: pj.Clip, label: str | None = None) -> int:
+    """Supprime les zones d'un objet (ou de tous les objets si aucun nom n'est donné)."""
     state = project.analysis.get(clip.id)
     if not state:
         return 0
     before = len(state.tracks)
-    state.tracks = [t for t in state.tracks if t.kind != "dash"]
+    state.tracks = [
+        t for t in state.tracks
+        if not (t.kind == "dash" and (label is None or t.name == object_name(label)))
+    ]
     return before - len(state.tracks)
 
 
@@ -146,12 +179,15 @@ def track_from_click(
     box: tuple[float, float, float, float],
     direction: str = "both",
     progress: Progress | None = None,
+    label: str | None = None,
 ) -> pj.Track:
-    """Mode 2 : suit le compteur désigné par `box` (x1, y1, x2, y2) sur l'image `seed_pts`.
+    """Mode 2 : suit l'objet désigné par `box` (x1, y1, x2, y2) sur l'image `seed_pts`.
 
     `direction` : "both", "forward" (de ce point vers la fin) ou "backward". Les observations
-    de compteur déjà présentes sur la partie re-suivie sont remplacées.
+    déjà présentes pour le MÊME objet sur la partie re-suivie sont remplacées ; les autres
+    objets du clip ne sont pas touchés.
     """
+    name = object_name(label)
     span = dash_span(project, clip)
     if span is None:
         raise ValueError(f"le clip {clip.id} n'a aucun passage gardé dans le montage.")
@@ -186,33 +222,35 @@ def track_from_click(
     state = project.analysis.setdefault(clip.id, pj.ClipAnalysis())
     kept_tracks = []
     for t in state.tracks:
-        if t.kind == "dash" and t.source == "tracker":
+        same = t.kind == "dash" and t.name == name
+        if same and t.source == "tracker":
             t.obs = [o for o in t.obs if o[0] < lo or o[0] > hi]
             if not t.obs:
                 continue
-        elif t.kind == "dash" and t.source == "manual" and len(t.obs) == 2 and t.obs[0][1:5] == t.obs[1][1:5]:
+        elif same and t.source == "manual" and len(t.obs) == 2 and t.obs[0][1:5] == t.obs[1][1:5]:
             continue  # une zone fixe est remplacée par le suivi
         kept_tracks.append(t)
     state.tracks = kept_tracks
-    track = pj.Track(project.next_track_id(), "dash", obs, source="tracker")
+    track = pj.Track(project.next_track_id(), "dash", obs, source="tracker", label=name)
     state.tracks.append(track)
     return track
 
 
 def extend_tracking(project: pj.Project, clip: pj.Clip, progress: Progress | None = None) -> bool:
-    """Prolonge le suivi du compteur sur les passages gardés ajoutés depuis. Vrai si prolongé."""
+    """Prolonge le suivi de chaque objet sur les passages gardés ajoutés depuis. Vrai si prolongé."""
     done = False
-    for lo, hi in missing_span(project, clip):
-        tracked = [t for t in dash_tracks(project, clip, "tracker") if t.obs]
-        first = min((t.obs[0] for t in tracked), key=lambda o: o[0])
-        last = max((t.obs[-1] for t in tracked), key=lambda o: o[0])
-        if lo >= last[0]:
-            track_from_click(project, clip, int(last[0]), tuple(last[1:5]), "forward", progress)
-        elif hi <= first[0] + clip.video.frame_pts * 2:
-            track_from_click(project, clip, int(first[0]), tuple(first[1:5]), "backward", progress)
-        else:
-            continue
-        done = True
+    for name in object_names(project, clip, "tracker"):
+        for lo, hi in missing_span(project, clip, name):
+            tracked = [t for t in dash_tracks(project, clip, "tracker", name) if t.obs]
+            first = min((t.obs[0] for t in tracked), key=lambda o: o[0])
+            last = max((t.obs[-1] for t in tracked), key=lambda o: o[0])
+            if lo >= last[0]:
+                track_from_click(project, clip, int(last[0]), tuple(last[1:5]), "forward", progress, name)
+            elif hi <= first[0] + clip.video.frame_pts * 2:
+                track_from_click(project, clip, int(first[0]), tuple(first[1:5]), "backward", progress, name)
+            else:
+                continue
+            done = True
     return done
 
 
@@ -235,7 +273,10 @@ def build_dash_review(clip: pj.Clip, tracks: list[pj.Track]) -> list[dict]:
                         "start_pts": int(run[0][0]),
                         "end_pts": int(run[-1][0]),
                         "kinds": ["dash"],
-                        "reasons": [f"suivi du compteur incertain (score {worst:.2f}) : dernière position maintenue"],
+                        "reasons": [
+                            f"suivi de l'objet « {t.name} » incertain (score {worst:.2f}) : "
+                            "dernière position maintenue"
+                        ],
                         "tracks": [t.id],
                     }
                 )

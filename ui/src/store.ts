@@ -2,7 +2,7 @@
 // source de vérité : chaque modification est envoyée au moteur, qui renvoie l'état complet.
 
 import { computed, reactive } from "vue";
-import { call, type Clip, type Range, type ReviewItem, type State, type Track, type ZoneTuple } from "./api";
+import { call, type Clip, type DroppedTuple, type Range, type ReviewItem, type State, type Track, type ZoneTuple } from "./api";
 
 export interface Resolved {
   index: number;
@@ -30,6 +30,10 @@ export const state = reactive({
   toastKind: "info" as "info" | "error",
   zoom: 0, // pixels par seconde ; 0 = ajusté à la largeur
   pendingDash: null as { clip: string; time: number; box: number[] } | null,
+  jobOpen: false, // dialogue de progression ouvert (sinon réduit à l'indicateur de la ligne de guide)
+  jobFinished: false, // traitement terminé pendant que le dialogue était réduit : résultat pas encore lu
+  jobConfirm: false, // ouvrir le dialogue directement sur la confirmation d'annulation
+  showDropped: false, // détections écartées par le score minimal : liste ouverte et contours gris sur la vidéo
   tab: "review" as "review" | "zones" | "settings", // onglet du panneau latéral
   step: 0, // étape du guide choisie à la main (1 à 4) ; 0 = étape déduite de l'état du projet
 });
@@ -153,6 +157,21 @@ export function notify(message: string, kind: "info" | "error" = "info", sticky 
 
 function apply(next: State): void {
   const t = time.value;
+  const was = state.data.job?.state === "running";
+  const now = next.job?.state === "running";
+  if (now && !was) {
+    // nouveau traitement : le dialogue de progression s'ouvre, même s'il avait été réduit avant
+    state.jobOpen = true;
+    state.jobFinished = false;
+  } else if (was && !now && next.job) {
+    // un aperçu prêt n'a rien à dire : son dialogue se ferme seul ; sinon le résultat reste affiché,
+    // ou attend dans l'indicateur si le dialogue était réduit
+    if (next.job.kind === "proxy" && next.job.state === "done") state.jobOpen = false;
+    else if (!state.jobOpen) state.jobFinished = true;
+  } else if (!next.job) {
+    state.jobOpen = false;
+    state.jobFinished = false;
+  }
   state.data = next;
   if (next.project) seekTime(t); // la tête reste au même instant du montage
 }
@@ -176,7 +195,8 @@ export async function refresh(): Promise<void> {
     apply(next);
     state.loaded = true;
     const job = next.job;
-    if (before === "running" && job && job.state !== "running" && job.message) {
+    // dialogue de progression ouvert : il affiche lui-même le résultat ; réduit : message habituel
+    if (before === "running" && job && job.state !== "running" && job.message && !state.jobOpen) {
       notify(job.message, job.state === "error" ? "error" : "info", true); // reste affiché jusqu'au clic
     }
     if (next.project && !job?.state.startsWith("run") && next.project.clips.some((c) => !c.proxy && !c.missing)) {
@@ -324,6 +344,56 @@ export function zonesNow(clip: string, frame: number, onLoad?: () => void): Zone
   });
   return undefined;
 }
+
+// Détections écartées par le score minimal : absentes des zones de flou, demandées à part et
+// seulement quand l'utilisateur veut les voir.
+const droppedCache = new Map<string, Record<string, DroppedTuple[]> | Promise<void>>();
+
+/** Détections écartées sur l'image `frame`, si elles sont déjà chargées ; sinon lance le chargement. */
+export function droppedNow(clip: string, frame: number, onLoad?: () => void): DroppedTuple[] | undefined {
+  const index = Math.floor(frame / CHUNK);
+  const key = `${state.data.version}:${clip}:${index}`;
+  const loaded = droppedCache.get(key);
+  if (loaded && !(loaded instanceof Promise)) return loaded[String(frame)] ?? [];
+  if (!loaded) {
+    if (droppedCache.size > 40) droppedCache.clear();
+    const from = index * CHUNK;
+    droppedCache.set(
+      key,
+      call<{ dropped?: Record<string, DroppedTuple[]> }>("GET", `/api/zones?clip=${clip}&from=${from}&to=${from + CHUNK - 1}&dropped=1`)
+        .then((r) => {
+          droppedCache.set(key, r.dropped ?? {});
+          onLoad?.();
+        })
+        .catch(() => void droppedCache.delete(key)),
+    );
+  }
+  return undefined;
+}
+
+/** Nom de chaque objet désigné à la main (catégorie « dash »), par clip et numéro de piste. */
+export const objectNames = computed(() => {
+  const names = new Map<string, string>();
+  for (const [clip, tracks] of Object.entries(project.value?.tracks ?? {})) {
+    for (const t of tracks) if (t.kind === "dash") names.set(`${clip}:${t.id}`, t.name);
+  }
+  return names;
+});
+
+/** Pistes du clip affiché présentes à l'image courante (prolongations comprises). */
+export const tracksNow = computed<Track[]>(() => {
+  const s = current.value;
+  if (!s || !project.value) return [];
+  const t = state.frame / s.fps;
+  const general = Number(project.value.settings.blur.extend_s ?? 0.3);
+  return (project.value.tracks[s.clip.id] ?? []).filter((tr) => {
+    const before = tr.source === "manual" ? 0 : (tr.extend_before_s ?? general);
+    const after = tr.source === "manual" ? 0 : (tr.extend_after_s ?? general);
+    return t >= tr.start - before - 0.05 && t <= tr.end + after + 0.05;
+  });
+});
+/** Parmi elles, les détections écartées par le score minimal. */
+export const droppedHere = computed(() => tracksNow.value.filter((tr) => tr.below_min_score && !tr.disabled).sort((a, b) => b.best_score - a.best_score));
 
 export function trackById(clip: string, id: number): Track | undefined {
   return project.value?.tracks[clip]?.find((t) => t.id === id);
