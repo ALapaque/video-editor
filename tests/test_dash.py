@@ -3,6 +3,7 @@
 import shutil
 import urllib.error
 
+import numpy as np
 import pytest
 
 from conftest import FakeDetector, detail, make_project, make_video, object_box, read_frames
@@ -49,7 +50,7 @@ def test_click_tracking_follows_the_object_both_ways(project, tmp_path, tracker_
     analyze_project(project, detect_fn=empty_detector())
     clip = project.clips[0]
     seed = clip.video.start_pts + round(45 * clip.video.frame_pts)
-    track = dash.track_from_click(project, clip, seed, object_box(45))
+    (track,) = dash.track_from_click(project, clip, seed, object_box(45))
     assert len(track.obs) == 90 and track.source == "tracker"
     for i, o in enumerate(track.obs):
         x1, y1, x2, y2 = object_box(i)
@@ -145,3 +146,92 @@ def test_lost_tracking_reason_names_the_object(project):
     state.tracks.append(pj.Track(1, "dash", obs, source="tracker", label="téléphone"))
     (item,) = dash.build_dash_review(clip, state.tracks)
     assert "« téléphone »" in item["reasons"][0]
+
+
+# --- Changements de plan ---------------------------------------------------------
+
+
+@pytest.fixture
+def shots(tmp_path):
+    from conftest import make_shots_video
+
+    path, truth = make_shots_video(tmp_path / "plans.mp4")
+    project = make_project(tmp_path, path)
+    analyze_project(project, detect_fn=empty_detector())
+    return project, truth
+
+
+def _iou(a, b):
+    x1, y1, x2, y2 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    area = lambda r: (r[2] - r[0]) * (r[3] - r[1])  # noqa: E731
+    return inter / max(1, area(a) + area(b) - inter)
+
+
+def test_shot_changes_are_detected_and_continuous_motion_is_not():
+    import cv2
+
+    from conftest import gauge_image
+
+    rng = np.random.default_rng(0)
+    base = cv2.resize(rng.integers(0, 255, (45, 80, 3)).astype(np.uint8), (640, 360))
+    moved = np.roll(base, (3, 5), axis=(0, 1))
+    darker = (base * 0.85).astype(np.uint8)
+    other = cv2.resize(rng.integers(0, 255, (45, 80, 3)).astype(np.uint8), (640, 360))
+    other[..., 0] = 220
+    assert not dash.is_cut(base, moved)
+    assert not dash.is_cut(base, darker)  # nuage, tunnel : la lumière change sans coupe
+    assert dash.is_cut(base, other)
+    assert gauge_image().shape == (80, 120, 3)
+
+
+def test_tracking_stops_at_a_cut_finds_the_object_again_and_never_follows_the_mirror(shots, tracker_available):
+    project, truth = shots
+    clip = project.clips[0]
+    f = clip.video.frame_pts
+    tracks = dash.track_from_click(project, clip, round(10 * f), truth[10])
+    by_frame = {round(o[0] / f): o for t in tracks for o in t.obs}
+    # plan A : suivi correct
+    assert all(_iou(by_frame[i][1:5], truth[i]) > 0.6 for i in range(0, 30)), "plan A"
+    # plan B : jamais sur le rétroviseur (à l'ancienne place), retrouvé au bon endroit
+    mirror = (78, 242, 202, 318)
+    assert all(_iou(by_frame[i][1:5], mirror) < 0.2 for i in range(30, 60) if i in by_frame)
+    found = [t for t in tracks if t.reacquired_at is not None]
+    assert len(found) == 1 and round(found[0].reacquired_at / f) <= 34
+    assert all(_iou(by_frame[i][1:5], truth[i]) > 0.5 for i in range(35, 60)), "plan B"
+    # plan C : rien n'est flouté à l'aveugle
+    assert not any(i in by_frame for i in range(61, 90))
+    # pas de flou prolongé de part et d'autre des coupes
+    first = next(t for t in tracks if t.reacquired_at is None)
+    assert first.extend_after_s == 0.0 and found[0].extend_before_s == 0.0 and found[0].extend_after_s == 0.0
+    from moto_blur.postprocess import ZoneIndex
+
+    index = ZoneIndex(project.analysis[clip.id].tracks, project.blur_settings, clip.video)
+    # juste après la coupe : aucun flou à l'ancienne place du compteur, un seul sur sa nouvelle place
+    zones = index.shaped(round(31 * f))
+    assert all(_iou(z.box, truth[29]) < 0.05 for z in zones)
+    assert len(zones) == 1 and _iou(zones[0].box, truth[31]) > 0.5
+    assert not index.shaped(round(70 * f))
+    # vérification : objet retrouvé, puis objet non suivi
+    reasons = [r for item in dash.build_dash_review(clip, project.analysis[clip.id].tracks) for r in item["reasons"]]
+    assert any(r.startswith("objet « compteur » retrouvé automatiquement") for r in reasons)
+    assert any(r.startswith("objet « compteur » non suivi") for r in reasons)
+    # le rendu n'est pas bloqué par le plan sans compteur
+    assert dash.missing_span(project, clip) == []
+    assert "retrouvé automatiquement 1 fois" in dash.describe("compteur", tracks, clip)
+
+
+def test_designating_again_corrects_only_that_shot(shots, tracker_available):
+    project, truth = shots
+    clip = project.clips[0]
+    f = clip.video.frame_pts
+    dash.track_from_click(project, clip, round(10 * f), truth[10])
+    before = {round(o[0] / f): o[1:5] for t in dash.dash_tracks(project, clip, "tracker") for o in t.obs if o[0] < 30 * f}
+    # nouvelle désignation dans le plan B : seul le plan B est re-suivi
+    created = dash.track_from_click(project, clip, round(45 * f), truth[45])
+    frames = sorted(round(o[0] / f) for t in created for o in t.obs)
+    assert frames[0] >= 30 and frames[-1] <= 59
+    after = {round(o[0] / f): o[1:5] for t in dash.dash_tracks(project, clip, "tracker") for o in t.obs if o[0] < 30 * f}
+    assert after == before
+    covered = {round(o[0] / f) for t in dash.dash_tracks(project, clip, "tracker") for o in t.obs}
+    assert set(range(30, 60)) <= covered

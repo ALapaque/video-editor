@@ -315,3 +315,12 @@ def test_reveal_opens_the_folder_of_a_project_file_only(api, tmp_path, monkeypat
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(server.subprocess, "Popen", missing)
     assert status({"path": str(output)}) == 500
+
+
+def test_dash_scope_is_validated_and_min_hits_is_a_setting(api):
+    with pytest.raises(urllib.error.HTTPError) as error:
+        api("POST", "/api/dash", {"clip": "c1", "mode": "track", "time": 0, "box": [10, 10, 60, 40], "scope": "tout"})
+    assert error.value.code == 400
+    state = api("PUT", "/api/settings", {"blur": {"min_hits": 1}})
+    assert state["project"]["settings"]["blur"]["min_hits"] == 1
+    assert pj.load(api.project.path).blur_settings.min_hits == 1

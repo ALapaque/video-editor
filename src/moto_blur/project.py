@@ -120,7 +120,7 @@ class AnalysisSettings:
 @dataclass
 class BlurSettings:
     # Marge ajoutée autour de chaque boîte, en fraction de sa taille, de chaque côté.
-    margin: float = 0.30
+    margin: float = 0.20
     min_margin_px: int = 6
     # Prolongation du flou avant l'apparition et après la disparition (secondes).
     extend_s: float = 0.30
@@ -146,6 +146,11 @@ class BlurSettings:
     # Fusionner les flous qui se recouvrent (un même objet pris pour un visage ET une plaque,
     # ou une détection à l'intérieur d'un objet suivi) : un seul flou au lieu de deux ou trois.
     merge_overlaps: bool = True
+    # Nombre d'images où une détection doit atteindre le score minimal pour être floutée. Un vrai
+    # visage ou une vraie plaque reste plusieurs images à l'écran ; une fausse détection
+    # (feuillage, reflet, carénage) clignote. Exception : une détection très nette (score
+    # minimal + 0,25) suffit seule.
+    min_hits: int = 3
     face_min_score: float = 0.40
     plate_min_score: float = 0.25
 
@@ -176,6 +181,12 @@ class Track:
     # Nom de l'objet suivi ou de la zone fixe (catégorie "dash") : « compteur », « téléphone »…
     # Les pistes de même nom dans un clip forment un seul objet. Vide = « compteur ».
     label: str = ""
+    # Suivi d'objet : PTS de l'image où l'objet a été retrouvé par recherche automatique (après un
+    # changement de plan ou une perte), à faire confirmer à la vérification. None sinon.
+    reacquired_at: int | None = None
+    # Suivi d'objet : intervalle de PTS [début, fin] que la passe de suivi a parcouru, objet
+    # trouvé ou non. Sert à distinguer « pas encore suivi » de « suivi mais objet perdu ».
+    span: list[int] | None = None
 
     @property
     def name(self) -> str:
@@ -289,6 +300,10 @@ def _track_to_json(t: Track) -> str:
         doc["extend_after_s"] = t.extend_after_s
     if t.label:
         doc["label"] = t.label
+    if t.reacquired_at is not None:
+        doc["reacquired_at"] = int(t.reacquired_at)
+    if t.span is not None:
+        doc["span"] = [int(t.span[0]), int(t.span[1])]
     doc["obs"] = obs
     return json.dumps(doc, separators=(",", ":"))
 
@@ -354,7 +369,7 @@ def load(path: Path) -> Project:
             Track(
                 t["id"], t["kind"], t["obs"], t.get("source", "auto"), t.get("disabled", False),
                 t.get("forced", False), t.get("extend_before_s"), t.get("extend_after_s"),
-                t.get("label", ""),
+                t.get("label", ""), t.get("reacquired_at"), t.get("span"),
             )
             for t in a.get("tracks", [])
         ]

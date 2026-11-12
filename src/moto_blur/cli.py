@@ -109,7 +109,7 @@ def _apply_settings(project: pj.Project, args: argparse.Namespace) -> None:
         a.kinds = [args.only]
     if getattr(args, "conform", None):
         project.conform = args.conform
-    for name in ("margin", "extend_s", "style", "face_min_score", "plate_min_score"):
+    for name in ("margin", "extend_s", "style", "face_min_score", "plate_min_score", "min_hits"):
         value = getattr(args, name, None)
         if value is not None:
             setattr(b, name, value)
@@ -211,10 +211,9 @@ def cmd_dash(args: argparse.Namespace) -> int:
         total = round((span[1] - span[0]) * clip.video.tb * clip.video.fps_fraction)
         name = dash.object_name(args.name)
         progress = Progress(f"Suivi de « {name} » {clip.id}", total, float(clip.video.fps_fraction))
-        track = dash.track_from_click(project, clip, seed, box, args.direction, progress, name)
+        tracks = dash.track_from_click(project, clip, seed, box, args.direction, progress, name, args.scope)
         print(progress.close())
-        lost = sum(1 for o in track.obs if o[5] < dash.LOST_SCORE)
-        print(f"« {name} » suivi sur {len(track.obs)} images ; suivi incertain sur {lost} image(s).")
+        print(dash.describe(name, tracks, clip))
     refresh_review(project)
     pj.save(project)
     _write_report(project)
@@ -313,6 +312,7 @@ def _add_render_options(p: argparse.ArgumentParser) -> None:
     g.add_argument("--conform", choices=["first", "largest"], help="clips de formats différents : aligner sur le premier clip, ou sur la plus grande résolution et fréquence")
     g.add_argument("--margin", type=float, help="marge autour des zones, en fraction de leur taille (défaut 0.30)")
     g.add_argument("--extend-s", type=float, help="prolongation du flou avant et après l'objet, en secondes (défaut 0.30)")
+    g.add_argument("--min-hits", type=int, help="nombre d'images où une détection doit atteindre le score minimal pour être floutée (défaut 3)")
     g.add_argument("--face-min-score", type=float, help="score minimal qu'un visage doit atteindre pour être flouté (défaut 0.40)")
     g.add_argument("--plate-min-score", type=float, help="score minimal qu'une plaque doit atteindre pour être floutée (défaut 0.25)")
     g.add_argument("--style", choices=["pixelate", "solid"], help="type de flou (défaut pixelate)")
@@ -362,6 +362,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--at", type=parse_time, metavar="TEMPS", help="instant (temps source) de l'image où le rectangle est donné (défaut : début)")
     p.add_argument("--clip", help="identifiant du clip (défaut : le premier)")
     p.add_argument("--name", metavar="NOM", help="nom de l'objet : compteur (défaut), téléphone, GPS… Chaque nom est suivi séparément")
+    p.add_argument("--scope", choices=["auto", "all", "shot"], default="auto",
+                   help="all : tout le clip, en retrouvant l'objet après chaque changement de plan ; "
+                   "shot : seulement le plan de l'image donnée (correction) ; auto (défaut) : shot si l'objet est déjà suivi")
     p.add_argument("--fixed", action="store_true", help="zone fixe sur tout le clip, sans suivi")
     p.add_argument("--direction", choices=["both", "forward", "backward"], default="both", help="sens du suivi à partir de l'image donnée")
     p.add_argument("--clear", action="store_true", help="supprimer les zones de l'objet nommé (ou de tous les objets sans --name)")

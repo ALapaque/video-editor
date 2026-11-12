@@ -8,7 +8,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { call } from "../api";
 import {
   addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, forceZone,
-  leave, markEntries, missing, next, pending, previous, relocate, replay, restoreZone, resume, review, startQueue, startSweep,
+  leave, markEntries, missing, next, objectHere, pending, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue, startSweep,
   validate,
 } from "../review";
 import {
@@ -705,10 +705,10 @@ onBeforeUnmount(() => {
               <button v-for="n in quickNames" :key="n" class="big" :class="{ on: !customName.trim() && objectName === n }" :aria-pressed="!customName.trim() && objectName === n" @click="objectName = n, customName = ''">{{ capital(n) }}</button>
               <input v-model="customName" type="text" maxlength="40" spellcheck="false" placeholder="Autre nom" aria-label="Nom de l'objet" />
             </div>
-            <p v-if="replaces" class="wiz-note shown"><Icon name="info" />« {{ capital(chosenName) }} » existe déjà : il sera remplacé.</p>
+            <p v-if="replaces" class="wiz-note shown"><Icon name="info" />« {{ capital(chosenName) }} » existe déjà : son suivi sera corrigé sur ce plan seulement.</p>
             <h2>L'objet bouge-t-il dans l'image ?</h2>
             <div class="wiz-answers">
-              <button class="big answer" :disabled="!chosenName" data-answer="track" @click="designate('track')"><span><strong>Oui</strong><small>Le logiciel le suivra tout au long de la vidéo.</small></span></button>
+              <button class="big answer" :disabled="!chosenName" data-answer="track" @click="designate('track')"><span><strong>Oui</strong><small>Le logiciel le suivra tout au long de la vidéo, et le retrouvera après chaque changement de plan.</small></span></button>
               <button class="big answer" :disabled="!chosenName" data-answer="fixed" @click="designate('fixed')"><span><strong>Non, il reste au même endroit</strong><small>Par exemple si la caméra est fixée à la moto.</small></span></button>
             </div>
           </template>
@@ -846,6 +846,11 @@ onBeforeUnmount(() => {
               </div>
               <div class="wiz-actions"><button class="big" data-cancel-sub @click="resume">Annuler</button></div>
             </template>
+            <template v-else-if="review.sub === 'object'">
+              <h1>Entourez « {{ objectHere }} »</h1>
+              <p class="wiz-lead">Sur la vidéo : cliquez, glissez, relâchez autour de « {{ objectHere }} ». Le logiciel le suivra de nouveau à partir d'ici, jusqu'au prochain changement de plan.</p>
+              <div class="wiz-actions"><button class="big" data-cancel-sub @click="resume">Annuler</button></div>
+            </template>
             <template v-else-if="review.sub === 'extra'">
               <h1>Cliquez sur le flou en trop</h1>
               <p class="wiz-lead">Sur la vidéo, les flous sont entourés. Celui que vous cliquez sera retiré ; vous pourrez le rétablir juste après.</p>
@@ -857,6 +862,7 @@ onBeforeUnmount(() => {
               <p v-for="r in reasons" :key="r" class="wiz-lead">{{ r }}</p>
               <div class="wiz-actions column">
                 <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />{{ entry.type === "doubt" ? "Oui, c'est bon" : "C'est réglé" }}</button>
+                <button v-if="objectHere" class="big" :disabled="busy" @click="showObject"><Icon name="target" :size="18" />Montrer « {{ objectHere }} » ici</button>
                 <button class="big" :disabled="busy" @click="missing">Il manque un flou</button>
                 <button class="big" :disabled="busy" @click="extra">Un flou est en trop</button>
                 <button class="big quiet" :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>

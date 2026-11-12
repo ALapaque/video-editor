@@ -605,6 +605,9 @@ class Engine:
             return
         seed = sec_to_pts(float(body["time"]), clip.video, "floor")
         direction = body.get("direction", "both")
+        scope = body.get("scope", "auto")
+        if scope not in ("auto", "all", "shot"):
+            raise ApiError("portée de suivi inconnue.")
 
         def work(job: Job) -> str:
             span = dash.dash_span(project, clip)
@@ -612,11 +615,10 @@ class Engine:
                 raise ApiError("ce clip n'a aucun passage gardé.")
             total = round((span[1] - span[0]) * clip.video.tb * clip.video.fps_fraction)
             p = progress.Progress(f"Suivi : {name}", total, float(clip.video.fps_fraction))
-            track = dash.track_from_click(project, clip, seed, box, direction, p, name)
+            tracks = dash.track_from_click(project, clip, seed, box, direction, p, name, scope)
             refresh_review(project)
             pj.save(project)
-            lost = sum(1 for o in track.obs if o[5] < dash.LOST_SCORE)
-            return f"« {name} » suivi sur {len(track.obs)} images, incertain sur {lost}."
+            return dash.describe(name, tracks, clip)
 
         self.start("dash", f"Suivi : {name}", work)
 
