@@ -63,18 +63,38 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
             + (f" ({d.note})" if d.note else "")
         )
 
-    # Avec une carte graphique, les deux modèles travaillent en même temps, chacun dans son fil
-    # d'exécution : la préparation des tuiles (processeur) de l'un recouvre le calcul (carte
-    # graphique) de l'autre. Sur processeur seul, ils se gêneraient : ils passent l'un après l'autre.
-    on_gpu = any(d.provider != "CPUExecutionProvider" for d in detectors.values())
-    pool = ThreadPoolExecutor(max_workers=len(detectors)) if on_gpu and len(detectors) > 1 else None
+    def one_by_one(rgb: np.ndarray) -> dict[str, np.ndarray]:
+        return {kind: d.detect(rgb) for kind, d in detectors.items()}
 
-    def detect(rgb: np.ndarray) -> dict[str, np.ndarray]:
-        if pool is None:
-            return {kind: d.detect(rgb) for kind, d in detectors.items()}
+    # Avec une carte graphique, faire travailler les deux modèles en même temps (chacun dans son
+    # fil d'exécution) peut aller plus vite... ou moins vite, selon la carte et son pilote. On
+    # chronomètre donc les deux façons sur une image d'essai et on garde la plus rapide.
+    on_gpu = any(d.provider != "CPUExecutionProvider" for d in detectors.values())
+    if not on_gpu or len(detectors) < 2:
+        return one_by_one, notes
+    pool = ThreadPoolExecutor(max_workers=len(detectors))
+
+    def together(rgb: np.ndarray) -> dict[str, np.ndarray]:
         jobs = {kind: pool.submit(d.detect, rgb) for kind, d in detectors.items()}
         return {kind: job.result() for kind, job in jobs.items()}
 
+    def timed(fn: DetectFn) -> float:
+        best = float("inf")
+        for i in range(3):
+            t0 = time.perf_counter()
+            fn(sample)
+            if i:
+                best = min(best, time.perf_counter() - t0)
+        return best
+
+    sample = np.random.default_rng(0).integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)
+    alone, both = timed(one_by_one), timed(together)
+    detect = together if both < 0.95 * alone else one_by_one
+    chosen = "en parallèle" if detect is together else "l'un après l'autre"
+    notes.append(
+        f"  par image : {1000 * alone:.0f} ms l'un après l'autre, {1000 * both:.0f} ms en parallèle "
+        f"-> {chosen}"
+    )
     return detect, notes
 
 
