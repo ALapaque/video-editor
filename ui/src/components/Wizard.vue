@@ -4,33 +4,45 @@
 // enregistrement. L'assistant ne garde presque rien : l'écran affiché à l'ouverture d'un projet
 // est déduit de l'état du projet, et tout ce qu'il fait passe par les mêmes appels au moteur
 // que le mode avancé. Passer d'un mode à l'autre ne perd donc rien.
+// Tout ce qui est facultatif (réglages habituels, type de vidéo, planche des flous, extrait
+// d'essai…) se passe d'un clic sur le bouton principal : le chemin court mène toujours à la vidéo.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { call } from "../api";
+import { call, type ExportPreset, type Job, type Preset, type RenderOptions, type Track } from "../api";
 import {
-  addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, forceZone,
-  leave, markEntries, missing, next, objectHere, pending, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue, startSweep,
+  exportPresets, followBlur, formatDuration, installDrop, measureEstimate, presetInfo, render, renderExtract, saveProfile,
+  saveSweep, setPreset, setTracksDisabled, thumbUrl, undo,
+} from "../extras";
+import {
+  addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone,
+  leave, markEntries, next, objectHere, pending, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue, startSweep,
   validate,
 } from "../review";
 import {
-  busy, droppedHere, duration, fpsOf, job, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send, setMode,
-  start, state, time,
+  busy, current, droppedHere, duration, fpsOf, job, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send, setMode,
+  start, state, time, trackById,
 } from "../store";
-import { wiz, type Screen } from "../wizard";
+import { clock, dayText, droppedFile, wiz, type Screen } from "../wizard";
 import FilePicker from "./FilePicker.vue";
-import Icon from "./Icon.vue";
+import Icon, { type IconName } from "./Icon.vue";
 import Logo from "./Logo.vue";
 import Player from "./Player.vue";
+import RecentList from "./RecentList.vue";
+import StorageDialog from "./StorageDialog.vue";
 import TrimBar from "./TrimBar.vue";
 import WizProgress from "./WizProgress.vue";
+import WizSheet from "./WizSheet.vue";
+import WizThumb from "./WizThumb.vue";
 import WizTime from "./WizTime.vue";
 
 const steps = ["Vidéo", "Quoi flouter", "Couper", "Analyse", "Vérification", "Enregistrer"];
-const stepOf: Record<Screen, number> = { video: 1, what: 2, object: 2, trim: 3, analyse: 4, verify: 5, export: 6, done: 7 };
+const stepOf: Record<Screen, number> = { video: 1, profile: 2, what: 2, object: 2, trim: 3, type: 4, analyse: 4, verify: 5, export: 6, done: 7 };
 const step = computed(() => stepOf[wiz.screen]);
 
 const picker = ref(false);
+const storageOpen = ref(false);
 const p = computed(() => project.value);
 const running = computed(() => (busy.value ? (job.value?.kind ?? "") : ""));
+let alive = true; // l'assistant est à l'écran (faux après un passage en mode avancé)
 
 // --- Mots simples -------------------------------------------------------------
 function human(t: number): string {
@@ -52,6 +64,27 @@ function capital(name: string): string {
 function list(words: string[]): string {
   return words.length > 1 ? `${words.slice(0, -1).join(", ")} et ${words[words.length - 1]}` : (words[0] ?? "");
 }
+/** Ponctuation française d'un texte venu d'ailleurs (couche commune, moteur) : espaces insécables. */
+function nb(text: string): string {
+  return text.replace(/ ([:;?!»])/g, "\u00a0$1").replace(/« /g, "«\u00a0");
+}
+function sleep(ms: number): Promise<void> {
+  return new Promise((done) => window.setTimeout(done, ms));
+}
+
+// --- Traitements lancés par l'assistant --------------------------------------------
+/** Attend la fin du traitement `kind` en cours ; renvoie son état final (null si l'assistant a été quitté). */
+async function waitJob(kind: string): Promise<Job | null> {
+  while (alive && busy.value && job.value?.kind === kind) await sleep(120);
+  return alive && job.value?.kind === kind ? job.value : null;
+}
+/** Lance un traitement et attend sa fin. Renvoie null s'il n'a pas démarré (le message est déjà affiché). */
+async function runJob(kind: string, launch: () => Promise<void>): Promise<Job | null> {
+  const before = state.data;
+  await launch();
+  if (state.data === before || job.value?.kind !== kind) return null;
+  return waitJob(kind);
+}
 
 // --- Position de l'assistant ----------------------------------------------------
 const clips = computed(() => p.value?.clips ?? []);
@@ -69,14 +102,22 @@ const objects = computed(() => {
   return out;
 });
 const hasTracks = computed(() => Object.values(p.value?.tracks ?? {}).some((l) => l.length > 0));
+/** Réglages habituels enregistrés sur cet ordinateur (profil « ma moto »), s'il y en a. */
+const profile = computed(() => state.data.profile ?? null);
+/** Vidéo toute neuve (rien d'analysé, aucun objet désigné) et réglages habituels enregistrés : on propose de les reprendre. */
+const profileOffered = computed(() => !!profile.value && !!p.value && !hasTracks.value && needsAnalysis.value && wiz.profileAsked !== p.value.path);
+function firstQuestion(): Screen {
+  return profileOffered.value ? "profile" : "what";
+}
 
 /** Écran où reprendre, déduit de l'état du projet. */
 function derive(): Screen {
   if (!p.value) return "video";
   if (running.value === "analyze") return "analyse";
   if (running.value === "render") return "export";
-  if (needsAnalysis.value) return hasTracks.value ? "analyse" : "what";
-  if (!kinds.value.length && !hasTracks.value) return "what"; // rien de choisi encore
+  if (running.value === "profile") return "profile";
+  if (needsAnalysis.value) return hasTracks.value ? "analyse" : firstQuestion();
+  if (!kinds.value.length && !hasTracks.value) return firstQuestion(); // rien de choisi encore
   return pending.value > 0 ? "verify" : "export";
 }
 
@@ -92,9 +133,12 @@ function sync(): void {
     wiz.path = p.value.path;
     wiz.launched = false;
     wiz.output = "";
+    wiz.extract = "";
+    wiz.sheetDue = false;
+    wiz.format = "source";
     const target = derive();
     show(target);
-    if (target !== "what") notify("Ce projet existait déjà : vous reprenez là où vous en étiez.");
+    if (target !== "what" && target !== "profile") notify("Ce projet existait déjà : vous reprenez là où vous en étiez.");
   } else if ((wiz.screen === "verify" || wiz.screen === "export") && needsAnalysis.value && !busy.value) {
     show("analyse"); // le montage a changé (en mode avancé) : il faut analyser avant de vérifier
   } else enter();
@@ -109,48 +153,59 @@ function show(screen: Screen): void {
 
 /** Quitte l'écran affiché : lecture arrêtée, outils rangés, vérification guidée fermée. */
 function quit(): void {
+  stopSweep(); // la relecture en cours retient où elle s'arrête
   player.pause();
   state.tool = "none";
   state.pendingDash = null;
   state.loopRange = null;
   state.showDropped = false;
   if (review.mode !== "home") leave();
+  if (review.speed > 1) review.speed = 1; // le 2× ne sert qu'à la relecture complète
   window.clearTimeout(advanceTimer);
   finished.value = false;
   revealError.value = "";
+  queued.value = false;
+  refused.value = null;
 }
 
 function enter(): void {
   state.preview = "blur";
   switch (wiz.screen) {
+    case "profile": return initProfile();
     case "what": return initWhat();
     case "object": return objects.value.length ? showObjects() : startDraw();
     case "trim": return initTrim();
+    case "type": return initType();
+    case "analyse": return void (measureFailed.value = false);
     case "verify": return initVerify();
     case "export": return initExport();
   }
 }
 
 // pas de retour pendant un traitement (ni pendant l'instant où le suivi démarre)
-const canBack = computed(() => wiz.screen !== "video" && !busy.value && !(wiz.screen === "object" && osub.value === "tracking"));
+const canBack = computed(() => wiz.screen !== "video" && !busy.value && !(wiz.screen === "object" && osub.value === "tracking") && !following.value);
 function afterTrim(): Screen {
+  if (kinds.value.length) return "type"; // visages ou plaques à chercher : quel type de vidéo ?
   return needsAnalysis.value ? "analyse" : "verify";
 }
 function back(): void {
   if (!canBack.value) return;
   switch (wiz.screen) {
+    case "profile": return show("video");
     case "what": return show("video");
     case "object":
       if (osub.value === "name") return startDraw();
       if (osub.value === "draw" && objects.value.length) return showObjects();
       return show("what");
     case "trim": return show(objects.value.length ? "object" : "what");
-    case "analyse": return show("trim");
+    case "type": return show("trim");
+    case "analyse": return show(kinds.value.length ? "type" : "trim");
     case "verify":
+      if (vphase.value === "sheet" && sheetFrom.value === "intro") { vphase.value = "intro"; return; }
       if (vphase.value === "queue" && review.sub !== "ask") return resume();
       if (vphase.value === "queue" && currentIndex.value > 0) return previous();
-      if (vphase.value === "sweep") { leave(); vphase.value = "ask"; return; }
-      if (vphase.value !== "intro" && (doubtEntries.value.length || markEntries.value.length)) { leave(); vphase.value = "intro"; return; }
+      if (vphase.value === "sweep") { stopSweep(); leave(); vphase.value = "ask"; return; }
+      if (vphase.value !== "intro" && vphase.value !== "sheet" && (doubtEntries.value.length || markEntries.value.length)) { leave(); vphase.value = "intro"; return; }
       return show(needsAnalysis.value ? "analyse" : "trim");
     case "export": return show("verify");
     case "done": return show("export");
@@ -163,6 +218,28 @@ function toAdvanced(): void {
   setMode("advanced");
 }
 
+// --- Annuler la dernière action ---------------------------------------------------------
+// Le bouton de l'en-tête et Ctrl+Z (branché dans l'application) passent par le même appel ;
+// l'écran affiché se recale ensuite sur ce que l'annulation a remis.
+function reconcile(): void {
+  if (!p.value || busy.value) return;
+  if ((wiz.screen === "verify" || wiz.screen === "export" || wiz.screen === "done") && needsAnalysis.value) return show("analyse");
+  if (wiz.screen === "trim") return initTrim();
+  if (wiz.screen === "what") return initWhat();
+  if (wiz.screen === "object" && osub.value === "result") {
+    if (fresh.value && !objects.value.some((o) => o.name === fresh.value?.name && o.clip === fresh.value?.clip)) fresh.value = null;
+    if (!objects.value.length) startDraw();
+  }
+  if (wiz.screen === "verify" && vphase.value === "queue") {
+    review.removed = review.removed.filter((r) => trackById(r.clip, r.id)?.disabled);
+    refused.value = null;
+    if (!currentEntry.value && review.sub === "ask") relocate();
+  }
+}
+watch(() => state.data, (data) => {
+  if (data.undone || data.redone) void nextTick(reconcile);
+});
+
 // --- 1. Vidéo ---------------------------------------------------------------------
 async function picked(path: string): Promise<void> {
   picker.value = false;
@@ -173,6 +250,90 @@ async function picked(path: string): Promise<void> {
 }
 function retryPreview(): void {
   void start("/api/proxies");
+}
+
+// Glisser-déposer : l'application installée donne les chemins des fichiers déposés sur la fenêtre.
+const dropAsk = ref(""); // fichier déposé alors qu'une vidéo est en cours : on demande avant d'ouvrir
+function dropped(paths: string[]): void {
+  const file = droppedFile(paths);
+  if (!file) return notify("Déposez une vidéo (mp4, mov…) pour l'ouvrir.");
+  if (busy.value) return notify("Un traitement est en cours : attendez sa fin pour ouvrir une autre vidéo.");
+  picker.value = false;
+  storageOpen.value = false;
+  if (!p.value || wiz.screen === "video" || wiz.screen === "done") void picked(file);
+  else dropAsk.value = file;
+}
+function confirmDrop(): void {
+  const file = dropAsk.value;
+  dropAsk.value = "";
+  if (file) void picked(file);
+}
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+/** Sans assistant à l'écran (mode avancé), un fichier déposé s'ouvre simplement. */
+async function openDropped(paths: string[]): Promise<void> {
+  const file = droppedFile(paths);
+  if (file && (await send("POST", "/api/open", { path: file }))) await refresh();
+}
+let dropTarget: ((paths: string[]) => void) | null = null;
+function listenDrop(): void {
+  dropTarget = dropped;
+  const handler = (paths: string[]): void => (dropTarget ? dropTarget(paths) : void openDropped(paths));
+  if (!wiz.dropReady) {
+    wiz.dropReady = true;
+    installDrop(handler); // une seule fois : pose aussi les écouteurs de la fenêtre
+  } else (window as unknown as { motoBlurDrop: (paths: string[]) => void }).motoBlurDrop = handler; // repris après un passage en mode avancé
+}
+
+// --- 1 bis. Reprendre vos réglages habituels ? -------------------------------------------
+const psub = ref<"ask" | "running" | "result">("ask");
+const profileNotes = ref<{ text: string; ok: boolean }[]>([]);
+const profileError = ref("");
+const profileText = computed(() => {
+  const saved = profile.value;
+  if (!saved) return "";
+  const words: string[] = saved.kinds.map((k) => (k === "face" ? "les visages" : "les plaques"));
+  words.push(...saved.objects.map((o) => `« ${capital(o)} »`));
+  return list(words);
+});
+function initProfile(): void {
+  if (running.value === "profile") void followProfile();
+  else if (psub.value !== "result" || !profileNotes.value.length) psub.value = "ask";
+}
+/** Phrases du moteur, une par objet du profil ; la mesure technique de ressemblance est retirée. */
+function profileSentences(message: string): { text: string; ok: boolean }[] {
+  return message
+    .replace(/\s*\(ressemblance [\d.,]+\)/g, "")
+    .split(/(?=«\s*[^»]+»\s*:)/)
+    .map((s) => s.trim())
+    .filter((s) => s && s !== "Réglages du profil appliqués.")
+    .map((text) => ({ text: nb(text.replace(/^Réglages du profil appliqués\.\s*/, "")), ok: !/non retrouvé|introuvable/.test(text) }));
+}
+async function followProfile(launch?: () => Promise<void>): Promise<void> {
+  psub.value = "running";
+  profileError.value = "";
+  const path = p.value?.path ?? "";
+  const done = launch ? await runJob("profile", launch) : await waitJob("profile");
+  if (!alive || wiz.screen !== "profile" || p.value?.path !== path) return;
+  if (!done) {
+    psub.value = "ask"; // n'a pas démarré : le message est affiché, on peut réessayer ou passer
+    return;
+  }
+  wiz.profileAsked = path;
+  if (done.state === "cancelled") return show("what");
+  if (done.state === "error") profileError.value = done.message;
+  profileNotes.value = done.state === "done" ? profileSentences(done.message) : [];
+  psub.value = "result";
+}
+/** Applique les réglages habituels (traitement « profile »). La demande part sans contenu : le
+ *  moteur ne lit pas celui de cette route, et un contenu non lu brouille la requête suivante. */
+async function applyProfile(): Promise<void> {
+  if (await send("POST", "/api/profile/apply")) void refresh();
+}
+function skipProfile(): void {
+  wiz.profileAsked = p.value?.path ?? "";
+  show("what");
 }
 
 // --- 2. Que faut-il flouter ? -------------------------------------------------------
@@ -233,15 +394,20 @@ function showObjects(): void {
   state.pendingDash = null;
   osub.value = "result";
 }
-// le rectangle est tracé : on demande le nom ; un tracé trop petit laisse l'outil en main
+// le rectangle est tracé : on demande le nom (désignation d'un objet), ou le flou part suivre ce
+// qui est entouré (« Il manque un flou ») ; un tracé trop petit laisse l'outil en main
 watch(() => state.pendingDash, (drawn) => {
-  if (wiz.screen !== "object" || !drawn) return;
+  if (!drawn) return;
+  if (wiz.screen === "verify" && review.sub === "missing") return void follow(drawn);
+  if (wiz.screen !== "object") return;
   objectName.value = objects.value.length ? "" : "compteur";
   customName.value = "";
   osub.value = "name";
 });
 watch(() => state.tool, (tool) => {
   if (wiz.screen === "object" && osub.value === "draw" && tool === "none" && !state.pendingDash) state.tool = "dash";
+  // « Il manque un flou » : après un tracé trop petit, le lecteur rend l'outil du flou immobile ; ici le flou suit
+  if (wiz.screen === "verify" && review.sub === "missing" && tool === "manual") state.tool = "dash";
 });
 
 async function designate(mode: "track" | "fixed"): Promise<void> {
@@ -345,12 +511,35 @@ async function keepPart(): Promise<void> {
   if (await saveTrim()) show(afterTrim());
 }
 
-// --- 4. Analyse -------------------------------------------------------------------------
+// --- 4. Type de vidéo, puis analyse ----------------------------------------------------------
+const presetIds: Preset[] = ["normal", "difficile", "rapide"];
+const presetIcons: Record<Preset, IconName> = { normal: "film", difficile: "eye", rapide: "gauge" };
+const typeChoice = ref<Preset>("normal");
+function initType(): void {
+  typeChoice.value = p.value?.preset ?? "normal";
+}
+const typeChanged = computed(() => !!p.value && typeChoice.value !== p.value.preset);
+const typeNote = computed(() => {
+  const notes: string[] = [];
+  if (presetInfo[typeChoice.value].warning) notes.push(nb(presetInfo[typeChoice.value].warning));
+  if (typeChanged.value && analysedOnce.value) notes.push("Vous avez changé ce choix : l'analyse sera refaite.");
+  return notes.join(" ");
+});
+async function saveType(): Promise<void> {
+  if (typeChanged.value) {
+    await setPreset(typeChoice.value);
+    if (p.value?.preset !== typeChoice.value) return; // refusé : le message est affiché
+  }
+  show(needsAnalysis.value ? "analyse" : "verify");
+}
+
 const finished = ref(false); // l'analyse vient de se terminer : résultat montré un instant
+const queued = ref(false); // « Lancer l'analyse » demandé pendant la mesure de durée : elle part dès la mesure finie
 let advanceTimer = 0;
 const analyseView = computed(() => {
   const j = job.value;
   if (j?.kind === "analyze" && j.state === "running") return "running";
+  if (queued.value) return "running"; // la mesure de durée se termine, l'analyse part aussitôt après
   if (!needsAnalysis.value) return "done";
   if (j?.kind === "analyze" && j.state === "error") return "error";
   if (j?.kind === "analyze" && wiz.launched && j.state !== "running") return "stopped";
@@ -367,13 +556,40 @@ const found = computed(() => {
   if (kinds.value.includes("plate")) parts.push(plural(count.plate, "plaque", "plaques"));
   return parts.length ? `Le logiciel a trouvé ${list(parts)}.` : "";
 });
+/** Durée annoncée : mesurée sur quelques images de cette vidéo, sur cet ordinateur. */
+const measuring = computed(() => running.value === "estimate");
+const estimateText = computed(() => {
+  const e = p.value?.estimate;
+  return e && e.frames > 0 && e.seconds > 0 ? formatDuration(e.seconds) : "";
+});
+const measuringText = computed(() => (job.value?.label.startsWith("Téléchargement") ? "Téléchargement des modèles… (une seule fois)" : "Mesure de la durée sur quelques images de votre vidéo…"));
+const measureFailed = ref(false);
+/** La mesure n'a de sens que s'il reste des visages ou des plaques à chercher, et tant qu'elle n'est pas faite. */
+const canMeasure = computed(() => kinds.value.length > 0 && needsAnalysis.value && !estimateText.value);
+/** « Combien de temps ça va prendre ? » : mesure sur quelques images. Rien n'en dépend : si elle
+ *  échoue, on le dit et l'analyse se lance comme avant. Rien ne se passe sans ce clic. */
+async function measure(): Promise<void> {
+  if (busy.value || !canMeasure.value) return;
+  measureFailed.value = false;
+  const done = await runJob("estimate", measureEstimate);
+  if (!alive || wiz.screen !== "analyse") return;
+  if (!queued.value) {
+    measureFailed.value = !estimateText.value;
+    return;
+  }
+  // la progression reste affichée jusqu'à ce que l'analyse ait pris le relais : pas d'écran intermédiaire
+  if (done?.state !== "cancelled" && !busy.value) await start("/api/analyze");
+  queued.value = false;
+}
 function analyse(): void {
   wiz.launched = true;
-  void start("/api/analyze");
+  if (measuring.value) queued.value = true; // la mesure se termine (quelques secondes), puis l'analyse part
+  else void start("/api/analyze");
 }
 
 // --- 5. Vérification --------------------------------------------------------------------
-const vphase = ref<"intro" | "queue" | "ask" | "sweep">("intro");
+const vphase = ref<"sheet" | "intro" | "queue" | "ask" | "sweep">("intro");
+const sheetFrom = ref<"" | "intro">(""); // planche ouverte depuis l'introduction : « Retour » y revient
 const entry = currentEntry;
 const reasons = computed(() => {
   const item = entry.value?.item;
@@ -382,12 +598,30 @@ const reasons = computed(() => {
   const texts = explain(item.reasons).map((r) => (r.text === r.raw ? "Le logiciel n'est pas sûr de lui ici." : r.text));
   return [...new Set(texts)].slice(0, 2); // deux phrases au plus : l'écran doit se lire d'un coup d'œil
 });
+/** Flous que le logiciel pose de lui-même (non retirés, non écartés). */
+const autoCount = computed(() => Object.values(p.value?.tracks ?? {}).reduce((n, l) => n + l.filter((t) => t.source === "auto" && !t.disabled && !t.below_min_score).length, 0));
 const sweepEnded = computed(() => !state.playing && time.value >= duration.value - 0.2);
 function initVerify(): void {
+  sheetFrom.value = "";
+  if (wiz.sheetDue && autoCount.value) {
+    vphase.value = "sheet"; // l'analyse vient de finir : d'abord tout ce qui sera flouté, d'un coup d'œil
+    return;
+  }
+  wiz.sheetDue = false;
+  vphase.value = doubtLeft.value || markEntries.value.length ? "intro" : "ask";
+}
+function openSheet(): void {
+  sheetFrom.value = "intro";
+  vphase.value = "sheet";
+}
+function afterSheet(): void {
+  wiz.sheetDue = false;
+  sheetFrom.value = "";
   vphase.value = doubtLeft.value || markEntries.value.length ? "intro" : "ask";
 }
 async function beginQueue(scope: "doubt" | "marks"): Promise<void> {
   vphase.value = "queue";
+  if (review.speed > 1) review.speed = 1;
   await nextTick(); // le lecteur doit être à l'écran avant de lancer la boucle
   startQueue(scope);
 }
@@ -396,13 +630,106 @@ function beginVerify(): void {
   else if (markEntries.value.length) void beginQueue("marks");
   else vphase.value = "ask";
 }
-async function beginSweep(): Promise<void> {
-  vphase.value = "sweep";
-  await nextTick();
-  startSweep(true);
+
+// Un seul objet à juger : sa vignette, et « Non » le retire lui seul.
+const single = computed<{ clip: string; track: Track } | null>(() => {
+  const e = entry.value;
+  if (!e?.item || e.item.tracks.length !== 1) return null;
+  const track = trackById(e.clip, e.item.tracks[0]);
+  return track && track.source === "auto" && !track.disabled ? { clip: e.clip, track } : null;
+});
+const thumbs = new Map<string, string>(); // l'adresse d'une vignette change à chaque modification : on garde la première
+function thumb(clip: string, id: number): string {
+  const key = `${clip}:${id}`;
+  let url = thumbs.get(key);
+  if (!url) thumbs.set(key, (url = thumbUrl(clip, id, 320)));
+  return url;
 }
+const refused = ref<{ clip: string; id: number; shownOn: string } | null>(null); // dernier « Non » : peut être remis tout de suite
+/** Affiche l'élément de rang `index` de la file (comme le fait la vérification guidée). */
+function showEntry(index: number): void {
+  const target = entries.value[index];
+  if (!target) return finish();
+  review.current = target.id;
+  review.sub = "ask";
+  review.removed = [];
+  state.tool = "none";
+  state.selectedTrack = null;
+  review.last = { clip: target.clip, at: target.at, end: target.end };
+  replay();
+}
+/** « Non, ne pas le flouter » : ce flou seul est retiré, puis on passe à l'endroit suivant. */
+async function refuse(): Promise<void> {
+  const s = single.value;
+  const e = entry.value;
+  if (!s || !e || review.sub !== "ask" || busy.value) return;
+  const index = currentIndex.value;
+  await setTracksDisabled(s.clip, [s.track.id], true);
+  if (!trackById(s.clip, s.track.id)?.disabled) return; // refusé : le message est affiché
+  const still = entries.value.findIndex((x) => x.id === e.id); // sans son flou, l'endroit n'est en général plus à vérifier
+  showEntry(still >= 0 ? still + 1 : index);
+  refused.value = { clip: s.clip, id: s.track.id, shownOn: review.current };
+}
+async function unrefuse(): Promise<void> {
+  const r = refused.value;
+  if (!r) return;
+  refused.value = null;
+  await setTracksDisabled(r.clip, [r.id], false);
+  const back = entries.value.findIndex((x) => x.item?.tracks.length === 1 && x.item.tracks[0] === r.id && x.clip === r.clip);
+  if (back >= 0 && review.mode === "queue") showEntry(back);
+}
+
+// « Il manque un flou » : ce qu'on entoure est suivi par le flou, dans le passage du montage affiché.
+const following = ref(false);
+function missing(): void {
+  player.pause();
+  review.sub = "missing";
+  state.tool = "dash"; // le tracé revient par `pendingDash` : le flou suit, au lieu de rester immobile
+}
+async function follow(drawn: { clip: string; time: number; box: number[] }): Promise<void> {
+  state.pendingDash = null;
+  const s = current.value;
+  if (!s || s.clip.id !== drawn.clip) return resume();
+  following.value = true;
+  const done = await runJob("follow", () => followBlur(drawn.clip, drawn.time, drawn.box, s.inFrame / s.fps, s.outFrame / s.fps));
+  following.value = false;
+  if (!alive || wiz.screen !== "verify" || vphase.value !== "queue") return;
+  if (done?.state === "done") {
+    const made = done.created === null ? undefined : trackById(drawn.clip, done.created);
+    const during = made ? ` pendant ${human(made.end - made.start + 1 / s.fps)}` : "";
+    notify(`Flou ajouté : il suit ce que vous avez entouré${during}. Regardez la vidéo : s'il ne couvre pas tout, ajoutez-en un autre.`);
+  } else if (done?.state === "error") notify(`Le flou n'a pas pu être ajouté : ${done.message}`, "error");
+  resume();
+}
+
+// Relecture complète : elle retient où elle s'arrête, et si elle est allée jusqu'au bout.
+const sweepAt = computed(() => p.value?.sweep.position ?? 0);
+const sweepDone = computed(() => p.value?.sweep.done ?? false);
+const canResume = computed(() => !sweepDone.value && sweepAt.value > 1 && sweepAt.value < duration.value - 1);
+let sweepTimer = 0;
+function keepSweep(ended = false): void {
+  if (!p.value) return;
+  void saveSweep(ended ? duration.value : time.value, sweepDone.value || ended);
+}
+function stopSweep(): void {
+  window.clearInterval(sweepTimer);
+  if (wiz.screen === "verify" && vphase.value === "sweep" && review.mode === "sweep" && state.playing) keepSweep(); // à l'arrêt, la pause l'a déjà retenue
+}
+async function beginSweep(from: "start" | "resume" = "start"): Promise<void> {
+  vphase.value = "sweep";
+  if (review.speed < 1) review.speed = 1;
+  await nextTick();
+  if (from === "resume") seekTime(sweepAt.value);
+  startSweep(from === "start");
+  window.clearInterval(sweepTimer);
+  sweepTimer = window.setInterval(() => state.playing && keepSweep(), 5000);
+}
+watch(() => state.playing, (playing) => {
+  if (!playing && wiz.screen === "verify" && vphase.value === "sweep" && review.mode === "sweep") keepSweep(time.value >= duration.value - 0.2);
+});
 /** Après la question ou la relecture : les signalements un par un, sinon l'enregistrement. */
 function afterSweep(): void {
+  stopSweep();
   if (review.mode !== "home") leave();
   if (markEntries.value.length) void beginQueue("marks");
   else show("export");
@@ -421,14 +748,20 @@ function toggle(): void {
 }
 
 // --- 6. Enregistrer ----------------------------------------------------------------------
+const EXTRACT_S = 10; // durée de l'extrait d'essai
+const presetQuality: Record<ExportPreset, number> = { source: 80, youtube: 90, social: 75, leger: 60 }; // qualité de chaque format, comme dans le moteur
 const form = reactive({ output: "", quality: 80 });
 const options = ref(false);
 const confirmed = ref(false);
 const revealError = ref("");
 const stopped = ref(false);
+const extracting = ref(false); // le traitement en cours (ou le dernier) est l'extrait d'essai
 function initExport(): void {
   const base = (p.value?.name ?? "video").replace(/\.motoblur\.json$/, "").replace(/\.json$/, "");
-  if (!form.output || wiz.exportFor !== p.value?.path) form.output = `${base}_floute.mp4`;
+  if (!form.output || wiz.exportFor !== p.value?.path) {
+    form.output = `${base}_floute.mp4`;
+    form.quality = presetQuality[wiz.format];
+  }
   wiz.exportFor = p.value?.path ?? "";
   confirmed.value = false;
   stopped.value = false;
@@ -446,17 +779,44 @@ const exportView = computed(() => {
   if (j?.kind === "render" && j.state === "error" && wiz.launchedExport) return "error";
   return "form";
 });
-const canExport = computed(() => !!p.value && !p.value.problem && !needsAnalysis.value && form.output.trim() !== "" && (pending.value === 0 || confirmed.value));
+const formatText = computed(() => nb(exportPresets.find((f) => f.id === wiz.format)?.text ?? ""));
+function pickFormat(id: ExportPreset): void {
+  wiz.format = id;
+  form.quality = presetQuality[id];
+}
+function renderOptions(): Partial<RenderOptions> {
+  // « Comme l'original » et « YouTube » gardent le format de la vidéo ; les deux autres laissent le moteur choisir
+  const sameAsSource = wiz.format === "source" || wiz.format === "youtube";
+  return { preset: wiz.format, quality: form.quality, ...(sameAsSource ? { codec: "source" } : {}), encoder: "auto", debug: false };
+}
+const exportReady = computed(() => !!p.value && !p.value.problem && !needsAnalysis.value && form.output.trim() !== "");
+const canExport = computed(() => exportReady.value && (pending.value === 0 || confirmed.value));
+/** L'extrait n'a de sens que si la vidéo est nettement plus longue que lui. */
+const canExtract = computed(() => exportReady.value && duration.value >= EXTRACT_S * 2);
 function exportVideo(): void {
   if (!canExport.value) return;
   wiz.launchedExport = true;
   stopped.value = false;
-  void start("/api/render", { output: form.output.trim(), quality: form.quality, codec: "source", encoder: "auto", debug: false });
+  extracting.value = false;
+  void render({ output: form.output.trim(), ...renderOptions() });
 }
-async function reveal(): Promise<void> {
+/** Dix secondes prises au milieu de la vidéo : le résultat réel, sans attendre toute la création. */
+function exportExtract(): void {
+  if (!canExtract.value) return;
+  wiz.launchedExport = true;
+  stopped.value = false;
+  extracting.value = true;
+  wiz.extract = "";
+  void renderExtract(form.output.trim(), duration.value / 2, EXTRACT_S, renderOptions());
+}
+function watchAll(): void {
+  show("verify");
+  vphase.value = "ask"; // directement la question de la relecture complète
+}
+async function reveal(path: string = wiz.output): Promise<void> {
   revealError.value = "";
   try {
-    await call("POST", "/api/reveal", { path: wiz.output });
+    await call("POST", "/api/reveal", { path });
   } catch (error) {
     revealError.value = (error as Error).message;
   }
@@ -466,20 +826,36 @@ function another(): void {
   picker.value = true;
 }
 
+// Fin de l'assistant : retenir ces réglages pour les prochaines vidéos (profil « ma moto »).
+const savingProfile = ref(false);
+const profileKept = computed(() => !!p.value && wiz.profileSaved === p.value.path);
+async function keepProfile(): Promise<void> {
+  if (!p.value || savingProfile.value) return;
+  savingProfile.value = true;
+  const before = profile.value?.saved_at;
+  const path = p.value.path;
+  await saveProfile(); // affiche lui-même la confirmation, ou l'erreur
+  if (profile.value && (profile.value.saved_at !== before || before === undefined)) wiz.profileSaved = path;
+  savingProfile.value = false;
+}
+
 // --- Fin des traitements ---------------------------------------------------------------
 watch(() => job.value?.state, (now, before) => {
   const j = job.value;
   if (!j || before !== "running" || now === "running") return;
   if (j.kind === "analyze" && wiz.screen === "analyse" && now === "done" && !needsAnalysis.value) {
     finished.value = true; // résultat montré un instant, puis la vérification
+    wiz.sheetDue = true; // qui commence par la planche de tout ce qui sera flouté
     window.clearTimeout(advanceTimer);
     advanceTimer = window.setTimeout(() => wiz.screen === "analyse" && show("verify"), 2600);
   } else if (j.kind === "render" && wiz.screen === "export") {
     const path = now === "done" ? j.message.match(/^Vidéo écrite : (.+)$/s)?.[1] : "";
+    const extract = now === "done" ? j.message.match(/^Extrait écrit : (.+)$/s)?.[1] : "";
     if (path) {
       wiz.output = path;
       show("done");
-    } else if (now === "cancelled") stopped.value = true;
+    } else if (extract) wiz.extract = extract;
+    else if (now === "cancelled") stopped.value = true;
   } else if (j.kind === "dash" && wiz.screen === "object" && osub.value === "tracking") {
     if (now === "done") playResult();
     else if (now === "error") {
@@ -493,7 +869,15 @@ watch(() => job.value?.state, (now, before) => {
 const root = ref<HTMLDivElement>();
 const progress = ref<InstanceType<typeof WizProgress>>();
 function onKey(event: KeyboardEvent): void {
-  if (picker.value) return; // le sélecteur de fichiers a ses propres touches
+  if (picker.value || storageOpen.value) return; // le sélecteur de fichiers et le dialogue ont leurs propres touches
+  if (dropAsk.value) {
+    if (event.key !== "Escape" && event.key !== "Enter") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Enter") confirmDrop();
+    else dropAsk.value = "";
+    return;
+  }
   const target = event.target as HTMLElement;
   const tag = target.tagName;
   const typing = tag === "TEXTAREA" || tag === "SELECT" || (tag === "INPUT" && (target as HTMLInputElement).type === "text");
@@ -501,6 +885,10 @@ function onKey(event: KeyboardEvent): void {
     if (progress.value?.asking) {
       progress.value.asking = false;
       event.stopPropagation();
+      return;
+    }
+    if (following.value) {
+      event.stopPropagation(); // le suivi du flou ajouté va à son terme (ou s'arrête par « Annuler »)
       return;
     }
     if (wiz.screen === "verify" && review.sub !== "ask") return; // le lecteur abandonne la correction en cours
@@ -530,15 +918,20 @@ const withVideo = computed(() => {
   if (wiz.screen === "trim") return !advancedMontage.value;
   return wiz.screen === "verify" && (vphase.value === "queue" || vphase.value === "sweep");
 });
+/** La planche des flous occupe toute la largeur. */
+const sheetShown = computed(() => state.loaded && !!p.value && !lost.value.length && previewReady.value && wiz.screen === "verify" && vphase.value === "sheet");
 const savedPreview = state.preview;
 watch([() => p.value?.path, previewReady], sync);
 onMounted(() => {
   window.addEventListener("keydown", onKey, true);
+  listenDrop();
   sync();
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey, true);
   quit();
+  alive = false;
+  dropTarget = null;
   state.preview = savedPreview === "blur" ? "boxes" : savedPreview;
 });
 </script>
@@ -553,6 +946,13 @@ onBeforeUnmount(() => {
           <span class="wstep-label">{{ label }}</span>
         </li>
       </ol>
+      <button
+        v-if="p?.history.undo" class="mode-switch wiz-undo" data-undo :disabled="busy" :title="`Annuler : ${p.history.undo}`"
+        :aria-label="`Annuler la dernière action : ${p.history.undo}`" @click="undo()"
+      >
+        <svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 3.25 2.75 6.5 6 9.75M3 6.5h6.25a3.5 3.5 0 0 1 0 7H7" /></svg>
+        <span class="wiz-undo-label">Annuler la dernière action</span>
+      </button>
       <button class="mode-switch" title="Tous les outils : timeline, plusieurs vidéos, réglages. Le projet ouvert est conservé." @click="toAdvanced"><Icon name="sliders" />Passer en mode avancé</button>
     </header>
 
@@ -600,7 +1000,11 @@ onBeforeUnmount(() => {
               <span v-else class="spacer"></span>
               <span class="wiz-speed" role="group" aria-label="Vitesse de lecture">
                 <span class="dim">Vitesse</span>
-                <span class="joined">
+                <span v-if="vphase === 'sweep'" class="joined">
+                  <button :class="{ on: review.speed !== 2 }" :aria-pressed="review.speed !== 2" data-speed="1" @click="review.speed = 1">Normale</button>
+                  <button :class="{ on: review.speed === 2 }" :aria-pressed="review.speed === 2" data-speed="2" title="Deux fois plus vite, pour une longue vidéo" @click="review.speed = 2">2×</button>
+                </span>
+                <span v-else class="joined">
                   <button :class="{ on: review.speed === 1 }" :aria-pressed="review.speed === 1" @click="review.speed = 1">Normal</button>
                   <button :class="{ on: review.speed !== 1 }" :aria-pressed="review.speed !== 1" @click="review.speed = 0.5">Ralenti</button>
                 </span>
@@ -610,7 +1014,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <section class="wiz-panel" :class="`s-${wiz.screen}`">
+      <section class="wiz-panel" :class="[`s-${wiz.screen}`, { sheet: sheetShown }]">
         <!-- 1. Vidéo -->
         <template v-if="!state.loaded">
           <span class="spinner large"></span>
@@ -647,7 +1051,7 @@ onBeforeUnmount(() => {
           <template v-if="p && clips.length">
             <p class="wiz-lead">Vidéo choisie : <strong>{{ clips[0].name }}</strong> ({{ human(clips[0].duration) }}).</p>
             <div class="wiz-actions">
-              <button class="primary big" data-primary @click="show('what')">Continuer avec cette vidéo<Icon name="arrowRight" :size="18" /></button>
+              <button class="primary big" data-primary @click="show(firstQuestion())">Continuer avec cette vidéo<Icon name="arrowRight" :size="18" /></button>
               <button class="big" @click="picker = true"><Icon name="folder" :size="18" />Choisir une autre vidéo…</button>
             </div>
           </template>
@@ -655,6 +1059,39 @@ onBeforeUnmount(() => {
             <p class="wiz-lead">Choisissez-la sur cet ordinateur. Elle ne sera pas modifiée, et rien n'est envoyé sur Internet.</p>
             <div class="wiz-actions">
               <button class="primary big" data-primary @click="picker = true"><Icon name="folder" :size="18" />Choisir une vidéo…</button>
+            </div>
+          </template>
+          <RecentList :exclude="p?.path" :disabled="busy" @open="picked" />
+          <button class="wiz-link" data-storage @click="storageOpen = true"><Icon name="drive" />Libérer de la place</button>
+        </template>
+
+        <!-- 1 bis. Réglages habituels -->
+        <template v-else-if="wiz.screen === 'profile'">
+          <template v-if="psub === 'running'">
+            <h1>Je reprends vos réglages…</h1>
+            <p class="wiz-lead">{{ profile?.objects.length ? "Le logiciel cherche vos objets dans cette vidéo, puis les suit." : "Un instant." }}</p>
+            <WizProgress ref="progress" vague phase="Vous verrez le résultat juste après." confirm="Arrêter ? Vous choisirez vous-même ce qu'il faut flouter." keep-going="Continuer" />
+          </template>
+          <template v-else-if="psub === 'result'">
+            <span class="wiz-icon" :class="profileError ? 'warn' : 'ok'"><Icon :name="profileError ? 'alert' : 'check'" :size="34" /></span>
+            <h1>{{ profileError ? "Vos réglages n'ont pas pu être repris" : "Vos réglages sont repris" }}</h1>
+            <p v-if="profileError" class="wiz-error">{{ profileError }}</p>
+            <p v-else class="wiz-lead">Vous pourrez encore tout changer aux écrans suivants.</p>
+            <ul v-if="profileNotes.length" class="wiz-list wiz-notes">
+              <li v-for="n in profileNotes" :key="n.text" :class="{ warn: !n.ok }"><Icon :name="n.ok ? 'check' : 'alert'" /><span class="grow">{{ n.text }}</span></li>
+            </ul>
+            <div class="wiz-actions">
+              <button class="primary big" data-primary @click="show('what')">Continuer<Icon name="arrowRight" :size="18" /></button>
+            </div>
+          </template>
+          <template v-else>
+            <span class="wiz-icon"><Icon name="gauge" :size="34" /></span>
+            <h1>Reprendre vos réglages habituels ?</h1>
+            <p v-if="profile" class="wiz-lead">Vous les avez enregistrés {{ dayText(profile.saved_at) }} : flouter <strong>{{ profileText || "vos objets" }}</strong>{{ profile.preset !== "normal" ? `, vidéo de type « ${presetInfo[profile.preset].label} »` : "" }}.</p>
+            <p v-if="profile?.objects.length" class="wiz-lead">Le logiciel cherchera {{ profile.objects.length > 1 ? "ces objets" : "cet objet" }} dans cette vidéo et {{ profile.objects.length > 1 ? "les" : "le" }} suivra tout seul.</p>
+            <div class="wiz-actions">
+              <button class="primary big" data-primary :disabled="busy" @click="followProfile(applyProfile)"><Icon name="check" :size="18" />Oui, les reprendre</button>
+              <button class="big" :disabled="busy" @click="skipProfile">Non merci</button>
             </div>
           </template>
         </template>
@@ -770,7 +1207,25 @@ onBeforeUnmount(() => {
           </template>
         </template>
 
-        <!-- 4. Analyse -->
+        <!-- 4. Type de vidéo -->
+        <template v-else-if="wiz.screen === 'type'">
+          <h1>Comment est votre vidéo ?</h1>
+          <p class="wiz-lead">Le logiciel règle sa recherche d'après ce choix. Dans le doute, gardez « Normal ».</p>
+          <div class="wiz-cards" role="radiogroup" aria-label="Type de vidéo">
+            <label v-for="id in presetIds" :key="id" class="wiz-card" :class="{ on: typeChoice === id }" :data-type="id">
+              <input v-model="typeChoice" type="radio" name="wiz-type" :value="id" />
+              <span class="wiz-card-icon"><Icon :name="presetIcons[id]" :size="30" /></span>
+              <span class="wiz-card-name">{{ presetInfo[id].label }}</span>
+              <span class="wiz-card-text">{{ nb(presetInfo[id].text) }}</span>
+            </label>
+          </div>
+          <p class="wiz-note" :class="{ shown: !!typeNote }" role="status"><Icon name="info" />{{ typeNote || " " }}</p>
+          <div class="wiz-actions">
+            <button class="primary big" data-primary :disabled="busy" @click="saveType">Continuer<Icon name="arrowRight" :size="18" /></button>
+          </div>
+        </template>
+
+        <!-- 4 bis. Analyse -->
         <template v-else-if="wiz.screen === 'analyse'">
           <template v-if="analyseView === 'running'">
             <h1>Analyse en cours…</h1>
@@ -798,16 +1253,25 @@ onBeforeUnmount(() => {
             <h1>{{ analyseView === "stopped" ? "L'analyse a été arrêtée" : "Lançons l'analyse" }}</h1>
             <p v-if="analyseView === 'stopped'" class="wiz-lead">Ce qui est déjà fait est conservé : l'analyse reprendra là où elle s'est arrêtée.</p>
             <p v-else class="wiz-lead">Le logiciel va regarder votre vidéo ({{ human(duration) }}) image par image pour y trouver {{ looksFor || "vos objets" }}.</p>
-            <p class="wiz-lead dim"><Icon name="clock" />La durée dépend de votre ordinateur : de quelques minutes à plus d'une heure pour une longue vidéo. Le temps restant s'affichera après quelques secondes.</p>
+            <p v-if="estimateText" class="wiz-lead wiz-estimate" data-estimate><Icon name="clock" />L'analyse prendra <strong>{{ estimateText }}</strong> sur cet ordinateur. Le temps restant s'affichera pendant qu'elle avance.</p>
+            <p v-else class="wiz-lead dim"><Icon name="clock" />La durée dépend de votre ordinateur : de quelques minutes à plus d'une heure pour une longue vidéo. Le temps restant s'affichera après quelques secondes.</p>
+            <p class="wiz-measure" :class="{ shown: measuring || measureFailed }" role="status">
+              <template v-if="measuring"><span class="spinner small"></span>{{ measuringText }}</template>
+              <template v-else-if="measureFailed">La durée n'a pas pu être mesurée. Lancez l'analyse : le temps restant s'affichera.</template>
+              <template v-else>&nbsp;</template>
+            </p>
             <div class="wiz-actions">
-              <button class="primary big" data-primary :disabled="busy" @click="analyse"><Icon name="scan" :size="18" />{{ analyseView === "stopped" ? "Reprendre l'analyse" : "Lancer l'analyse" }}</button>
+              <button class="primary big" data-primary :disabled="busy && !measuring" @click="analyse"><Icon name="scan" :size="18" />{{ analyseView === "stopped" ? "Reprendre l'analyse" : "Lancer l'analyse" }}</button>
+              <button v-if="canMeasure" class="big" data-measure :disabled="busy" @click="measure"><Icon name="clock" :size="18" />Combien de temps ça va prendre ?</button>
             </div>
           </template>
         </template>
 
         <!-- 5. Vérification -->
         <template v-else-if="wiz.screen === 'verify'">
-          <template v-if="vphase === 'intro'">
+          <WizSheet v-if="vphase === 'sheet'" @done="afterSheet" />
+
+          <template v-else-if="vphase === 'intro'">
             <span class="wiz-icon"><Icon name="eye" :size="34" /></span>
             <h1>Vérifions le floutage ensemble</h1>
             <p v-if="doubtLeft" class="wiz-lead">Le logiciel a hésité à <strong>{{ plural(doubtLeft, "endroit", "endroits") }}</strong>. Il va vous {{ doubtLeft > 1 ? "les montrer un par un" : "le montrer" }} : dites-lui si tout est bien flouté.</p>
@@ -816,18 +1280,24 @@ onBeforeUnmount(() => {
             <div class="wiz-actions">
               <button class="primary big" data-primary @click="beginVerify">{{ doubtLeft || markEntries.length ? (doubtDone ? "Reprendre" : "Commencer") : "Continuer" }}<Icon name="arrowRight" :size="18" /></button>
               <button v-if="!doubtLeft && !markEntries.length && doubtEntries.length" class="big" @click="beginQueue('doubt')">Les revoir</button>
+              <button v-if="autoCount" class="big quiet" data-sheet @click="openSheet"><Icon name="eye" :size="18" />Voir tous les flous</button>
             </div>
           </template>
 
           <template v-else-if="vphase === 'queue'">
-            <template v-if="!entry">
+            <template v-if="following">
+              <h1>Le flou suit ce que vous avez entouré…</h1>
+              <p class="wiz-lead">Il s'arrêtera seul à la fin de ce passage ou au prochain changement de plan.</p>
+              <WizProgress ref="progress" phase="Vous verrez le résultat juste après." />
+            </template>
+            <template v-else-if="!entry">
               <h1>Cet endroit a changé</h1>
               <p class="wiz-lead">Votre correction l'a modifié.</p>
               <div class="wiz-actions"><button class="primary big" data-primary @click="relocate">Continuer</button></div>
             </template>
             <template v-else-if="review.sub === 'missing'">
               <h1>Entourez ce qui doit être flouté</h1>
-              <p class="wiz-lead">Sur la vidéo : cliquez, glissez, relâchez. Le flou restera pendant tout ce passage.</p>
+              <p class="wiz-lead">Sur la vidéo : cliquez, glissez, relâchez. Le flou suivra ce que vous avez entouré.</p>
               <div v-if="droppedInPassage" class="wiz-dropped">
                 <template v-if="!state.showDropped">
                   <p>Le logiciel avait repéré {{ plural(droppedInPassage, "élément", "éléments") }} ici sans {{ droppedInPassage > 1 ? "les" : "le" }} flouter, par prudence.</p>
@@ -858,16 +1328,37 @@ onBeforeUnmount(() => {
             </template>
             <template v-else>
               <p class="wiz-count"><strong>{{ currentIndex + 1 }} sur {{ entries.length }}</strong><span class="bar still"><span :style="{ transform: `scaleX(${(currentIndex + 1) / Math.max(1, entries.length)})` }"></span></span><span v-if="entry.done" class="tag ok"><Icon name="check" :size="12" />déjà validé</span></p>
-              <h1>Tout ce qui doit être flouté l'est-il ?</h1>
-              <p v-for="r in reasons" :key="r" class="wiz-lead">{{ r }}</p>
-              <div class="wiz-actions column">
-                <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />{{ entry.type === "doubt" ? "Oui, c'est bon" : "C'est réglé" }}</button>
-                <button v-if="objectHere" class="big" :disabled="busy" @click="showObject"><Icon name="target" :size="18" />Montrer « {{ objectHere }} » ici</button>
-                <button class="big" :disabled="busy" @click="missing">Il manque un flou</button>
-                <button class="big" :disabled="busy" @click="extra">Un flou est en trop</button>
-                <button class="big quiet" :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>
-              </div>
-              <ul v-if="review.removed.length" class="wiz-list">
+              <!-- un seul objet : sa vignette, et la question porte sur lui -->
+              <template v-if="single">
+                <div class="wiz-single">
+                  <WizThumb :key="single.track.id" :src="thumb(single.clip, single.track.id)" :alt="single.track.kind === 'plate' ? 'La plaque concernée' : 'Le visage concerné'" eager />
+                  <h1>Faut-il flouter ceci ?</h1>
+                </div>
+                <p class="wiz-lead">{{ single.track.kind === "plate" ? "Le logiciel pense que c'est une plaque" : "Le logiciel pense que c'est un visage" }}. Sur la vidéo, son flou est entouré.</p>
+                <p v-if="reasons.length" class="wiz-lead">{{ reasons[0] }}</p>
+                <div class="wiz-actions column">
+                  <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />Oui, le flouter</button>
+                  <button class="big" data-refuse :disabled="busy" @click="refuse"><Icon name="close" :size="18" />Non, ne pas le flouter</button>
+                  <button class="big" :disabled="busy" @click="missing">Il manque un flou</button>
+                  <button class="big quiet" :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>
+                </div>
+              </template>
+              <template v-else>
+                <h1>Tout ce qui doit être flouté l'est-il ?</h1>
+                <p v-for="r in reasons" :key="r" class="wiz-lead">{{ r }}</p>
+                <div class="wiz-actions column">
+                  <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />{{ entry.type === "doubt" ? "Oui, c'est bon" : "C'est réglé" }}</button>
+                  <button v-if="objectHere" class="big" :disabled="busy" @click="showObject"><Icon name="target" :size="18" />Montrer « {{ objectHere }} » ici</button>
+                  <button class="big" :disabled="busy" @click="missing">Il manque un flou</button>
+                  <button class="big" :disabled="busy" @click="extra">Un flou est en trop</button>
+                  <button class="big quiet" :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>
+                </div>
+              </template>
+              <ul v-if="review.removed.length || (refused && refused.shownOn === review.current)" class="wiz-list">
+                <li v-if="refused && refused.shownOn === review.current">
+                  <span class="grow">Le flou précédent est retiré</span>
+                  <button class="small" data-unrefuse :disabled="busy" @click="unrefuse">Le remettre</button>
+                </li>
                 <li v-for="r in review.removed" :key="`${r.clip}:${r.id}`">
                   <span class="grow">Flou retiré</span>
                   <button class="small" :disabled="busy" @click="restoreZone(r)">Rétablir</button>
@@ -877,14 +1368,29 @@ onBeforeUnmount(() => {
           </template>
 
           <template v-else-if="vphase === 'ask'">
-            <span class="wiz-icon"><Icon name="eye" :size="34" /></span>
-            <h1>Voulez-vous tout regarder une dernière fois ?</h1>
-            <p v-if="!doubtEntries.length" class="wiz-lead">Le logiciel n'a hésité nulle part.</p>
-            <p class="wiz-lead">C'est le seul moyen de repérer ce que le logiciel n'a jamais vu. La vidéo dure {{ human(duration) }}.</p>
-            <div class="wiz-actions">
-              <button class="primary big" data-primary @click="beginSweep"><Icon name="play" :size="18" />Oui, tout regarder</button>
-              <button class="big" @click="afterSweep">Non, passer à la suite</button>
-            </div>
+            <span class="wiz-icon" :class="{ ok: sweepDone }"><Icon :name="sweepDone ? 'check' : 'eye'" :size="34" /></span>
+            <template v-if="sweepDone">
+              <h1>Vous avez déjà regardé toute la vidéo</h1>
+              <p class="wiz-lead">Si vous avez changé des flous depuis, vous pouvez la regarder à nouveau. Elle dure {{ human(duration) }}.</p>
+              <div class="wiz-actions">
+                <button class="primary big" data-primary @click="afterSweep">Continuer<Icon name="arrowRight" :size="18" /></button>
+                <button class="big" @click="beginSweep('start')"><Icon name="refresh" :size="18" />Tout regarder à nouveau</button>
+              </div>
+            </template>
+            <template v-else>
+              <h1>Voulez-vous tout regarder une dernière fois ?</h1>
+              <p v-if="!doubtEntries.length" class="wiz-lead">Le logiciel n'a hésité nulle part.</p>
+              <p class="wiz-lead">C'est le seul moyen de repérer ce que le logiciel n'a jamais vu. La vidéo dure {{ human(duration) }}.</p>
+              <p v-if="canResume" class="wiz-lead">Vous vous étiez arrêté à <strong>{{ clock(sweepAt) }}</strong>.</p>
+              <div class="wiz-actions">
+                <template v-if="canResume">
+                  <button class="primary big" data-primary @click="beginSweep('resume')"><Icon name="play" :size="18" />Reprendre à {{ clock(sweepAt) }}</button>
+                  <button class="big" @click="beginSweep('start')">Depuis le début</button>
+                </template>
+                <button v-else class="primary big" data-primary @click="beginSweep('start')"><Icon name="play" :size="18" />Oui, tout regarder</button>
+                <button class="big" :class="{ quiet: canResume }" @click="afterSweep">Non, passer à la suite</button>
+              </div>
+            </template>
           </template>
 
           <template v-else>
@@ -896,7 +1402,7 @@ onBeforeUnmount(() => {
               <button v-else class="primary big" data-primary @click="afterSweep">Continuer<Icon name="arrowRight" :size="18" /></button>
               <p class="flash" :class="{ shown: !!review.flash }" role="status">{{ review.flash || " " }}</p>
               <p class="wiz-marks">{{ markEntries.length ? plural(markEntries.length, "endroit signalé", "endroits signalés") : "Aucun signalement pour l'instant" }}</p>
-              <button v-if="sweepEnded" class="big" @click="beginSweep"><Icon name="refresh" :size="18" />Tout regarder à nouveau</button>
+              <button v-if="sweepEnded" class="big" @click="beginSweep('start')"><Icon name="refresh" :size="18" />Tout regarder à nouveau</button>
               <button v-else class="big quiet" @click="afterSweep">Arrêter la relecture</button>
             </div>
           </template>
@@ -905,16 +1411,16 @@ onBeforeUnmount(() => {
         <!-- 6. Enregistrer -->
         <template v-else-if="wiz.screen === 'export'">
           <template v-if="exportView === 'running'">
-            <h1>Création de la vidéo floutée…</h1>
+            <h1>{{ extracting ? "Création de l'extrait…" : "Création de la vidéo floutée…" }}</h1>
             <p class="wiz-lead">Ne fermez pas cette fenêtre. Votre vidéo d'origine n'est pas modifiée.</p>
-            <WizProgress ref="progress" phase="Écriture de la vidéo." confirm="Arrêter ? La vidéo en cours de création sera abandonnée." keep-going="Continuer" />
+            <WizProgress ref="progress" :phase="extracting ? 'Écriture de l\'extrait.' : 'Écriture de la vidéo.'" :confirm="extracting ? undefined : 'Arrêter ? La vidéo en cours de création sera abandonnée.'" keep-going="Continuer" />
           </template>
           <template v-else-if="exportView === 'error'">
             <span class="wiz-icon warn"><Icon name="alert" :size="34" /></span>
-            <h1>La vidéo n'a pas pu être créée</h1>
+            <h1>{{ extracting ? "L'extrait n'a pas pu être créé" : "La vidéo n'a pas pu être créée" }}</h1>
             <p class="wiz-error">{{ job?.message }}</p>
             <div class="wiz-actions">
-              <button class="primary big" data-primary @click="exportVideo"><Icon name="refresh" :size="18" />Réessayer</button>
+              <button class="primary big" data-primary @click="extracting ? exportExtract() : exportVideo()"><Icon name="refresh" :size="18" />Réessayer</button>
             </div>
           </template>
           <template v-else-if="p">
@@ -934,11 +1440,28 @@ onBeforeUnmount(() => {
               <p><Icon name="alert" /><span><strong>Vous n'avez pas tout vérifié.</strong> Un visage ou une plaque peut rester lisible dans la vidéo.</span></p>
               <label class="check"><input v-model="confirmed" type="checkbox" data-confirm /> Je crée la vidéo quand même</label>
             </div>
+            <p v-if="!needsAnalysis && !p.problem && !p.sweep.done" class="wiz-note shown wiz-unwatched" data-unwatched>
+              <Icon name="info" /><span>Vous n'avez pas regardé la vidéo en entier. C'est le seul moyen de repérer ce que le logiciel n'a jamais vu.</span>
+              <button class="small" @click="watchAll">La regarder</button>
+            </p>
             <p v-if="stopped" class="wiz-note shown"><Icon name="info" />La création a été arrêtée. Aucune vidéo n'a été enregistrée.</p>
+            <div v-if="wiz.extract" class="wiz-extract" data-extract role="status">
+              <p><Icon name="check" /><span><strong>L'extrait est prêt.</strong> Regardez-le, puis créez la vidéo entière.</span></p>
+              <p class="mono wiz-extract-path">{{ wiz.extract }}</p>
+              <button class="small" @click="reveal(wiz.extract)"><Icon name="folderOpen" />Ouvrir le dossier</button>
+              <small v-if="revealError" class="dim">Le dossier n'a pas pu s'ouvrir tout seul : l'extrait est bien à l'emplacement indiqué.</small>
+            </div>
             <label class="wiz-field">Nom du fichier
               <input v-model="form.output" type="text" spellcheck="false" />
               <small class="dim">Il sera enregistré dans le même dossier que votre vidéo.</small>
             </label>
+            <div class="wiz-format">
+              <span id="wiz-format-label" class="wiz-format-label">Format de la vidéo</span>
+              <div class="wiz-format-choices" role="group" aria-labelledby="wiz-format-label">
+                <button v-for="f in exportPresets" :key="f.id" :aria-pressed="wiz.format === f.id" :class="{ on: wiz.format === f.id }" :data-format="f.id" @click="pickFormat(f.id)">{{ f.label }}</button>
+              </div>
+              <small class="dim" role="status">{{ formatText }}</small>
+            </div>
             <button class="fold-head" :aria-expanded="options" @click="options = !options"><Icon :name="options ? 'chevronDown' : 'chevronRight'" />Options</button>
             <label v-if="options" class="wiz-field quality">
               <span class="split">Qualité <span class="mono">{{ form.quality }}</span></span>
@@ -948,8 +1471,10 @@ onBeforeUnmount(() => {
             <div class="wiz-actions">
               <button v-if="needsAnalysis" class="primary big" data-primary @click="show('analyse')">Analyser la vidéo<Icon name="arrowRight" :size="18" /></button>
               <button v-else class="primary big" data-primary :disabled="!canExport" @click="exportVideo"><Icon name="export" :size="18" />Créer la vidéo floutée</button>
+              <button v-if="canExtract" class="big" data-try :disabled="busy" @click="exportExtract">Essayer d'abord sur 10 secondes</button>
               <button v-if="pending && !needsAnalysis" class="big" @click="show('verify')">Reprendre la vérification</button>
             </div>
+            <p v-if="canExtract" class="wiz-hint">L'essai crée un court extrait, pris au milieu de la vidéo : vous voyez le vrai résultat sans attendre la vidéo entière.</p>
           </template>
         </template>
 
@@ -961,8 +1486,12 @@ onBeforeUnmount(() => {
           <p class="wiz-path mono" tabindex="0">{{ wiz.output }}</p>
           <p v-if="revealError" class="wiz-note shown warn" role="alert"><Icon name="alert" /><span>Le dossier n'a pas pu s'ouvrir tout seul. Votre vidéo est bien à l'emplacement indiqué ci-dessus.<small class="dim">{{ revealError }}</small></span></p>
           <div class="wiz-actions">
-            <button class="primary big" data-primary @click="reveal"><Icon name="folderOpen" :size="18" />Ouvrir le dossier</button>
+            <button class="primary big" data-primary @click="reveal()"><Icon name="folderOpen" :size="18" />Ouvrir le dossier</button>
             <button class="big" @click="another">Flouter une autre vidéo</button>
+          </div>
+          <div v-if="p" class="wiz-keep">
+            <button class="big" data-keep :disabled="savingProfile || profileKept" @click="keepProfile"><Icon :name="profileKept ? 'check' : 'gauge'" :size="18" />{{ profileKept ? "Réglages enregistrés" : "Enregistrer ces réglages pour mes prochaines vidéos" }}</button>
+            <small>À la prochaine vidéo, le logiciel vous proposera de flouter les mêmes choses{{ objects.length ? ` et cherchera tout seul ${list(objects.map((o) => `« ${capital(o.name)} »`))}` : "" }}.{{ profile && !profileKept ? " Vos réglages enregistrés auparavant seront remplacés." : "" }}</small>
           </div>
         </template>
       </section>
@@ -971,5 +1500,85 @@ onBeforeUnmount(() => {
     <Transition name="modal">
       <FilePicker v-if="picker" simple title="Choisir une vidéo" @pick="picked" @close="picker = false" />
     </Transition>
+    <Transition name="modal">
+      <StorageDialog v-if="storageOpen" @close="storageOpen = false" />
+    </Transition>
+    <Transition name="modal">
+      <div v-if="dropAsk" class="modal" @pointerdown.self="dropAsk = ''">
+        <div class="dialog wiz-drop" role="alertdialog" aria-modal="true" aria-labelledby="wiz-drop-title">
+          <h3 id="wiz-drop-title"><Icon name="film" :size="18" />Ouvrir cette vidéo ?</h3>
+          <p><strong>{{ fileName(dropAsk) }}</strong></p>
+          <p>La vidéo en cours est enregistrée telle qu'elle est : vous la retrouverez dans vos vidéos récentes.</p>
+          <div class="row end">
+            <button data-drop-cancel @click="dropAsk = ''">Annuler</button>
+            <button class="primary" data-drop-open @click="confirmDrop">Ouvrir</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
+
+<style>
+/* Ajouts du mode simple : ils vivent avec l'assistant, la feuille commune n'est pas touchée. */
+.wiz-undo { margin-right: 2px; }
+.wiz-undo .icon { color: var(--faint); }
+.wiz-link { align-self: flex-start; height: 32px; margin-top: 6px; padding: 0 9px 0 6px; background: none; border-color: transparent; color: var(--faint); font-size: 14px; font-weight: 500; }
+.wiz-link .icon { color: var(--faint); }
+@media (hover: hover) { .wiz-link:hover:not(:disabled) { background: none; border-color: transparent; color: var(--text); } }
+
+/* cartes à choix unique : type de vidéo */
+.wiz-card input[type="radio"] { appearance: none; -webkit-appearance: none; margin: 0; border-radius: 50%; background: var(--bg); border: 1px solid var(--line-strong); cursor: pointer; transition: border-color var(--m-out) var(--ease), border-width var(--m-out) var(--ease); }
+.wiz-card input[type="radio"]:checked { border: 7px solid var(--accent); background: var(--accent-ink); }
+
+.wiz-estimate { color: var(--text); }
+.wiz-estimate .icon { color: var(--accent); }
+.wiz-measure { display: flex; align-items: center; gap: 9px; min-height: 22px; color: var(--dim); font-size: 14.5px; opacity: 0; transition: opacity var(--m-in) var(--ease); }
+.wiz-measure.shown { opacity: 1; }
+.wiz-notes li { align-items: flex-start; padding: 11px 14px; font-size: 15.5px; line-height: 1.45; }
+.wiz-notes li > .icon { margin-top: 4px; }
+.wiz-notes li.warn > .icon { color: var(--accent); }
+
+/* planche des flous : toute la largeur, la grille défile, les boutons restent visibles */
+.wiz-panel.sheet { width: min(1120px, 100%); align-self: stretch; margin: 0 auto; max-height: 100%; }
+.wiz-panel.sheet h1 { font-size: 26px; }
+.wiz-panel.sheet .wiz-lead { max-width: none; }
+.wiz-panel.sheet .wiz-actions { margin-top: 0; }
+
+/* un seul objet à juger */
+.wiz-single { display: flex; align-items: center; gap: 14px; align-self: stretch; }
+.wiz-single .wiz-thumb { flex: none; width: 148px; border: 1px solid var(--line-strong); }
+.wiz-single h1 { flex: 1; min-width: 0; }
+
+/* enregistrement : format, extrait d'essai, relecture oubliée */
+.wiz-format { align-self: stretch; display: flex; flex-direction: column; gap: 7px; }
+.wiz-format-label { color: var(--dim); font-size: 14px; }
+.wiz-format-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.wiz-format-choices button { height: 40px; padding: 0 14px; border-radius: 10px; font-size: 15px; }
+.wiz-format small { min-height: 20px; font-size: 14px; }
+.wiz-panel .wiz-unwatched { align-self: stretch; align-items: center; color: var(--dim); }
+.wiz-panel .wiz-unwatched .icon { margin-top: 0; color: var(--faint); }
+.wiz-unwatched span { flex: 1; min-width: 0; }
+.wiz-unwatched button.small { flex: none; height: 32px; padding: 0 12px; font-size: 14px; }
+.wiz-extract { align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 14px; background: rgba(74, 222, 128, .08); border: 1px solid rgba(74, 222, 128, .4); border-radius: var(--r-md); font-size: 15px; }
+.wiz-extract p { display: flex; gap: 9px; }
+.wiz-extract p .icon { margin-top: 4px; color: var(--face); }
+.wiz-extract-path { font-size: 13.5px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.wiz-extract button.small { height: 32px; padding: 0 12px; font-size: 14px; }
+.wiz-hint { max-width: 62ch; color: var(--faint); font-size: 14px; }
+
+/* fin : retenir ces réglages */
+.wiz-keep { align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 14px; padding-top: 18px; border-top: 1px solid var(--line); }
+.wiz-keep button.big { height: auto; min-height: 52px; padding: 8px 20px; white-space: normal; text-align: left; }
+.wiz-keep small { max-width: 62ch; color: var(--dim); font-size: 14px; line-height: 1.45; }
+
+.wiz-drop { width: min(460px, 92vw); font-size: 14px; }
+.wiz-drop p { overflow-wrap: anywhere; line-height: 1.5; }
+.wiz-drop p strong { color: var(--text); }
+.wiz-drop button { height: 34px; padding: 0 14px; }
+
+@media (max-width: 1100px) {
+  .wiz-undo-label { display: none; }
+  .wiz-single .wiz-thumb { width: 120px; }
+}
+</style>

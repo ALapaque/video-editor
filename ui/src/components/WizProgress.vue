@@ -1,10 +1,12 @@
 <script setup lang="ts">
 // Progression d'un traitement, affichée dans la page de l'assistant (mode simple) :
 // grand pourcentage, barre, temps restant mesuré, et « Annuler » avec confirmation si demandé.
+// `vague` : traitement dont l'avancement ne se mesure pas (recherche d'objets) ; un simple
+// indicateur d'attente remplace le pourcentage, qui serait trompeur.
 import { computed, ref } from "vue";
 import { job, send } from "../store";
 
-const props = defineProps<{ phase: string; confirm?: string; keepGoing?: string }>();
+const props = defineProps<{ phase: string; confirm?: string; keepGoing?: string; vague?: boolean }>();
 const asking = ref(false);
 const percent = computed(() => (job.value ? Math.min(100, Math.round((100 * job.value.done) / Math.max(1, job.value.total))) : 0));
 const downloading = computed(() => job.value?.label.startsWith("Téléchargement") ?? false);
@@ -30,10 +32,16 @@ defineExpose({ asking });
 
 <template>
   <div class="wiz-progress" role="status" aria-live="off">
-    <p class="wiz-percent mono">{{ percent }}<small> %</small></p>
-    <span class="bar tall"><span :style="{ transform: `scaleX(${percent / 100})` }"></span></span>
-    <p class="wiz-phase">{{ downloading ? "Téléchargement des modèles… (une seule fois)" : phase }}</p>
-    <p class="wiz-left">{{ left || " " }}</p>
+    <template v-if="vague && !downloading">
+      <span class="spinner large"></span>
+      <p class="wiz-phase">{{ phase }}</p>
+    </template>
+    <template v-else>
+      <p class="wiz-percent mono">{{ percent }}<small> %</small></p>
+      <span class="bar tall"><span :style="{ transform: `scaleX(${percent / 100})` }"></span></span>
+      <p class="wiz-phase">{{ downloading ? "Téléchargement des modèles… (une seule fois)" : phase }}</p>
+      <p class="wiz-left">{{ left || " " }}</p>
+    </template>
     <div v-if="asking" class="confirm wiz-confirm">
       <span class="grow">{{ confirm }}</span>
       <button @click="asking = false">{{ keepGoing ?? "Continuer" }}</button>
