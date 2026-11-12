@@ -411,12 +411,13 @@ class Engine:
             for k in range(max(0, first), last + 1):
                 pts = v.start_pts + round(k * v.frame_pts)
                 items = []
-                for item in index.active(pts):
-                    z = item.shaped(pts)
-                    if z is None:
-                        continue
-                    obs = item.observation(pts)
-                    items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, None if obs is None else round(obs[4], 2)])
+                by_track = {item.track.id: item for item in index.active(pts)}
+                for z in index.shaped(pts):  # flous superposés déjà réunis
+                    item = by_track.get(z.track_id)
+                    obs = item.observation(pts) if item else None
+                    score = None if obs is None else round(obs[4], 2)
+                    # 10e valeur : toutes les pistes réunies dans cette zone.
+                    items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))])
                 if items:
                     frames[k] = items
             out = {"version": self.version, "frames": frames}

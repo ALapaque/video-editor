@@ -64,6 +64,95 @@ class Zone:
     shape: str = "rect"  # "rect", "rounded" ou "ellipse"
     radius: int = 0  # rayon des coins pour "rounded"
     track_id: int = 0
+    # Toutes les pistes réunies dans cette zone quand des flous ont été fusionnés.
+    tracks: tuple[int, ...] = ()
+
+
+# Catégorie gardée quand des zones de catégories différentes fusionnent : la plus « voulue ».
+_KIND_PRIORITY = {"dash": 3, "manual": 3, "plate": 2, "face": 1}
+
+
+def _inside(zone: Zone, x: float, y: float) -> bool:
+    """Vrai si le point est réellement couvert par la forme de la zone."""
+    x1, y1, x2, y2 = zone.box
+    if not (x1 <= x <= x2 and y1 <= y <= y2):
+        return False
+    if zone.shape == "ellipse":
+        a, b = (x2 - x1) / 2, (y2 - y1) / 2
+        if a <= 0 or b <= 0:
+            return False
+        return ((x - (x1 + x2) / 2) / a) ** 2 + ((y - (y1 + y2) / 2) / b) ** 2 <= 1.0
+    r = zone.radius if zone.shape == "rounded" else 0
+    if r > 0:
+        cx = x1 + r if x < x1 + r else x2 - r if x > x2 - r else None
+        cy = y1 + r if y < y1 + r else y2 - r if y > y2 - r else None
+        if cx is not None and cy is not None:  # dans un coin arrondi
+            return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+    return True
+
+
+def _covers(outer: Zone, inner: Zone) -> bool:
+    """Vrai si `outer` couvre toute la boîte de `inner` (ses quatre coins)."""
+    x1, y1, x2, y2 = inner.box
+    return all(_inside(outer, x, y) for x, y in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)))
+
+
+def _overlap(a: Zone, b: Zone) -> float:
+    """Part de la plus petite boîte recouverte par l'autre (0 à 1)."""
+    w = min(a.box[2], b.box[2]) - max(a.box[0], b.box[0])
+    h = min(a.box[3], b.box[3]) - max(a.box[1], b.box[1])
+    if w <= 0 or h <= 0:
+        return 0.0
+    area = lambda z: max(1, (z.box[2] - z.box[0]) * (z.box[3] - z.box[1]))  # noqa: E731
+    return w * h / min(area(a), area(b))
+
+
+def _corner(zone: Zone) -> float:
+    """Plus grand rayon de coin qu'une zone englobante peut prendre sans découvrir celle-ci."""
+    if zone.shape == "ellipse":
+        return min(zone.box[2] - zone.box[0], zone.box[3] - zone.box[1]) / 2
+    return float(zone.radius) if zone.shape == "rounded" else 0.0
+
+
+def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
+    """Réunit les flous qui se recouvrent, sans jamais découvrir un pixel qui était flouté.
+
+    - Une zone entièrement couverte par une autre disparaît : elle n'ajoutait rien.
+    - Deux zones qui se recouvrent largement sont remplacées par un seul rectangle arrondi
+      englobant les deux (donc un peu plus grand que leur réunion).
+    Les zones qui se touchent à peine restent séparées.
+    """
+    out = sorted(zones, key=lambda z: -(z.box[2] - z.box[0]) * (z.box[3] - z.box[1]))
+    out = [replace(z, tracks=z.tracks or (z.track_id,)) for z in out]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(out)):
+            for j in range(i + 1, len(out)):
+                a, b = out[i], out[j]
+                if _covers(a, b):
+                    out[i] = replace(a, tracks=a.tracks + b.tracks)
+                elif _covers(b, a):
+                    out[i] = replace(b, tracks=b.tracks + a.tracks)
+                elif _overlap(a, b) >= min_overlap:
+                    box = (
+                        min(a.box[0], b.box[0]), min(a.box[1], b.box[1]),
+                        max(a.box[2], b.box[2]), max(a.box[3], b.box[3]),
+                    )
+                    lead = a if _KIND_PRIORITY.get(a.kind, 0) >= _KIND_PRIORITY.get(b.kind, 0) else b
+                    # Coins arrondis seulement dans la mesure où ils ne découvrent rien de ce
+                    # que les deux zones d'origine couvraient près de leurs propres coins.
+                    radius = int(min(0.12 * min(box[2] - box[0], box[3] - box[1]), _corner(a), _corner(b)))
+                    shape = "rounded" if radius >= 1 else "rect"
+                    out[i] = Zone(lead.kind, box, shape, radius, lead.track_id, a.tracks + b.tracks)
+                else:
+                    continue
+                del out[j]
+                changed = True
+                break
+            if changed:
+                break
+    return out
 
 
 class TrackZones:
@@ -208,6 +297,7 @@ class ZoneIndex:
     """Toutes les zones de flou d'un clip, avec recherche rapide par instant."""
 
     def __init__(self, tracks: list[Track], settings: BlurSettings, video: VideoInfo):
+        self.merge = settings.merge_overlaps
         self.items = [TrackZones(t, settings, video) for t in tracks if is_blurred(t, settings)]
         self.bucket = max(1.0, float(1 / video.tb))  # une case par seconde
         self.buckets: dict[int, list[TrackZones]] = {}
@@ -228,8 +318,9 @@ class ZoneIndex:
         return out
 
     def shaped(self, pts: float) -> list[Zone]:
-        """Zones à flouter à l'instant `pts`, avec leur forme."""
-        return [z for item in self.active(pts) if (z := item.shaped(pts)) is not None]
+        """Zones à flouter à l'instant `pts`, avec leur forme, flous superposés réunis."""
+        zones = [z for item in self.active(pts) if (z := item.shaped(pts)) is not None]
+        return merge_zones(zones) if self.merge and len(zones) > 1 else zones
 
 
 # --- Passages douteux -----------------------------------------------------

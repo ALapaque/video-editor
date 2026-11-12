@@ -143,6 +143,9 @@ class BlurSettings:
     # Score minimal qu'une piste détectée doit atteindre au moins une fois pour être floutée.
     # Les fausses détections restent presque toujours à faible score ; un vrai objet finit par
     # être vu nettement. Plus haut : moins de faux flous, mais plus de risque d'en manquer un vrai.
+    # Fusionner les flous qui se recouvrent (un même objet pris pour un visage ET une plaque,
+    # ou une détection à l'intérieur d'un objet suivi) : un seul flou au lieu de deux ou trois.
+    merge_overlaps: bool = True
     face_min_score: float = 0.40
     plate_min_score: float = 0.25
 
