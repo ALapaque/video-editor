@@ -4,8 +4,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ZoneTuple } from "../api";
 import Icon from "./Icon.vue";
-import { loop, outline, rate, removeZone, resume, review } from "../review";
+import { loop, objectHere, outline, rate, removeZone, resume, review } from "../review";
 import {
+  start,
   current, droppedNow, duration, formatTime, kindLabel, notify, objectNames, player, project, saveManual, seekTime, segments,
   state, time, trackById, zonesNow,
 } from "../store";
@@ -363,6 +364,11 @@ async function pointerUp(): Promise<void> {
     const end = Math.min(t + 2, (s.outFrame - 1) / s.fps);
     await saveManual(s.clip.id, [[t, ...box], [Math.max(end, t + 1 / s.fps), ...box]]);
     notify("Zone ajoutée pour 2 s. Réglez son début et sa fin dans le panneau « Zones ».");
+  } else if (tool === "dash" && review.sub === "object" && objectHere.value) {
+    // vérification : l'objet est re-suivi sur ce plan seulement, le reste de son suivi est gardé
+    const label = objectHere.value;
+    resume();
+    await start("/api/dash", { clip: s.clip.id, time: t, box, mode: "track", label, direction: "both", scope: "shot" });
   } else if (tool === "dash") {
     state.pendingDash = { clip: s.clip.id, time: t, box };
   } else if (tool === "redraw" && state.selectedTrack) {

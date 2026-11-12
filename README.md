@@ -162,6 +162,11 @@ uv run moto-blur dash samples/sortie.motoblur.json --name téléphone --clear
 Dans l'interface, le rectangle se trace à la souris (onglet « Zones », bouton « Suivre un
 objet… »), puis un dialogue demande le nom de l'objet.
 
+Le suivi s'arrête à chaque changement de plan, puis recherche l'objet dans le plan suivant ; les
+morceaux retrouvés et les passages où l'objet n'est plus suivi sont signalés à la vérification.
+Désigner de nouveau un objet déjà suivi ne refait que le plan concerné (`--scope shot`, choix
+par défaut dans ce cas) ; `--scope all` refait tout le clip.
+
 ### Réglages utiles
 
 | Option | Effet |

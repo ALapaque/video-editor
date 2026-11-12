@@ -81,19 +81,20 @@ watch(() => project.value?.settings, (settings) => {
 }, { immediate: true, deep: true });
 // Scores minimaux : appliqués en direct pendant le glissement (envoi regroupé toutes les 200 ms).
 // Tant qu'un envoi est en attente, l'état reçu du moteur ne remet pas le curseur en arrière.
-const minScore = reactive({ face: 0.4, plate: 0.25 });
+const minScore = reactive({ face: 0.4, plate: 0.25, hits: 3 });
 let minTimer = 0;
 let minDirtyUntil = 0;
 watch(() => project.value?.settings.blur, (b) => {
   if (!b || Date.now() < minDirtyUntil) return;
   minScore.face = Number(b.face_min_score ?? 0.4);
   minScore.plate = Number(b.plate_min_score ?? 0.25);
+  minScore.hits = Number(b.min_hits ?? 3);
 }, { immediate: true, deep: true });
 function setMinScore(): void {
   minDirtyUntil = Date.now() + 700;
   window.clearTimeout(minTimer);
   minTimer = window.setTimeout(() => {
-    void send("PUT", "/api/settings", { blur: { face_min_score: minScore.face, plate_min_score: minScore.plate } });
+    void send("PUT", "/api/settings", { blur: { face_min_score: minScore.face, plate_min_score: minScore.plate, min_hits: minScore.hits } });
   }, 200);
 }
 function droppedCount(kind: string): number {
@@ -236,7 +237,11 @@ async function saveAnalysis(): Promise<void> {
           <input id="min-plate" v-model.number="minScore.plate" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
           <small class="dim">{{ plural(droppedCount("plate"), "détection écartée", "détections écartées") }} dans ce clip</small>
         </div>
-        <p class="help">Une détection n'est floutée que si son meilleur score atteint ce minimum. Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué.</p>
+        <div class="slider-row">
+          <label for="min-hits">Images sûres exigées <span class="mono value">{{ minScore.hits }}</span></label>
+          <input id="min-hits" v-model.number="minScore.hits" type="range" min="1" max="8" step="1" :disabled="busy" @input="setMinScore" />
+        </div>
+        <p class="help">Une détection n'est floutée que si elle atteint ce score minimal sur ce nombre d'images (une seule suffit si elle est très nette). Les fausses détections clignotent ; les vrais visages et plaques restent à l'écran. Plus haut : moins de faux flous, mais un vrai visage aperçu très brièvement peut être manqué.</p>
         <template v-if="project?.mismatch">
           <h4>Clips de formats différents</h4>
           <label>Aligner sur

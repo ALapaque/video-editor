@@ -26,7 +26,7 @@ export const review = reactive({
   mode: "home" as "home" | "queue" | "sweep" | "end",
   scope: "doubt" as "doubt" | "marks", // file parcourue : passages douteux ou signalements
   current: "", // identifiant de l'élément affiché
-  sub: "ask" as "ask" | "missing" | "extra",
+  sub: "ask" as "ask" | "missing" | "extra" | "object",
   speed: 1, // vitesse de l'aperçu pendant la vérification (sans effet sur l'export)
   removed: [] as { clip: string; id: number; label: string }[], // flous retirés sur l'élément affiché
   flash: "", // confirmation brève du dernier signalement
@@ -90,15 +90,20 @@ const plain: [string, string][] = [
   ["suivi du compteur incertain", "Le suivi du compteur a hésité : vérifiez qu'il reste couvert."],
 ];
 const lostObject = "suivi de l'objet";
+const notFollowed = "objet « ";
 
 /** Raisons techniques du moteur traduites en phrases simples ; la raison brute reste en infobulle. */
 export function explain(reasons: string[]): { text: string; raw: string }[] {
   const out: { text: string; raw: string }[] = [];
   for (const raw of reasons) {
     let text = plain.find(([prefix]) => raw.startsWith(prefix))?.[1] ?? raw;
+    const name = raw.match(/«\s*(.+?)\s*»/)?.[1] ?? "l'objet";
     if (raw.startsWith(lostObject)) {
-      const name = raw.match(/«\s*(.+?)\s*»/)?.[1] ?? "l'objet";
       text = `Le suivi de « ${name} » a hésité : vérifiez qu'il reste couvert.`;
+    } else if (raw.startsWith(notFollowed) && raw.includes("non suivi")) {
+      text = `« ${name} » n'est plus suivi ici (changement de plan, objet caché ou sorti de l'image). S'il est visible, montrez-le.`;
+    } else if (raw.startsWith(notFollowed) && raw.includes("retrouvé automatiquement")) {
+      text = `« ${name} » a été retrouvé automatiquement après un changement de plan : vérifiez que le flou est bien sur lui.`;
     }
     if (!out.some((x) => x.text === text)) out.push({ text, raw });
   }
@@ -193,6 +198,24 @@ export async function validate(): Promise<void> {
 export async function unvalidate(): Promise<void> {
   const e = currentEntry.value;
   if (e?.type === "doubt" && e.done) await send("PUT", "/api/review", { key: e.id, done: false });
+}
+
+/** Objet suivi concerné par l'élément affiché (perdu, retrouvé ou incertain), s'il y en a un. */
+export const objectHere = computed<string | null>(() => {
+  const item = currentEntry.value?.item;
+  if (!item || !item.kinds.includes("dash")) return null;
+  for (const raw of item.reasons) {
+    const name = raw.match(/«\s*(.+?)\s*»/)?.[1];
+    if (name && (raw.startsWith(lostObject) || raw.startsWith(notFollowed))) return name;
+  }
+  return null;
+});
+
+/** « Montrer l'objet ici » : pause et tracé ; le lecteur relance le suivi sur ce plan seulement. */
+export function showObject(): void {
+  player.pause();
+  review.sub = "object";
+  state.tool = "dash";
 }
 
 /** « Il manque un flou » : pause et outil de tracé ; le lecteur crée la zone puis appelle `resume`. */

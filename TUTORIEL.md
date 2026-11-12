@@ -294,9 +294,16 @@ téléphone, GPS…) se désigne à la main, une fois par clip ; chaque objet po
    - **Suivre l'objet** s'il bouge dans l'image (cas d'une vidéo recadrée depuis le 360). Il est
      suivi image par image, vers l'avant et l'arrière.
    - **Zone fixe** si la caméra est fixée à la moto et que l'objet ne bouge pas dans l'image.
-5. Si le suivi décroche, le passage apparaît parmi les « Passages douteux », en rose sur la
-   timeline. Placez-vous au début du passage fautif et recommencez l'étape 2 avec le même nom :
-   le suivi repart de là.
+5. À chaque changement de plan, le suivi s'arrête : il ne glisse plus sur un autre objet (un
+   rétroviseur, par exemple). Le logiciel cherche ensuite l'objet dans le nouveau plan et, s'il le
+   retrouve avec une forte ressemblance, reprend le suivi. Deux cas sont signalés à la
+   vérification :
+   - « retrouvé automatiquement » : vérifiez que le flou est bien sur l'objet ;
+   - « n'est plus suivi ici » : l'objet n'a pas été retrouvé, rien n'y est flouté.
+6. Pour corriger un plan, cliquez « Montrer « compteur » ici » sur la carte de vérification (ou
+   recommencez l'étape 2 avec le même nom) et entourez l'objet : son suivi est refait sur ce plan
+   seulement, jusqu'au changement de plan suivant ; le reste est conservé. Pour tout
+   recommencer, supprimez d'abord l'objet dans « Objets suivis ».
 
 Reprendre un nom déjà utilisé dans le clip remplace les zones de cet objet (le dialogue le dit) ;
 un autre nom ajoute un objet. Le bloc « Objets suivis », en bas de l'onglet « Zones », liste les
@@ -313,7 +320,8 @@ La partie « Détection » refait toute l'analyse.
 | Prolongation avant / après | durée de flou ajoutée avant l'apparition et après la disparition d'un objet |
 | Type de flou | mosaïque lissée, ou aplat de couleur (le plus sûr) |
 | Forme | ellipse pour les visages, rectangle arrondi pour les plaques par défaut |
-| Score minimal des visages, des plaques | une détection n'est floutée que si son meilleur score atteint ce minimum (0,40 pour les visages, 0,25 pour les plaques au départ). Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué. Le changement s'applique tout de suite, sans réanalyse ; le nombre de détections écartées s'affiche sous le curseur |
+| Score minimal des visages, des plaques | une détection n'est floutée que si elle atteint ce minimum (0,40 pour les visages, 0,25 pour les plaques au départ). Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué. Le changement s'applique tout de suite, sans réanalyse ; le nombre de détections écartées s'affiche sous le curseur |
+| Images sûres exigées | le score minimal doit être atteint sur ce nombre d'images (3 au départ), ou une seule fois avec un score très net. Les fausses détections, qui clignotent sur une ou deux images, sont ainsi écartées |
 
 Les détections écartées par le score minimal ne sont pas floutées. Pour les voir, ouvrez
 « Détections écartées » dans l'onglet « Zones » : elles sont entourées en gris sur l'image, et
@@ -366,7 +374,7 @@ Le détail des options est dans le [README](README.md).
 | « un traitement est déjà en cours » | attendez la fin, ou cliquez « Annuler » |
 | L'export refuse : « passages non analysés » | cliquez l'étape « 2 Analyse » puis « Analyser » |
 | Les couleurs de l'aperçu sont ternes (vidéo HDR) | seul l'aperçu est concerné ; l'export garde les couleurs de la source |
-| Trop de faux flous | montez « Score minimal pour suivre un objet » à 0,30 (au prix d'un risque de fuite plus élevé) |
+| Trop de faux flous | dans « Réglages », montez « Score minimal des visages » ou « Images sûres exigées » ; l'effet est immédiat, sans réanalyse (au prix d'un risque de fuite plus élevé) |
 
 Fichiers créés à côté de votre vidéo : `nom.motoblur.json` (le projet), `nom.motoblur.proxies/`
 (aperçus, supprimables), `nom.motoblur.report.txt` (rapport, en ligne de commande). Les modèles

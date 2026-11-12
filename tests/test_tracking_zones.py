@@ -363,12 +363,12 @@ def test_low_score_tracks_are_not_blurred_unless_forced(video_info):
     from moto_blur.postprocess import below_min_score
 
     weak = pj.Track(1, "face", [[i * F, 100, 100, 140, 150, 0.22] for i in range(20)])
-    real = pj.Track(2, "face", [[i * F, 600, 100, 640, 150, 0.25 if i != 7 else 0.62] for i in range(20)])
+    real = pj.Track(2, "face", [[i * F, 600, 100, 640, 150, 0.25 if i not in (7, 8, 12) else 0.52] for i in range(20)])
     plate = pj.Track(3, "plate", [[i * F, 900, 500, 1000, 530, 0.3] for i in range(20)])
     s = pj.BlurSettings()
     assert below_min_score(weak, s) and not below_min_score(real, s) and not below_min_score(plate, s)
     ids = {z.track_id for z in ZoneIndex([weak, real, plate], s, video_info).shaped(5 * F)}
-    assert ids == {2, 3}  # un seul bon score suffit à garder toute la piste
+    assert ids == {2, 3}  # trois images assez sûres suffisent à garder toute la piste
     # une piste écartée ne figure pas dans les passages à vérifier
     assert all(1 not in r["tracks"] for r in build_review("c1", [weak, real, plate], video_info, settings=s))
     weak.forced = True
@@ -475,3 +475,17 @@ def test_tracked_object_covered_by_a_larger_detection_keeps_its_name(video_info)
     (zone,) = ZoneIndex([plate, phone], pj.BlurSettings(), video_info).shaped(5 * F)
     assert zone.kind == "dash" and zone.track_id == 2 and sorted(zone.tracks) == [1, 2]
     assert zone.box[0] <= 700 and zone.box[2] >= 1200  # la zone large est conservée
+
+
+def test_flickering_detections_are_dropped_but_a_clear_one_is_kept(video_info):
+    from moto_blur.postprocess import below_min_score
+
+    s = pj.BlurSettings()  # visages : 0,40 sur 3 images, ou 0,65 une fois
+    flicker = pj.Track(1, "face", [[0, 100, 100, 140, 150, 0.45]])
+    twice = pj.Track(2, "face", [[0, 100, 100, 140, 150, 0.5], [F, 100, 100, 140, 150, 0.55]])
+    clear = pj.Track(3, "face", [[0, 100, 100, 140, 150, 0.7]])
+    seen = pj.Track(4, "face", [[i * F, 100, 100, 140, 150, 0.42] for i in range(3)])
+    assert below_min_score(flicker, s) and below_min_score(twice, s)
+    assert not below_min_score(clear, s) and not below_min_score(seen, s)
+    # réglage à une image : comportement d'avant
+    assert not below_min_score(flicker, pj.BlurSettings(min_hits=1))

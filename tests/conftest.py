@@ -114,3 +114,66 @@ def read_audio(path: Path) -> np.ndarray:
     with av.open(str(path)) as c:
         chunks = [f.to_ndarray() for f in c.decode(audio=0)]
     return np.concatenate(chunks, axis=1)
+
+
+def gauge_image(w: int = 120, h: int = 80) -> np.ndarray:
+    """Un « compteur » texturé : cadran, aiguille, chiffres (aspect stable, reconnaissable)."""
+    import cv2
+
+    img = np.full((h, w, 3), 30, dtype=np.uint8)
+    cv2.rectangle(img, (2, 2), (w - 3, h - 3), (200, 200, 200), 2)
+    cv2.circle(img, (w // 3, h // 2), h // 3, (230, 230, 230), 2)
+    cv2.line(img, (w // 3, h // 2), (w // 3 + h // 4, h // 2 - h // 5), (0, 0, 255), 3)
+    cv2.putText(img, "88", (w // 2 + 4, h // 2 + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (80, 255, 255), 2)
+    for k in range(5):
+        cv2.rectangle(img, (w // 2 + 4 + 10 * k, h - 18), (w // 2 + 10 + 10 * k, h - 10), (0, 200, 0), -1)
+    return img
+
+
+def make_shots_video(path: Path) -> tuple[Path, dict]:
+    """Trois plans de 1 s à 30 i/s, en 640x360, comme une vidéo recadrée depuis une caméra 360 :
+
+    - plan A : le compteur en bas à gauche, qui bouge un peu (vibrations) ;
+    - plan B : autre cadrage, le compteur plus grand à droite, et un « rétroviseur » à
+      l'ancienne place du compteur (ce sur quoi un suivi naïf glisse) ;
+    - plan C : le compteur n'est plus dans l'image.
+    Renvoie aussi les positions vraies du compteur (x1, y1, x2, y2) par image.
+    """
+    import cv2
+
+    rng = np.random.default_rng(3)
+    def ground(color):
+        base = rng.integers(0, 60, (45, 80, 3)).astype(np.uint8)
+        img = cv2.resize(base, (640, 360), interpolation=cv2.INTER_CUBIC)
+        return np.clip(img.astype(int) + np.array(color), 0, 255).astype(np.uint8)
+
+    grounds = {"A": ground((60, 90, 70)), "B": ground((150, 90, 40)), "C": ground((40, 40, 140))}
+    gauge = gauge_image()
+    big = cv2.resize(gauge, (156, 104))
+    truth = {}
+    with av.open(str(path), "w") as out:
+        v = out.add_stream("libx264", rate=30)
+        v.width, v.height, v.pix_fmt = 640, 360, "yuv420p"
+        v.codec_context.options = {"crf": "16", "g": "15"}
+        for i in range(90):
+            shot = "A" if i < 30 else "B" if i < 60 else "C"
+            dx, dy = int(3 * np.sin(i * 1.7)), int(2 * np.cos(i * 2.3))
+            img = np.roll(grounds[shot], (dy, dx), axis=(0, 1)).copy()
+            if shot == "A":
+                x, y = 60 + i, 240 + dy
+                img[y : y + 80, x : x + 120] = gauge
+                truth[i] = (x, y, x + 120, y + 80)
+            elif shot == "B":
+                # rétroviseur : ovale clair et sombre à l'ancienne place du compteur
+                cv2.ellipse(img, (140 + dx, 280 + dy), (62, 38), 0, 0, 360, (210, 210, 210), -1)
+                cv2.ellipse(img, (140 + dx, 280 + dy), (50, 28), 0, 0, 360, (70, 60, 50), -1)
+                x, y = 430 + dx, 150 + dy
+                img[y : y + 104, x : x + 156] = big
+                truth[i] = (x, y, x + 156, y + 104)
+            frame = av.VideoFrame.from_ndarray(img, format="rgb24")
+            frame.pts, frame.time_base = i, Fraction(1, 30)
+            for p in v.encode(frame):
+                out.mux(p)
+        for p in v.encode(None):
+            out.mux(p)
+    return path, truth

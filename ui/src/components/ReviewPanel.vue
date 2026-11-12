@@ -3,7 +3,7 @@
 import { computed } from "vue";
 import {
   addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
-  markEntries, missing, next, previous, relocate, replay, restoreZone, resume, review, startQueue, startSweep,
+  markEntries, missing, next, objectHere, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue, startSweep,
   unvalidate, validate,
 } from "../review";
 import { busy, droppedHere, duration, formatTime, kindLabel, needsAnalysis, objectNames, player, state, time } from "../store";
@@ -128,7 +128,15 @@ function stopSweep(): void {
             <button :disabled="busy" title="Tracer un flou là où il en manque un" @click="missing">Il manque un flou</button>
             <button :disabled="busy" title="Retirer un flou posé à tort" @click="extra">Un flou est en trop</button>
           </div>
+          <button v-if="objectHere" class="wide" :disabled="busy" title="Entourer l'objet sur cette image : son suivi est refait sur ce plan seulement" @click="showObject">
+            <Icon name="target" />Montrer « {{ objectHere }} » ici
+          </button>
         </template>
+        <div v-else-if="review.sub === 'object'" class="substate">
+          <strong>Montrer « {{ objectHere }} »</strong>
+          <p>Tracez un rectangle autour de « {{ objectHere }} » sur l'image affichée. Son suivi sera refait sur ce plan, jusqu'au prochain changement de plan ; le reste est conservé.</p>
+          <button class="wide" @click="resume">Annuler</button>
+        </div>
         <div v-else-if="review.sub === 'missing'" class="substate">
           <strong>Il manque un flou</strong>
           <p>Tracez un rectangle sur l'image, à l'endroit à flouter. Il couvrira tout le passage, puis la boucle reprendra.</p>
