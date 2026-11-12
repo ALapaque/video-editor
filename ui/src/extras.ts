@@ -2,7 +2,7 @@
 // flou ajouté qui suit, relecture mémorisée, capture, vignettes, récents, ménage, profil.
 // Couche commune aux deux modes : les composants l'importent, sans la dupliquer.
 
-import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State } from "./api";
+import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track } from "./api";
 import { busy, notify, project, refresh, send, start, state } from "./store";
 
 // --- Annuler / rétablir -------------------------------------------------------
@@ -232,4 +232,39 @@ export function installDrop(open: (paths: string[]) => void): void {
       notify("Dans le navigateur, un fichier déposé ne donne pas son emplacement : utilisez « Ouvrir ». Le glisser-déposer fonctionne dans l'application installée.", "info", true);
     }
   });
+}
+
+// --- Vocabulaire commun : un « flou » et son niveau de confiance ------------------------------
+// L'interface parle de « flou » partout (jamais de « zone », « détection » ou « piste ») et
+// remplace les scores chiffrés par trois niveaux. Règle unique, utilisée par les deux modes.
+
+export type Confidence = "sur" | "verifier" | "douteux" | "ecarte" | "main";
+
+export const confidenceInfo: Record<Confidence, { label: string; help: string }> = {
+  sur: { label: "sûr", help: "Le logiciel est sûr de ce qu'il a trouvé." },
+  verifier: { label: "à vérifier", help: "Le logiciel hésite un peu : jetez un œil." },
+  douteux: { label: "douteux", help: "Le logiciel hésite beaucoup : c'est peut-être une erreur." },
+  ecarte: { label: "non flouté", help: "Trop peu sûr pour être flouté. Vous pouvez le flouter quand même." },
+  main: { label: "ajouté par vous", help: "Flou que vous avez ajouté ou objet que vous avez désigné." },
+};
+
+/** Niveau de confiance d'un flou, d'après son score habituel (médian) sur toute sa durée. */
+export function confidence(track: Track): Confidence {
+  if (track.source !== "auto") return "main";
+  if (track.below_min_score && !track.forced) return "ecarte";
+  if (track.score >= 0.6) return "sur";
+  if (track.score >= 0.4) return "verifier";
+  return "douteux";
+}
+
+/** Nom d'un flou en clair, avec une majuscule : « Visage », « Plaque », « Compteur »… */
+export function blurName(track: Track): string {
+  const name = track.source === "manual" && track.kind === "manual" ? "Flou ajouté" : track.name;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** « de 0:12 à 0:15 » (temps du clip, sans décimales). */
+export function blurSpan(track: Track): string {
+  const t = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, "0")}`;
+  return t(track.start) === t(track.end) ? `à ${t(track.start)}` : `de ${t(track.start)} à ${t(track.end)}`;
 }

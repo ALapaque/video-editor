@@ -40,6 +40,9 @@ export const state = reactive({
   loopRange: null as { from: number; to: number } | null, // extrait lu en boucle hors vérification (mode simple)
   // mode avancé : rectangle de flou tracé, en attente du choix « suivre » ou « zone fixe »
   pendingBlur: null as PendingBlur | null,
+  // Flou mis en évidence sur la vidéo (vérification objet par objet, survol d'une vignette…) :
+  // le lecteur le fait ressortir et assombrit le reste de l'image. null : rien de mis en évidence.
+  focus: null as { clip: string; ids: number[] } | null,
 });
 
 // --- Mode simple ou avancé ----------------------------------------------------
