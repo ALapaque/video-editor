@@ -69,7 +69,7 @@ export const rate = computed(() => review.speed);
 /** Passage lu en boucle autour de l'élément affiché, en secondes du montage. */
 export const loop = computed(() => {
   const e = currentEntry.value;
-  if (review.mode !== "queue" || !e) return null;
+  if (review.mode !== "queue" || !e) return state.loopRange; // hors vérification : extrait du mode simple, s'il y en a un
   const pad = e.type === "mark" ? 1.5 : 0.5;
   return { from: Math.max(0, e.at - pad), to: Math.min(duration.value, e.end + pad) };
 });

@@ -226,3 +226,92 @@ def test_dropped_detections_can_be_shown_and_forced(doubtful):
     doubtful("PUT", "/api/settings", {"blur": {"plate_min_score": 0.2}})
     lowered = doubtful("GET", "/api/zones?clip=c1&from=10&to=11&dropped=1")
     assert set(lowered["frames"]) == {"10", "11"} and lowered["dropped"] == {}
+
+
+def test_kinds_setting_is_validated_and_drops_unwanted_detections(api):
+    """Le choix « que faut-il flouter » : liste validée ; une catégorie retirée n'est plus floutée."""
+    with pytest.raises(urllib.error.HTTPError):
+        api("PUT", "/api/settings", {"analysis": {"kinds": ["chien"]}})
+    with pytest.raises(urllib.error.HTTPError):
+        api("PUT", "/api/settings", {"analysis": {"kinds": "plate"}})
+    # même choix (ordre et doublons ignorés) : rien ne change, l'analyse reste valable
+    state = api("PUT", "/api/settings", {"analysis": {"kinds": ["plate", "face", "plate"]}})
+    assert state["project"]["settings"]["analysis"]["kinds"] == ["face", "plate"]
+    assert state["project"]["clips"][0]["needs_analysis"] is False
+    assert len(state["project"]["tracks"]["c1"]) == 1
+    # un objet désigné à la main survit au changement de choix
+    api("POST", "/api/dash", {"clip": "c1", "mode": "fixed", "time": 0, "box": [10, 120, 110, 170], "label": "GPS"})
+    state = api("PUT", "/api/settings", {"analysis": {"kinds": ["face"]}})
+    assert [t["kind"] for t in state["project"]["tracks"]["c1"]] == ["dash"]
+    assert state["project"]["clips"][0]["needs_analysis"] is True
+    assert api("GET", "/api/zones?clip=c1&from=10&to=10")["frames"]["10"][0][6] == "dash"
+    # revenir au choix d'origine ne ressuscite pas l'ancienne analyse : elle est à refaire
+    state = api("PUT", "/api/settings", {"analysis": {"kinds": ["face", "plate"]}})
+    assert state["project"]["clips"][0]["needs_analysis"] is True
+
+
+def test_no_kind_means_nothing_to_analyse(api, tmp_path):
+    """Ni visages ni plaques : le clip n'attend plus d'analyse, et l'export reste possible."""
+    state = api("PUT", "/api/settings", {"analysis": {"kinds": []}})
+    p = state["project"]
+    assert p["settings"]["analysis"]["kinds"] == []
+    assert p["clips"][0]["needs_analysis"] is False and p["tracks"]["c1"] == [] and p["problem"] is None
+    assert analyze_project(api.project, detect_fn=FakeDetector()) is True  # rien à faire, sans erreur
+    assert api("GET", "/api/state")["project"]["tracks"]["c1"] == []
+    reloaded = pj.load(api.project.path)
+    assert reloaded.analysis_settings.kinds == []
+
+
+def test_reveal_opens_the_folder_of_a_project_file_only(api, tmp_path, monkeypatch):
+    """« Ouvrir le dossier » : seulement un fichier existant du projet, jamais autre chose."""
+    import moto_blur.server as server
+
+    calls = []
+    monkeypatch.setattr(server.subprocess, "Popen", lambda command, **kw: calls.append(command))
+    monkeypatch.setenv("DISPLAY", ":0")
+    output = tmp_path / "clip_floute.mp4"
+    output.write_bytes(b"x")
+
+    monkeypatch.setattr(server.sys, "platform", "linux")
+    assert api("POST", "/api/reveal", {"path": str(output)}) == {"ok": True, "folder": str(tmp_path.resolve())}
+    monkeypatch.setattr(server.sys, "platform", "darwin")
+    api("POST", "/api/reveal", {"path": str(output)})
+    monkeypatch.setattr(server.sys, "platform", "win32")
+    api("POST", "/api/reveal", {"path": str(output)})
+    resolved = str(output.resolve())
+    assert calls == [["xdg-open", str(tmp_path.resolve())], ["open", "-R", resolved], ["explorer", f"/select,{resolved}"]]
+
+    def status(body, headers=None):
+        with pytest.raises(urllib.error.HTTPError) as error:
+            api("POST", "/api/reveal", body, headers=headers)
+        return error.value.code
+
+    assert status({"path": "/etc/passwd"}) == 403  # hors du dossier du projet
+    assert status({"path": str(tmp_path / ".." / "ailleurs.mp4")}) == 403
+    assert status({"path": str(tmp_path / "absent.mp4")}) == 404
+    assert status({}) == 400
+    assert status({"path": str(output)}, {"Origin": "https://exemple.com"}) == 403  # local uniquement
+    assert len(calls) == 3
+    # la dernière vidéo exportée est acceptée même hors du dossier du projet
+    elsewhere = tmp_path.parent / "sortie_ailleurs.mp4"
+    elsewhere.write_bytes(b"x")
+    assert status({"path": str(elsewhere)}) == 403
+    api.engine.last_output = elsewhere.resolve()
+    api("POST", "/api/reveal", {"path": str(elsewhere)})
+    assert len(calls) == 4
+    elsewhere.unlink()
+
+    # machine sans bureau graphique, ou commande absente : message d'erreur pour l'interface
+    monkeypatch.setattr(server.sys, "platform", "linux")
+    monkeypatch.delenv("DISPLAY")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        api("POST", "/api/reveal", {"path": str(output)})
+    assert error.value.code == 500 and "impossible d'ouvrir" in json.loads(error.value.read())["error"]
+
+    def missing(command, **kw):
+        raise FileNotFoundError("xdg-open")
+
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(server.subprocess, "Popen", missing)
+    assert status({"path": str(output)}) == 500

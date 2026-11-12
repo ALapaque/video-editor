@@ -10,6 +10,9 @@ import {
   state, time, trackById, zonesNow,
 } from "../store";
 
+// `simple` : lecteur de l'assistant du mode simple, sans barre de commandes (l'assistant a les siennes).
+defineProps<{ simple?: boolean }>();
+
 const video = ref<HTMLVideoElement>();
 const canvas = ref<HTMLCanvasElement>();
 const stage = ref<HTMLDivElement>();
@@ -267,6 +270,16 @@ function draw(): void {
     ctx.setLineDash([]);
     if (droppedCount.value !== dropped.length) droppedCount.value = dropped.length;
   }
+  const waiting = state.pendingDash;
+  if (waiting && waiting.clip === s.clip.id && !drag) {
+    // rectangle tracé autour d'un objet, en attente de son nom
+    const [x1, y1, x2, y2] = waiting.box;
+    ctx.lineWidth = 2 * ratio;
+    ctx.strokeStyle = "#fde047";
+    ctx.setLineDash([5 * ratio, 4 * ratio]);
+    ctx.strokeRect(x1 * k, y1 * k, (x2 - x1) * k, (y2 - y1) * k);
+    ctx.setLineDash([]);
+  }
   if (drag) {
     ctx.lineWidth = 2 * ratio;
     ctx.strokeStyle = "#fde047";
@@ -302,6 +315,7 @@ function pointerDown(event: PointerEvent): void {
       else notify("Cliquez directement sur un flou entouré dans l'image.");
       return;
     }
+    if (state.mode === "simple") return; // pas de sélection de zone dans l'assistant
     state.selectedTrack = hits.length ? { clip: s.clip.id, id: hits[0][7] } : null;
     draw();
     return;
@@ -340,7 +354,9 @@ async function pointerUp(): Promise<void> {
     const from = Math.max(guidedLoop.from + base, s.inFrame / s.fps);
     const to = Math.min(guidedLoop.to + base, (s.outFrame - 1) / s.fps);
     await saveManual(s.clip.id, [[from, ...box], [Math.max(to, from + 1 / s.fps), ...box]]);
-    notify("Zone ajoutée sur tout le passage. Regardez la boucle : si l'objet bouge, retracez-la à un autre instant avec « Déplacer ici… » dans l'onglet « Zones ».");
+    notify(state.mode === "simple"
+      ? "Flou ajouté sur tout le passage. Regardez la vidéo : s'il ne couvre pas tout, ajoutez-en un autre."
+      : "Zone ajoutée sur tout le passage. Regardez la boucle : si l'objet bouge, retracez-la à un autre instant avec « Déplacer ici… » dans l'onglet « Zones ».");
     resume();
   } else if (tool === "manual") {
     // nouvelle zone : de l'image courante jusqu'à 2 s plus tard (ou la fin du passage)
@@ -387,7 +403,7 @@ watch(() => [state.seg, state.frame, state.data.version, state.preview, state.se
 watch(() => current.value?.clip.proxy, () => nextTick(sync));
 watch(exact, (value) => (exactLoading.value = !!value));
 watch(rate, (value) => video.value && (video.value.playbackRate = value));
-watch(() => [review.sub, review.current, state.showDropped], draw);
+watch(() => [review.sub, review.current, state.showDropped, state.pendingDash], draw);
 watch([volume, userMuted], () => {
   applyVolume();
   try {
@@ -397,7 +413,22 @@ watch([volume, userMuted], () => {
   }
 });
 
-const observer = new ResizeObserver(() => draw());
+// Taille de l'image dans la scène : la plus grande qui garde les proportions de la vidéo. Calculée
+// au redimensionnement seulement (jamais à chaque image) ; sans elle, une scène plus haute que la
+// vidéo déformait le calque et décalait les flous par rapport à l'image.
+const fit = ref<{ width: string; height: string } | null>(null);
+function measure(): void {
+  const el = stage.value;
+  const c = clip.value;
+  if (!el || !c || !el.clientWidth || !el.clientHeight) return;
+  const width = Math.min(el.clientWidth, (el.clientHeight * c.width) / c.height);
+  fit.value = { width: `${width}px`, height: `${(width * c.height) / c.width}px` };
+}
+const observer = new ResizeObserver(() => {
+  measure();
+  void nextTick(draw);
+});
+watch(() => [clip.value?.width, clip.value?.height], measure);
 onMounted(() => {
   window.addEventListener("keydown", onKey);
   if (stage.value) observer.observe(stage.value);
@@ -421,16 +452,17 @@ defineExpose({ toggle, step, pause });
   <div class="player">
     <div ref="stage" class="stage" :class="{ drawing: state.tool !== 'none', picking: review.sub === 'extra' }">
       <template v-if="clip">
-        <div class="frame" :style="{ aspectRatio: `${clip.width} / ${clip.height}` }">
+        <div class="frame" :style="fit ?? { aspectRatio: `${clip.width} / ${clip.height}` }">
           <video ref="video" playsinline preload="auto" @seeked="draw" @loadeddata="sync" @ended="onEnded"></video>
           <img v-if="exactUrl && !state.playing" class="exact" :src="exactUrl" alt="" @load="exactLoading = false" />
           <canvas ref="canvas" :data-dropped="state.showDropped ? droppedCount : undefined" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"></canvas>
           <div v-if="!clip.proxy" class="veil"><span class="spinner"></span>Préparation de l'aperçu de ce clip…</div>
           <Transition name="hint">
-            <div v-if="state.tool !== 'none'" class="hint tool">
+            <div v-if="state.tool !== 'none' && simple" class="hint tool">{{ state.tool === "dash" ? "Entourez l'objet avec la souris" : "Entourez avec la souris ce qui doit être flouté" }}</div>
+            <div v-else-if="state.tool !== 'none'" class="hint tool">
               {{ state.tool === "dash" ? "Tracez un rectangle autour de l'objet à flouter" : "Tracez un rectangle sur la zone à flouter" }} — Échap pour annuler
             </div>
-            <div v-else-if="review.sub === 'extra'" class="hint tool">Cliquez le flou à retirer — Échap pour annuler</div>
+            <div v-else-if="review.sub === 'extra'" class="hint tool">{{ simple ? "Cliquez sur le flou à retirer" : "Cliquez le flou à retirer — Échap pour annuler" }}</div>
             <div v-else-if="exactLoading && exact && !state.playing" class="hint"><span class="spinner small"></span>Chargement de l'image exacte…</div>
           </Transition>
         </div>
@@ -441,7 +473,7 @@ defineExpose({ toggle, step, pause });
         <span>Ajoutez un clip pour continuer.</span>
       </div>
     </div>
-    <div class="transport">
+    <div v-if="!simple" class="transport">
       <span class="cluster">
         <button class="icon-btn" title="Image précédente (←)" aria-label="Image précédente" @click="step(-1)"><Icon name="stepBack" /></button>
         <button class="primary play" title="Lecture / pause (Espace)" @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>

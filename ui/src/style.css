@@ -496,3 +496,186 @@ button.wrap { height: auto; min-height: 30px; padding: 6px 10px; white-space: no
   /* l'indicateur d'attente reste animé : immobile, il ferait croire à un blocage */
   .spinner { animation-duration: 1.6s !important; animation-iteration-count: infinite !important; }
 }
+
+/* --- Changement de mode ------------------------------------------------------ */
+.mode-switch { height: 28px; padding: 0 9px; background: transparent; border-color: transparent; color: var(--faint); font-size: 12px; font-weight: 500; }
+.mode-switch .icon { color: var(--faint); }
+@media (hover: hover) { .mode-switch:hover:not(:disabled) { color: var(--text); } }
+.top .mode-switch { margin-left: 4px; }
+
+/* --- Choix du mode (premier lancement) --------------------------------------- */
+.mode-choice { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; overflow-y: auto; }
+.mode-choice > * { animation: rise 420ms var(--ease-enter) both; }
+.mode-choice .brand { font-size: 18px; margin-bottom: 18px; }
+.mode-choice h1 { font-size: 30px; font-weight: 680; letter-spacing: -.025em; line-height: 1.15; }
+.mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; width: min(760px, 100%); margin-top: 22px; }
+.mode-card { position: relative; height: auto; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; padding: 24px; text-align: left; white-space: normal; background: var(--surface); border-radius: var(--r-lg); }
+.mode-card.suggested { border-color: var(--accent-line); }
+.mode-icon { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin-bottom: 6px; background: var(--raised); border-radius: 12px; }
+.mode-card .mode-icon .icon { color: var(--text); }
+.mode-card.suggested .mode-icon { background: var(--accent); }
+.mode-card.suggested .mode-icon .icon { color: var(--accent-ink); }
+.mode-name { font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
+.mode-text { color: var(--dim); font-size: 15px; font-weight: 400; line-height: 1.5; }
+
+/* --- Mode simple : assistant plein écran ------------------------------------- */
+/* Texte plus grand que le mode avancé, un seul bouton orange par écran, beaucoup d'air. */
+.wiz { display: flex; flex-direction: column; height: 100%; font-size: 16px; line-height: 1.5; }
+.wiz-top { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--line); font-size: 13px; }
+.wsteps { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.wstep { position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px; border: 1px solid transparent; border-radius: 999px; color: var(--faint); white-space: nowrap; font-weight: 500; }
+.wstep + .wstep { margin-left: 22px; }
+.wstep + .wstep::before { content: ""; position: absolute; left: -22px; top: 50%; width: 16px; height: 1px; background: var(--line-strong); }
+.wstep .step-num { width: 22px; height: 22px; }
+.wstep.done { color: var(--dim); }
+.wstep.done .step-num { border-color: rgba(74, 222, 128, .5); color: var(--face); }
+.wstep.current { color: var(--text); background: var(--raised); border-color: var(--line); }
+.wstep.current .step-num { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.wiz-toast { top: 68px; font-size: 14px; }
+
+.wiz-main { position: relative; flex: 1; min-height: 0; display: flex; padding: 56px 32px 28px; overflow-y: auto; }
+.wiz-back { position: absolute; top: 14px; left: 20px; height: 34px; padding: 0 12px 0 9px; font-size: 14px; }
+.wiz-back .icon { color: var(--dim); }
+.wiz-panel { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; width: min(720px, 100%); margin: auto; animation: rise 260ms var(--ease-enter); }
+.wiz-panel h1 { font-size: 30px; font-weight: 680; letter-spacing: -.025em; line-height: 1.15; }
+.wiz-panel h2 { margin: 10px 0 0; font-size: 19px; font-weight: 650; letter-spacing: -.01em; }
+.wiz-lead { max-width: 60ch; color: var(--dim); font-size: 17px; line-height: 1.5; }
+.wiz-lead strong { color: var(--text); font-weight: 600; }
+.wiz-lead .icon { display: inline-block; margin: 0 7px -2px 0; }
+.wiz-lead .mono { font-size: 14px; overflow-wrap: anywhere; }
+.wiz-icon { display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; margin-bottom: 4px; background: var(--raised); border: 1px solid var(--line); border-radius: 16px; color: var(--text); }
+.wiz-icon.ok { background: rgba(74, 222, 128, .12); border-color: rgba(74, 222, 128, .45); color: var(--face); }
+.wiz-icon.warn { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); }
+.wiz-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+.wiz-actions.column { flex-direction: column; align-self: stretch; }
+button.big { height: 52px; padding: 0 22px; gap: 9px; border-radius: 10px; font-size: 17px; }
+button.big.primary { font-weight: 650; }
+button.big .icon { color: inherit; }
+button.big:not(.primary):not(.on) .icon { color: var(--dim); }
+.wiz-error { align-self: stretch; padding: 12px 14px; background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r-md); color: #ffd9dc; font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.wiz-note { display: flex; align-items: flex-start; gap: 9px; min-height: 24px; color: var(--accent-hi); font-size: 15px; opacity: 0; transition: opacity var(--m-in) var(--ease); }
+.wiz-note.shown { opacity: 1; }
+.wiz-note .icon { flex: none; margin-top: 4px; }
+.wiz-note.warn { align-self: stretch; padding: 10px 12px; background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--r-md); color: var(--text); }
+.wiz-note.warn .icon { color: var(--accent); }
+.wiz-note small { display: block; margin-top: 4px; font-size: 12.5px; overflow-wrap: anywhere; }
+
+/* cartes à cocher : que faut-il flouter ? */
+.wiz-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-self: stretch; margin-top: 8px; }
+.wiz-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 20px 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); cursor: pointer; transition: background-color var(--m-out) var(--ease), border-color var(--m-out) var(--ease); }
+.wiz-card:hover { border-color: var(--line-strong); background: var(--raised); }
+.wiz-card.on { background: var(--accent-soft); border-color: var(--accent); }
+.wiz-card input { position: absolute; top: 16px; right: 16px; width: 24px; height: 24px; border-radius: 6px; background-size: 18px; }
+.wiz-card-icon { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin-bottom: 8px; background: var(--raised); border-radius: 12px; color: var(--dim); }
+.wiz-card.on .wiz-card-icon { background: var(--accent); color: var(--accent-ink); }
+.wiz-card-name { font-size: 18px; font-weight: 650; line-height: 1.25; }
+.wiz-card-text { color: var(--dim); font-size: 14.5px; line-height: 1.45; }
+
+/* progression dans la page */
+.wiz-progress { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; align-self: stretch; margin-top: 8px; }
+.wiz-percent { font-size: 76px; font-weight: 650; line-height: 1; letter-spacing: -.03em; }
+.wiz-percent small { font-size: 28px; font-weight: 500; color: var(--dim); letter-spacing: 0; }
+.wiz-progress .bar { align-self: stretch; height: 10px; border-radius: 5px; }
+.wiz-progress .bar > span { border-radius: 5px; }
+.wiz-phase { color: var(--dim); }
+.wiz-left { min-height: 24px; font-size: 16px; color: var(--text); }
+.wiz-progress > button { height: 38px; padding: 0 14px; font-size: 15px; margin-top: 6px; }
+.wiz-confirm { display: flex; gap: 8px; align-self: stretch; margin-top: 6px; font-size: 15px; }
+.wiz-confirm button { height: 38px; padding: 0 14px; font-size: 15px; }
+
+/* écrans avec la vidéo : vidéo à gauche, question et réponses à droite */
+.wiz-main.with-video { gap: 28px; padding: 60px 28px 24px; overflow: hidden; }
+.wiz-stage { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.wiz-stage .player { gap: 0; }
+/* pas de bandes noires : l'image est posée juste au-dessus de ses commandes */
+.wiz-stage .stage { align-items: flex-end; background: transparent; border: 0; border-radius: 0; overflow: visible; }
+.wiz-stage .frame { background: #000; border-radius: var(--r-md); overflow: hidden; }
+.wiz-stage .hint { top: 14px; padding: 8px 16px; font-size: 15px; }
+.wiz-under { flex: none; min-height: 64px; display: flex; flex-direction: column; justify-content: center; }
+.wiz-main.with-video .wiz-panel { flex: none; width: 400px; margin: 0; align-self: center; max-height: 100%; overflow-y: auto; padding: 2px 4px 2px 2px; }
+.wiz-main.with-video .wiz-panel h1 { font-size: 26px; }
+.wiz-controls { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.wiz-controls button { height: 40px; padding: 0 14px; font-size: 15px; }
+.wiz-controls input[type="range"] { flex: 1; }
+.wiz-play { min-width: 112px; }
+.wiz-timebar { flex: 1; height: 6px; border-radius: 3px; }
+.wiz-speed { display: inline-flex; align-items: center; gap: 9px; }
+.wiz-seek { display: flex; flex-direction: column; gap: 8px; color: var(--accent-hi); font-size: 15px; font-weight: 500; }
+.wiz-seek input, .wiz-controls input[type="range"] { height: 26px; }
+.wiz-seek input::-webkit-slider-runnable-track, .wiz-controls input::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; }
+.wiz-seek input::-webkit-slider-thumb, .wiz-controls input::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -7px; background: var(--accent); }
+.wiz-seek input::-moz-range-track, .wiz-controls input::-moz-range-track { height: 8px; border-radius: 4px; }
+.wiz-seek input::-moz-range-thumb, .wiz-controls input::-moz-range-thumb { width: 22px; height: 22px; background: var(--accent); }
+.wiz-how { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 10px; color: var(--dim); font-size: 17px; }
+.wiz-how strong { color: var(--text); }
+.wiz-wait { display: flex; align-items: center; gap: 10px; align-self: stretch; margin-top: 8px; padding: 14px; background: var(--accent-soft); border: 1px dashed var(--accent-line); border-radius: var(--r-md); color: var(--accent-hi); font-size: 15px; }
+.wiz-names { display: flex; flex-wrap: wrap; gap: 8px; align-self: stretch; }
+.wiz-names button.big { height: 44px; padding: 0 16px; font-size: 16px; }
+.wiz-names input { flex: 1; min-width: 130px; height: 44px; padding: 0 12px; font-size: 16px; border-radius: 10px; }
+.wiz-answers { display: flex; flex-direction: column; gap: 10px; align-self: stretch; }
+button.answer { height: auto; justify-content: flex-start; padding: 14px 18px; text-align: left; white-space: normal; }
+button.answer strong { display: block; font-size: 17px; font-weight: 650; }
+button.answer small { display: block; margin-top: 2px; color: var(--dim); font-size: 14px; font-weight: 400; line-height: 1.4; }
+.wiz-list { align-self: stretch; margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 16px; }
+.wiz-list li { display: flex; align-items: center; gap: 10px; padding: 9px 9px 9px 14px; background: var(--raised); border-radius: var(--r-md); }
+.wiz-list li > .icon { color: var(--face); }
+.wiz-list button.small { height: 32px; padding: 0 12px; font-size: 14px; }
+.wiz-kept { font-size: 19px; }
+.wiz-count { display: flex; align-items: center; gap: 12px; align-self: stretch; color: var(--dim); font-size: 15px; }
+.wiz-count strong { color: var(--accent-hi); font-size: 17px; white-space: nowrap; }
+.wiz-count .bar { flex: 1; height: 6px; border-radius: 3px; }
+.wiz-dropped { align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: 9px; padding: 12px 14px; background: var(--raised); border-radius: var(--r-md); font-size: 15px; }
+.wiz-dropped > button { height: 36px; font-size: 15px; }
+.wiz-panel .signal { height: 84px; font-size: 19px; }
+.wiz-panel .signal kbd { font-size: 13px; padding: 2px 7px; }
+.wiz-panel .flash { align-self: stretch; height: 22px; font-size: 15px; }
+.wiz-marks { align-self: stretch; text-align: center; color: var(--dim); font-size: 15px; }
+
+/* barre à deux poignées : couper le début et la fin */
+.trim-wrap { display: flex; flex-direction: column; gap: 6px; padding: 0 14px; user-select: none; -webkit-user-select: none; }
+.trim { position: relative; height: 40px; background: repeating-linear-gradient(135deg, var(--raised) 0 6px, var(--surface) 6px 12px); border: 1px solid var(--line); border-radius: 8px; touch-action: none; }
+.trim-kept { position: absolute; top: -1px; bottom: -1px; background: var(--accent-soft); border-top: 2px solid var(--accent); border-bottom: 2px solid var(--accent); }
+.trim-head { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; margin-left: -1px; background: #fff; pointer-events: none; will-change: transform; }
+.trim-handle { position: absolute; z-index: 1; top: -6px; bottom: -6px; width: 28px; margin-left: -14px; display: flex; align-items: center; justify-content: center; background: var(--accent); border-radius: 8px; cursor: ew-resize; touch-action: none; box-shadow: 0 2px 8px rgba(0, 0, 0, .5); }
+.trim-handle span { width: 2px; height: 16px; background: var(--accent-ink); border-radius: 1px; box-shadow: -5px 0 0 var(--accent-ink), 5px 0 0 var(--accent-ink); opacity: .7; }
+.trim-handle:hover { background: var(--accent-hi); }
+.trim-labels { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; color: var(--dim); font-size: 14px; }
+.trim-labels button { height: 40px; padding: 0 16px; font-size: 15px; }
+.trim-labels strong { color: var(--text); font-weight: 600; }
+
+/* enregistrement */
+.wiz-summary { align-self: stretch; margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 17px; }
+.wiz-summary li { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--dim); }
+.wiz-summary li .icon { margin-top: 4px; color: var(--faint); }
+.wiz-summary li strong { color: var(--text); font-weight: 600; }
+.wiz-summary li.warn .icon { color: var(--accent); }
+.wiz-unchecked { align-self: stretch; font-size: 15px; }
+.wiz-unchecked .check { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; cursor: pointer; }
+.wiz-unchecked .check input { width: 22px; height: 22px; background-size: 16px; }
+.wiz-field { align-self: stretch; display: flex; flex-direction: column; gap: 6px; color: var(--dim); font-size: 14px; }
+.wiz-field input[type="text"] { height: 44px; padding: 0 12px; font-size: 16px; color: var(--text); border-radius: 10px; }
+.wiz-field.quality { max-width: 360px; }
+.wiz-field .split { display: flex; justify-content: space-between; }
+.wiz-panel .fold-head { font-size: 14px; margin: -4px 0; }
+.wiz-path { align-self: stretch; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); font-size: 15px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; cursor: text; }
+.picker-where { font-size: 12.5px; overflow-wrap: anywhere; }
+.wiz .picker { font-size: 14px; }
+.wiz .picker .files li { padding: 10px 11px; }
+
+@media (max-width: 1280px), (max-height: 800px) {
+  .wstep + .wstep { margin-left: 14px; }
+  .wstep + .wstep::before { left: -14px; width: 10px; }
+  .wstep { padding-right: 8px; }
+  .wiz-main { padding: 52px 24px 20px; }
+  .wiz-main.with-video { gap: 22px; padding: 54px 20px 16px; }
+  .wiz-main.with-video .wiz-panel { width: 348px; gap: 11px; }
+  .wiz-main.with-video .wiz-panel h1 { font-size: 23px; }
+  .wiz-main.with-video .wiz-lead, .wiz-how { font-size: 15.5px; }
+  .wiz-main.with-video button.big:not(.answer) { height: 46px; font-size: 16px; }
+  .wiz-panel .signal { height: 72px; }
+  .wiz-percent { font-size: 64px; }
+}
+@media (max-width: 1100px) {
+  .wstep:not(.current) .wstep-label { display: none; }
+  .mode-cards, .wiz-cards { grid-template-columns: 1fr; }
+}

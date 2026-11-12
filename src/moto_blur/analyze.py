@@ -36,6 +36,8 @@ DetectFn = Callable[[np.ndarray], dict[str, np.ndarray]]
 
 def needed_intervals(project: pj.Project, clip: pj.Clip) -> list[intervals.Interval]:
     """Intervalles de PTS du clip qui doivent être analysés et ne le sont pas encore."""
+    if not project.analysis_settings.kinds:
+        return []  # ni visages ni plaques à chercher : rien à analyser
     video = clip.video
     kept = kept_intervals(resolve_segments(project), clip.id)
     pad = round(ANALYSIS_PAD_S / video.tb)
