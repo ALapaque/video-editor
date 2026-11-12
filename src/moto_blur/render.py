@@ -76,7 +76,7 @@ def check_ready(project: pj.Project, segments: list[ResolvedSegment], output: Pa
             )
         if missing_span(project, clip):
             raise RenderError(
-                f"le suivi du compteur ne couvre pas tous les passages gardés du clip {clip.id}. "
+                f"le suivi d'un objet (compteur, téléphone…) ne couvre pas tous les passages gardés du clip {clip.id}. "
                 "Lancez « moto-blur analyze » sur ce projet pour le prolonger."
             )
     if formats_differ(used) and project.conform not in ("first", "largest"):
@@ -443,7 +443,7 @@ def _draw_debug(frame: av.VideoFrame, index: ZoneIndex, video: pj.VideoInfo) -> 
         else:
             cv2.rectangle(rgb, zone[:2], zone[2:], (255, 230, 0), thin)
         obs = item.observation(frame.pts)
-        label = pj.KIND_LABELS[item.track.kind]
+        label = item.track.name
         if obs is not None:
             x1, y1, x2, y2 = (round(v) for v in obs[:4])
             cv2.rectangle(rgb, (x1, y1), (x2, y2), color, thick)
