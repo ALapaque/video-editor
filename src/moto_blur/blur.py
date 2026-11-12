@@ -50,6 +50,48 @@ def plane_array(plane: av.video.plane.VideoPlane, bytes_per_sample: int) -> np.n
     return full[:, : plane.width]
 
 
+def contour_mask(h: int, w: int, polygons, grow: float, feather: float) -> np.ndarray:
+    """Masque (h, w) entre 0 et 1 de la réunion de polygones (repère du masque), grossie de `grow`.
+
+    Le bord adouci est ajouté À L'EXTÉRIEUR de la forme grossie : l'intérieur reste couvert
+    à 100 %, l'adoucissement ne découvre rien.
+    """
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for poly in polygons:
+        points = np.rint(np.asarray(poly, dtype=np.float64) * 16).astype(np.int32)
+        cv2.fillPoly(mask, [points], 255, cv2.LINE_AA, 4)
+    mask = (mask >= 96).astype(np.uint8) * 255  # un pixel à peine touché compte comme couvert
+
+    def grown(image: np.ndarray, reach: float) -> np.ndarray:
+        r = int(np.ceil(reach))
+        if r < 1:
+            return image
+        return cv2.dilate(image, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+
+    core = grown(mask, grow)
+    sigma = min(6.0, max(0.0, feather) * 12)
+    out = core.astype(np.float32) / 255
+    if sigma >= 0.6:
+        soft = cv2.GaussianBlur(grown(core, 2 * sigma).astype(np.float32) / 255, (0, 0), sigma)
+        out = np.maximum(out, soft)
+    return out
+
+
+def zone_outline(zone, max_side: int = 320) -> list[list[int]]:
+    """Tracé (points en pixels de l'image) de ce que floute réellement une zone "contour"."""
+    x1, y1, x2, y2 = zone.box
+    scale = min(1.0, max_side / max(1, x2 - x1, y2 - y1))
+    w, h = max(2, round((x2 - x1) * scale)), max(2, round((y2 - y1) * scale))
+    local = [[((px - x1) * scale, (py - y1) * scale) for px, py in poly] for poly in zone.polygons]
+    mask = contour_mask(h, w, local, zone.grow * scale, 0.0)
+    found, _ = cv2.findContours((mask > 0.5).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not found:
+        return []
+    biggest = max(found, key=cv2.contourArea)
+    simple = cv2.approxPolyDP(biggest, 0.6, True).reshape(-1, 2)
+    return [[round(x1 + px / scale), round(y1 + py / scale)] for px, py in simple]
+
+
 def shape_mask(
     h: int, w: int, shape: str, box: tuple[float, float, float, float], radius: float, feather: float
 ) -> np.ndarray | None:
@@ -116,7 +158,13 @@ def blur_frame(
                 continue
             region = data[py1:py2, px1:px2]
             local = (x1 / sx - px1, y1 / sy - py1, x2 / sx - px1, y2 / sy - py1)
-            mask = shape_mask(py2 - py1, px2 - px1, shape, local, radius / sx, feather)
+            if shape == "contour":
+                polygons = [
+                    [(qx / sx - px1, qy / sy - py1) for qx, qy in poly] for poly in zone.polygons
+                ]
+                mask = contour_mask(py2 - py1, px2 - px1, polygons, zone.grow / sx, feather)
+            else:
+                mask = shape_mask(py2 - py1, px2 - px1, shape, local, radius / sx, feather)
             if mask is None:
                 obscure_region(region, cells, style)
                 continue

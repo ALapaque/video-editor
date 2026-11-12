@@ -79,10 +79,48 @@ def models_dir() -> Path:
     return Path(env) if env else Path.home() / ".moto-blur" / "models"
 
 
+def custom_dir(kind: str) -> Path:
+    """Dossier des modèles ajoutés par l'utilisateur pour une catégorie (« plate », « face »)."""
+    return models_dir() / "perso" / kind
+
+
+def custom_models(kind: str) -> list[str]:
+    try:
+        return sorted(p.stem for p in custom_dir(kind).glob("*.onnx") if not p.name.endswith(".lot.onnx"))
+    except OSError:
+        return []
+
+
+def available(kind: str) -> list[str]:
+    """Modèles utilisables pour une catégorie : ceux de moto-blur, puis ceux de l'utilisateur."""
+    return [m.name for m in MODELS.values() if m.kind == kind] + custom_models(kind)
+
+
+def _custom_spec(name: str, kind: str) -> ModelSpec | None:
+    """Modèle personnel : un fichier ONNX exporté par Ultralytics (une seule classe), posé dans
+    `~/.moto-blur/models/perso/<catégorie>/<nom>.onnx`. Jamais téléchargé."""
+    path = custom_dir(kind) / f"{name}.onnx"
+    if not path.is_file():
+        return None
+    size, dynamic = 640, True
+    try:
+        import onnx
+
+        dims = onnx.load(str(path), load_external_data=False).graph.input[0].type.tensor_type.shape.dim
+        dynamic = not all(d.HasField("dim_value") and d.dim_value > 0 for d in dims)
+        if len(dims) == 4 and dims[2].HasField("dim_value") and dims[2].dim_value > 0:
+            size = int(dims[2].dim_value)
+    except Exception:  # noqa: BLE001 - en-tête illisible : valeurs habituelles
+        pass
+    return ModelSpec(name, kind, "", "", path.stat().st_size / 1e6, size, "ultralytics", dynamic, "modèle personnel")
+
+
 def get_spec(name: str, kind: str) -> ModelSpec:
     spec = MODELS.get(name)
     if spec is None or spec.kind != kind:
-        choices = ", ".join(m.name for m in MODELS.values() if m.kind == kind)
+        spec = _custom_spec(name, kind)
+    if spec is None:
+        choices = ", ".join(available(kind))
         raise ValueError(f"modèle inconnu pour « {kind} » : {name}. Choix possibles : {choices}")
     return spec
 
@@ -158,8 +196,41 @@ def batchable(spec: ModelSpec, path: Path) -> tuple[ModelSpec, Path]:
         return spec, path
 
 
+def _download(url: str, target: Path, sha256: str, label: str, size_mb: float) -> None:
+    """Télécharge un fichier et vérifie son empreinte ; rien n'est gardé si elle ne correspond pas."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".part")
+    request = urllib.request.Request(url, headers={"User-Agent": "moto-blur"})
+    with urllib.request.urlopen(request) as response, open(tmp, "wb") as out:
+        total = int(response.headers.get("Content-Length") or size_mb * 1e6)
+        progress = Progress(f"Téléchargement du modèle {label}", max(1, total // 100_000), 0, unit="x 100 ko")
+        while chunk := response.read(100_000):
+            out.write(chunk)
+            progress.step()
+    digest = _sha256(tmp)
+    if digest != sha256:
+        tmp.unlink()
+        raise RuntimeError(
+            f"empreinte inattendue pour {label} : {digest} (attendu {sha256}). "
+            "Le fichier téléchargé a été supprimé."
+        )
+    os.replace(tmp, target)
+
+
+def ensure_files(name: str, files: list[tuple[str, str, str, float]]) -> Path:
+    """Modèle en plusieurs fichiers (nom, adresse, empreinte, taille en Mo) : renvoie son dossier,
+    après avoir téléchargé et vérifié ce qui manque."""
+    folder = models_dir() / name
+    for filename, url, sha256, size_mb in files:
+        if not (folder / filename).exists():
+            _download(url, folder / filename, sha256, f"{name} ({filename})", size_mb)
+    return folder
+
+
 def ensure_model(spec: ModelSpec) -> Path:
     """Renvoie le chemin local du modèle ; le télécharge s'il est absent."""
+    if not spec.url:  # modèle personnel : il est là où l'utilisateur l'a posé
+        return custom_dir(spec.kind) / f"{spec.name}.onnx"
     path = models_dir() / f"{spec.name}.onnx"
     if path.exists():
         return path

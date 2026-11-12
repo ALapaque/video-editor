@@ -22,6 +22,7 @@ import bisect
 from dataclasses import dataclass, replace
 from fractions import Fraction
 
+import cv2
 import numpy as np
 
 from .project import BlurSettings, Track, VideoInfo
@@ -74,11 +75,15 @@ class Zone:
 
     kind: str
     box: tuple[int, int, int, int]
-    shape: str = "rect"  # "rect", "rounded" ou "ellipse"
+    shape: str = "rect"  # "rect", "rounded", "ellipse" ou "contour"
     radius: int = 0  # rayon des coins pour "rounded"
     track_id: int = 0
     # Toutes les pistes réunies dans cette zone quand des flous ont été fusionnés.
     tracks: tuple[int, ...] = ()
+    # Forme "contour" : polygones (pixels de l'image) dont la réunion, grossie de `grow` pixels,
+    # est floutée. `box` en est le rectangle englobant.
+    polygons: tuple[tuple[tuple[float, float], ...], ...] = ()
+    grow: float = 0.0
 
 
 # Catégorie gardée quand des zones de catégories différentes fusionnent : la plus « voulue ».
@@ -90,6 +95,11 @@ def _inside(zone: Zone, x: float, y: float) -> bool:
     x1, y1, x2, y2 = zone.box
     if not (x1 <= x <= x2 and y1 <= y <= y2):
         return False
+    if zone.shape == "contour":  # sans compter le grossissement : jamais optimiste
+        return any(
+            cv2.pointPolygonTest(np.asarray(poly, dtype=np.float32), (float(x), float(y)), False) >= 0
+            for poly in zone.polygons
+        )
     if zone.shape == "ellipse":
         a, b = (x2 - x1) / 2, (y2 - y1) / 2
         if a <= 0 or b <= 0:
@@ -218,6 +228,10 @@ def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
     return out
 
 
+# Écart maximal entre deux images de référence d'un contour précis pour qu'il soit utilisé entre elles.
+OUTLINE_REACH_S = 0.6
+
+
 def smooth_boxes(boxes: list[Box], half: int = 2) -> list[Box]:
     """Stabilise une suite de boîtes sans jamais en découvrir une.
 
@@ -267,6 +281,12 @@ class TrackZones:
         self.boxes: list[Box] = [(o[1], o[2], o[3], o[4]) for o in obs]
         self.scores = [float(o[5]) for o in obs]
         self.raw = self.boxes  # détections telles quelles (affichage, mode debug)
+        # Contour précis : images de référence triées, (pts, points relatifs à la boîte observée).
+        self.outline = sorted(
+            (int(row[0]), np.asarray(row[1:], dtype=np.float64).reshape(-1, 2))
+            for row in (track.outline or []) if len(row) >= 7
+        ) if track.outline else []
+        self.outline_pts = [k[0] for k in self.outline]
         if settings.smooth and track.source != "manual" and len(obs) >= 3:
             self.boxes = smooth_boxes(self.boxes)
         self.frame_pts = float(video.frame_pts)
@@ -367,6 +387,9 @@ class TrackZones:
         padded = self._padded(pts)
         if padded is None or self.zone(pts) is None:
             return None
+        exact = self.contour(pts)
+        if exact is not None:
+            return exact
         (x1, y1, x2, y2), mx, my = padded
         shape = "rect" if self.track.source == "manual" else self.settings.shape_for(self.track.kind)
         radius = 0
@@ -380,6 +403,58 @@ class TrackZones:
             radius = int(min(2 * min(mx, my), (x2 - x1) / 2, (y2 - y1) / 2))
         box = (int(np.floor(x1)), int(np.floor(y1)), int(np.ceil(x2)), int(np.ceil(y2)))
         return Zone(self.track.kind, box, shape, radius, self.track.id)
+
+    def _observed_box(self, pts: float) -> Box:
+        """Boîte observée (non stabilisée) interpolée à `pts`, pour first <= pts <= last."""
+        i = min(max(bisect.bisect_right(self.pts, pts) - 1, 0), len(self.pts) - 1)
+        if i >= len(self.pts) - 1 or self.pts[i] == pts:
+            return self.raw[i]
+        w = (pts - self.pts[i]) / (self.pts[i + 1] - self.pts[i])
+        a, b = self.raw[i], self.raw[i + 1]
+        return tuple(a[k] + (b[k] - a[k]) * w for k in range(4))  # type: ignore[return-value]
+
+    def contour(self, pts: float) -> Zone | None:
+        """Zone qui épouse l'objet, si un contour précis est connu autour de cet instant.
+
+        Entre deux images de référence, on floute la réunion des deux contours voisins, reportés
+        sur la position courante de l'objet : la forme ne peut donc pas se resserrer plus vite
+        que l'objet ne change. Sans contour fiable des deux côtés (ou hors de la partie suivie),
+        None : la forme habituelle, plus large, s'applique.
+        """
+        if not self.outline or not (self.pts[0] <= pts <= self.pts[-1]):
+            return None
+        reach = OUTLINE_REACH_S * self.pts_per_s
+        i = bisect.bisect_right(self.outline_pts, pts) - 1
+        if i >= 0 and self.outline_pts[i] == pts:
+            keys = [self.outline[i]]
+        elif 0 <= i < len(self.outline) - 1 and self.outline_pts[i + 1] - self.outline_pts[i] <= reach:
+            keys = [self.outline[i], self.outline[i + 1]]
+        else:
+            return None
+        x1, y1, x2, y2 = self._observed_box(pts)
+        w, h = x2 - x1, y2 - y1
+        if w < 2 or h < 2:
+            return None
+        polygons = tuple(
+            tuple((x1 + float(u) * w, y1 + float(v) * h) for u, v in points) for _, points in keys
+        )
+        # Grossissement : petite marge, plus le déplacement de l'objet d'une image à l'autre.
+        s = self.settings
+        grow = max(min(w, h) * s.margin, float(s.min_margin_px))
+        for off in (-self.frame_pts, self.frame_pts):
+            near = min(max(pts + off, self.pts[0]), self.pts[-1])
+            n = self._observed_box(near)
+            grow += max(abs((n[0] + n[2]) - (x1 + x2)), abs((n[1] + n[3]) - (y1 + y2))) / 4
+        xs = [p[0] for poly in polygons for p in poly]
+        ys = [p[1] for poly in polygons for p in poly]
+        pad = grow + 2
+        box = (
+            int(np.floor(min(xs) - pad)), int(np.floor(min(ys) - pad)),
+            int(np.ceil(max(xs) + pad)), int(np.ceil(max(ys) + pad)),
+        )
+        if box[2] <= 0 or box[3] <= 0 or box[0] >= self.width or box[1] >= self.height:
+            return None
+        return Zone(self.track.kind, box, "contour", 0, self.track.id, polygons=polygons, grow=grow)
 
     def observation(self, pts: int) -> list[float] | None:
         """Observation brute exactement à cet instant (pour le mode debug)."""

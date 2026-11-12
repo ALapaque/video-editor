@@ -24,7 +24,7 @@ from pathlib import Path
 import av
 import cv2
 
-from . import dash, library, media, progress
+from . import contour, dash, library, media, progress, training
 from . import project as pj
 from .analyze import (
     PRESETS,
@@ -35,8 +35,9 @@ from .analyze import (
     needed_intervals,
     refresh_review,
 )
-from .blur import SUPPORTED_FORMATS, blur_frame
+from .blur import SUPPORTED_FORMATS, blur_frame, zone_outline
 from .history import History, snapshot
+from .models import available
 from .postprocess import ZoneIndex, below_min_score
 from .proxy import build_proxy, proxy_path
 from .render import RenderError, check_ready, formats_differ, render_project, used_clips
@@ -234,7 +235,11 @@ class Engine:
             project = self.project
             job = self.job.to_json() if self.job else None
             if project is None:
-                return {"project": None, "job": job, "version": self.version, "profile": library.profile_summary()}
+                return {
+                    "project": None, "job": job, "version": self.version,
+                    "profile": library.profile_summary(), "features": {"contour": True},
+                    "models": {"face": available("face"), "plate": available("plate")},
+                }
             clips = []
             tracks = {}
             for clip in project.clips:
@@ -305,6 +310,8 @@ class Engine:
                 "job": job,
                 "version": self.version,
                 "profile": library.profile_summary(),
+                "features": {"contour": True},
+                "models": {"face": available("face"), "plate": available("plate")},
             }
 
     def _estimate_key(self) -> tuple:
@@ -328,6 +335,8 @@ class Engine:
             "extend_before_s": t.extend_before_s, "extend_after_s": t.extend_after_s,
             "score": round(scores[len(scores) // 2], 2), "count": len(t.obs),
         }
+        if t.source == "tracker":
+            doc["contour"] = bool(t.outline)
         if t.source == "manual":
             doc["keyframes"] = [[pts_to_sec(int(o[0]), v), *[round(x) for x in o[1:5]]] for o in t.obs]
         return doc
@@ -559,7 +568,10 @@ class Engine:
                     obs = item.observation(pts) if item else None
                     score = None if obs is None else round(obs[4], 2)
                     # 10e valeur : toutes les pistes réunies dans cette zone.
-                    items.append([*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))])
+                    entry = [*z.box, z.shape, z.radius, z.kind, z.track_id, score, list(z.tracks or (z.track_id,))]
+                    if z.shape == "contour":
+                        entry.append(zone_outline(z))  # 11e valeur : tracé de ce qui est flouté
+                    items.append(entry)
                 if items:
                     frames[k] = items
             out = {"version": self.version, "frames": frames}
@@ -771,6 +783,50 @@ class Engine:
             return f"Flou ajouté et suivi pendant {seconds:.1f} s."
 
         self.start("follow", "Suivi du flou ajouté", work, undo="flou ajouté")
+
+    def start_contour(self, body: dict) -> None:
+        """Contour précis d'un objet suivi (par son nom) ou d'un flou ajouté qui suit (par son
+        identifiant) : le flou épouse l'objet. Avec `clear`, retour à la forme habituelle."""
+        project = self.require()
+        clip = project.clip(body["clip"])
+        if "id" in body:
+            tracks = [self._find_track(clip.id, int(body["id"]))[1]]
+            name = tracks[0].name
+        else:
+            name = dash.object_name(body.get("label"))
+            tracks = dash.dash_tracks(project, clip, "tracker", name)
+        tracks = [t for t in tracks if t.source == "tracker"]
+        if not tracks:
+            raise ApiError("cet objet n'est pas suivi : le contour précis s'applique à un objet suivi.")
+        if body.get("clear"):
+            with self.lock:
+                self._busy_check()
+                contour.clear(tracks)
+                self._after_zone_change()
+            return
+
+        def work(job: Job) -> str:
+            result = contour.refine(project, clip, tracks)
+            pj.save(project)
+            if not result["kept"]:
+                return f"Aucun contour fiable trouvé pour « {name} » : la forme habituelle est gardée."
+            note = ""
+            if result["kept"] < result["total"]:
+                note = (f" Sur {result['total'] - result['kept']} image(s) de référence, le contour"
+                        " n'était pas fiable : la forme habituelle y est gardée.")
+            return f"Contour précis calculé pour « {name} ».{note} Vérifiez le résultat sur la vidéo."
+
+        self.start("contour", f"Contour précis : {name}", work, undo=f"contour précis de « {name} »")
+
+    def start_dataset(self) -> None:
+        project = self.require()
+
+        def work(job: Job) -> str:
+            result = training.export_dataset(project)
+            return (f"{result['images']} images d'entraînement écrites ({result['labels']} plaques, "
+                    f"{result['negatives']} sans plaque) dans {result['path']}")
+
+        self.start("dataset", "Images d'entraînement", work)
 
     def start_estimate(self, device: str) -> None:
         project = self.require()
@@ -1008,6 +1064,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(engine.state())
             elif route == "/api/follow" and method == "POST":
                 engine.start_follow(self._body())
+                self._json(engine.state())
+            elif route == "/api/contour" and method == "POST":
+                body = self._body()
+                if body.get("clear"):
+                    self._edit("retour à la forme simple", lambda: engine.start_contour(body))
+                else:
+                    engine.start_contour(body)
+                    self._json(engine.state())
+            elif route == "/api/dataset" and method == "POST":
+                engine.start_dataset()
                 self._json(engine.state())
             elif route == "/api/undo" and method == "POST":
                 label = engine.step(forward=False)  # avant de lire l'état, qui doit en tenir compte

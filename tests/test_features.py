@@ -401,3 +401,180 @@ def test_plate_model_converted_for_batches_gives_the_same_boxes():
     # mêmes objets, mêmes scores ; les contours diffèrent de quelques pixels (fusion des doublons)
     assert np.allclose(order(a)[:, :4], order(b)[:, :4], atol=10.0)
     assert np.allclose(order(a)[:, 4], order(b)[:, 4], atol=0.02)
+
+
+# --- Contour précis ---------------------------------------------------------------
+
+
+def _contour_project(tmp_path):
+    path, truth = make_shots_video(tmp_path / "plans.mp4")
+    project = make_project(tmp_path, path)
+    analyze_project(project, detect_fn=none())
+    clip = project.clips[0]
+    tracks = dash.track_from_click(project, clip, round(10 * clip.video.frame_pts), truth[10])
+    return project, clip, tracks, truth
+
+
+def test_contour_zone_covers_both_neighbouring_outlines(video_info):
+    """Entre deux images de référence, le flou couvre la réunion des deux contours, grossie."""
+    from moto_blur.blur import contour_mask, zone_outline
+
+    square = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+    lozenge = [0.5, -0.1, 1.1, 0.5, 0.5, 1.1, -0.1, 0.5]
+    obs = [[k * F, 400 + 2 * k, 300, 600 + 2 * k, 400, 1.0] for k in range(11)]
+    track = pj.Track(1, "dash", obs, source="tracker", outline=[[0, *square], [10 * F, *lozenge]])
+    zones = TrackZones(track, pj.BlurSettings(), video_info)
+    exact, between = zones.shaped(0), zones.shaped(5 * F)
+    assert exact.shape == "contour" and len(exact.polygons) == 1
+    assert between.shape == "contour" and len(between.polygons) == 2
+    x1, y1, x2, y2 = between.box
+    local = [[(px - x1, py - y1) for px, py in poly] for poly in between.polygons]
+    mask = contour_mask(y2 - y1, x2 - x1, local, between.grow, 0.12)
+    # tout le carré et tout le losange, reportés sur la position de l'objet à cet instant
+    for poly in between.polygons:
+        inside = np.zeros(mask.shape, dtype=np.uint8)
+        import cv2
+        cv2.fillPoly(inside, [np.rint(np.array(poly) - (x1, y1)).astype(np.int32)], 1)
+        assert mask[inside == 1].min() == 1.0
+    assert mask.min() == 0.0  # mais pas tout le rectangle : les coins restent nets
+    outline = zone_outline(between)
+    assert len(outline) >= 8 and all(x1 <= x <= x2 and y1 <= y <= y2 for x, y in outline)
+    # références trop éloignées, ou hors de la partie suivie : forme habituelle
+    far = pj.Track(2, "dash", [[k * F, 400, 300, 600, 400, 1.0] for k in range(61)], source="tracker",
+                   outline=[[0, *square], [60 * F, *square]])
+    assert TrackZones(far, pj.BlurSettings(), video_info).shaped(30 * F).shape != "contour"
+    assert zones.shaped(12 * F).shape != "contour"  # prolongation après la dernière image suivie
+    # le projet garde le contour
+    assert "outline" in pj._track_to_json(track)
+
+
+def test_precise_contour_never_uncovers_the_object(tmp_path, tracker_available):
+    from moto_blur import contour
+    from moto_blur.blur import contour_mask
+    from moto_blur.postprocess import ZoneIndex
+
+    try:
+        segmenter = contour.Segmenter(device="cpu")
+    except (urllib.error.URLError, OSError) as exc:
+        pytest.skip(f"modèle de segmentation indisponible : {exc}")
+    project, clip, tracks, truth = _contour_project(tmp_path)
+    result = contour.refine(project, clip, tracks, segmenter=segmenter)
+    assert result["kept"] == result["total"] >= 8
+    pj.save(project)
+    project = pj.load(project.path)  # le contour survit à l'enregistrement
+    index = ZoneIndex(project.analysis["c1"].tracks, project.blur_settings, clip.video)
+    f = clip.video.frame_pts
+    tight = 0
+    for i, (tx1, ty1, tx2, ty2) in truth.items():
+        covered = np.zeros((360, 640), dtype=np.float32)
+        for zone in index.shaped(round(i * f)):
+            x1, y1, x2, y2 = (max(0, zone.box[0]), max(0, zone.box[1]), min(640, zone.box[2]), min(360, zone.box[3]))
+            if zone.shape == "contour":
+                local = [[(px - x1, py - y1) for px, py in poly] for poly in zone.polygons]
+                part = contour_mask(y2 - y1, x2 - x1, local, zone.grow, 0.0)
+                tight += 1
+            else:
+                part = np.ones((y2 - y1, x2 - x1), dtype=np.float32)
+            covered[y1:y2, x1:x2] = np.maximum(covered[y1:y2, x1:x2], part)
+        assert covered[ty1:ty2, tx1:tx2].min() == 1.0, f"image {i} : compteur découvert"
+    assert tight >= 50  # la plupart des images ont bien le contour précis
+    # et le rendu final l'utilise sans erreur
+    out = tmp_path / "contour.mp4"
+    render_project(project, out, encoder="software")
+    frame = read_frames(out)[10]
+    x1, y1, x2, y2 = truth[10]
+    assert np.abs(np.diff(frame[y1 + 4 : y2 - 4, x1 + 4 : x2 - 4].astype(int), axis=1)).mean() < 6
+
+
+def test_contour_routes_and_undo(tmp_path, tracker_available, monkeypatch):
+    from moto_blur import contour
+
+    project, clip, tracks, truth = _contour_project(tmp_path)
+
+    def fake_refine(project, clip, tracks, progress=None, segmenter=None):
+        for t in tracks:
+            t.outline = [[int(o[0]), 0, 0, 1, 0, 1, 1, 0, 1] for o in t.obs[::5]]
+        return {"kept": 4, "total": 5}
+
+    monkeypatch.setattr(contour, "refine", fake_refine)
+    engine = Engine(project)
+    assert engine.state()["features"] == {"contour": True}
+    engine.start_contour({"clip": "c1", "label": "compteur"})
+    for _ in range(200):
+        if engine.job.state != "running":
+            break
+        time.sleep(0.02)
+    assert engine.job.state == "done" and "pas fiable" in engine.job.message
+    state = engine.state()
+    assert all(t["contour"] for t in state["project"]["tracks"]["c1"])
+    zones = engine.zones("c1", 10, 10)["frames"][10]
+    assert zones[0][4] == "contour" and len(zones[0]) == 11 and len(zones[0][10]) >= 4
+    engine.step(forward=False)  # « Annuler » retire le contour
+    assert not any(t.outline for t in project.analysis["c1"].tracks)
+    engine.step(forward=True)
+    engine.start_contour({"clip": "c1", "label": "compteur", "clear": True})
+    assert not any(t.outline for t in project.analysis["c1"].tracks)
+    with pytest.raises(Exception, match="pas suivi"):
+        engine.start_contour({"clip": "c1", "label": "GPS"})
+
+
+# --- Images d'entraînement et modèles personnels -------------------------------------
+
+
+def test_training_images_from_a_reviewed_project(tmp_path):
+    from moto_blur.training import export_dataset
+
+    project = make_project(tmp_path, make_video(tmp_path / "v.mp4", frames=60))
+    with pytest.raises(ValueError, match="aucune plaque"):
+        export_dataset(project)
+    analyze_project(project, detect_fn=FakeDetector())
+    (plate,) = project.analysis["c1"].tracks
+    result = export_dataset(project, every_s=0.5)
+    out = tmp_path / "test_entrainement"
+    assert result["path"] == str(out)
+    # 4 instants (toutes les demi-secondes), découpés en tuiles comme pour la détection
+    files = sorted((out / "labels").glob("*.txt"))
+    assert len(files) == result["images"] == len(list((out / "images").glob("*.jpg"))) >= 4
+    assert result["labels"] >= 4 and 0 < result["negatives"] <= result["images"] / 2
+    import cv2
+
+    checked = 0
+    for file in files:
+        text = file.read_text().split()
+        if not text:
+            continue
+        tile = cv2.imread(str(out / "images" / (file.stem + ".jpg")))
+        h, w = tile.shape[:2]
+        cx, cy, bw, bh = (float(v) for v in text[1:5])
+        assert text[0] == "0" and bw * w > 16 and bh * h > 30
+        # l'étiquette entoure bien le carré blanc de la tuile
+        assert tile[round(cy * h), round((cx - bw / 2) * w) + 3].min() > 200
+        checked += 1
+    assert checked >= 4
+    assert (out / "data.yaml").exists() and "ne publiez pas" in (out / "LISEZMOI.txt").read_text()
+    # une détection retirée à la main devient un contre-exemple : image sans étiquette
+    plate.disabled = True
+    result = export_dataset(project, tmp_path / "neg")
+    assert result["labels"] == 0 and result["negatives"] == result["images"] > 0
+
+
+def test_personal_model_is_listed_and_loaded(tmp_path, monkeypatch):
+    import shutil
+
+    from moto_blur import models
+
+    try:
+        source = models.ensure_model(models.get_spec("yolo11n-face", "face"))
+    except (urllib.error.URLError, OSError) as exc:
+        pytest.skip(f"modèle indisponible : {exc}")
+    monkeypatch.setenv("MOTO_BLUR_MODELS", str(tmp_path / "modeles"))
+    target = tmp_path / "modeles" / "perso" / "plate" / "mes-plaques.onnx"
+    target.parent.mkdir(parents=True)
+    shutil.copy(source, target)
+    assert models.available("plate")[-1] == "mes-plaques"
+    spec = models.get_spec("mes-plaques", "plate")
+    assert spec.output == "ultralytics" and spec.dynamic and spec.input_size == 640
+    assert models.ensure_model(spec) == target
+    assert models.batchable(spec, target) == (spec, target)
+    with pytest.raises(ValueError, match="mes-plaques"):
+        models.get_spec("absent", "plate")

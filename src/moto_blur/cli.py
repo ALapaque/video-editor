@@ -173,6 +173,16 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dataset(args: argparse.Namespace) -> int:
+    from .training import export_dataset
+
+    result = export_dataset(pj.load(Path(args.project_file)), Path(args.output) if args.output else None)
+    print(f"\n{result['images']} images écrites dans {result['path']} "
+          f"({result['labels']} plaques, {result['negatives']} images sans plaque).")
+    print("Ces images montrent des plaques non floutées : ne les publiez pas. Suite : docs/ENTRAINEMENT.md")
+    return 0
+
+
 def _parse_box(text: str, video: pj.VideoInfo) -> tuple[int, int, int, int]:
     try:
         x, y, w, h = (float(v) for v in text.split(","))
@@ -347,6 +357,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="afficher les passages à vérifier")
     p.add_argument("project_file", metavar="PROJET")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("dataset", help="exporter des images d'entraînement (plaques) à partir d'un projet vérifié")
+    p.add_argument("project_file", metavar="PROJET")
+    p.add_argument("-o", "--output", metavar="DOSSIER", help="dossier de sortie (défaut : <projet>_entrainement)")
+    p.set_defaults(func=cmd_dataset)
 
     p = sub.add_parser("ui", help="ouvrir l'interface de montage et de vérification")
     p.add_argument("inputs", nargs="*", metavar="VIDEO|PROJET", help="vidéos ou fichier projet à ouvrir (facultatif)")

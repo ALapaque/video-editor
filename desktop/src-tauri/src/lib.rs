@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
-use tauri::{Manager, RunEvent, Url};
+use tauri::{DragDropEvent, Manager, RunEvent, Url, WindowEvent};
 
 /// Ligne imprimée par le moteur quand son serveur local est prêt (voir `server.py`).
 const READY_PREFIX: &str = "MOTO_BLUR_UI ";
@@ -82,9 +82,24 @@ fn show_error(window: &tauri::WebviewWindow, message: &str) {
     let _ = window.eval(&script);
 }
 
+/// Fichiers déposés sur la fenêtre : leurs chemins sont remis à l'interface, qui ouvre la vidéo
+/// ou le projet (`window.motoBlurDrop`, voir `ui/src/extras.ts`). Une page web seule ne connaît
+/// pas le chemin d'un fichier déposé ; la coque, si.
+fn drop_script(paths: &[PathBuf]) -> String {
+    let list: Vec<String> = paths.iter().map(|p| format!("{:?}", p.to_string_lossy())).collect();
+    format!("window.motoBlurDrop && window.motoBlurDrop([{}])", list.join(","))
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(Engine(Mutex::new(None)))
+        .on_window_event(|window, event| {
+            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    let _ = webview.eval(&drop_script(paths));
+                }
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             // Démarrage hors du fil principal : la fenêtre d'attente s'affiche tout de suite.
