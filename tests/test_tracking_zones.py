@@ -467,3 +467,11 @@ def test_merging_random_zones_never_uncovers_a_pixel():
         assert len(merged) <= len(zones)
         assert sorted(t for z in merged for t in z.tracks) == list(range(1, len(zones) + 1))
         assert _nothing_uncovered(zones, merged), zones
+
+
+def test_tracked_object_covered_by_a_larger_detection_keeps_its_name(video_info):
+    plate = pj.Track(1, "plate", [[i * F, 700, 500, 1200, 800, 0.9] for i in range(10)])
+    phone = pj.Track(2, "dash", [[i * F, 850, 580, 1000, 700, 1.0] for i in range(10)], source="tracker", label="téléphone")
+    (zone,) = ZoneIndex([plate, phone], pj.BlurSettings(), video_info).shaped(5 * F)
+    assert zone.kind == "dash" and zone.track_id == 2 and sorted(zone.tracks) == [1, 2]
+    assert zone.box[0] <= 700 and zone.box[2] >= 1200  # la zone large est conservée

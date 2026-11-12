@@ -130,16 +130,18 @@ def merge_zones(zones: list[Zone], min_overlap: float = 0.5) -> list[Zone]:
         for i in range(len(out)):
             for j in range(i + 1, len(out)):
                 a, b = out[i], out[j]
+                # La zone gardée porte la catégorie et la piste la plus « voulue » des deux :
+                # un objet suivi recouvert par une détection plus large garde son nom.
+                lead = a if _KIND_PRIORITY.get(a.kind, 0) >= _KIND_PRIORITY.get(b.kind, 0) else b
                 if _covers(a, b):
-                    out[i] = replace(a, tracks=a.tracks + b.tracks)
+                    out[i] = replace(a, kind=lead.kind, track_id=lead.track_id, tracks=a.tracks + b.tracks)
                 elif _covers(b, a):
-                    out[i] = replace(b, tracks=b.tracks + a.tracks)
+                    out[i] = replace(b, kind=lead.kind, track_id=lead.track_id, tracks=b.tracks + a.tracks)
                 elif _overlap(a, b) >= min_overlap:
                     box = (
                         min(a.box[0], b.box[0]), min(a.box[1], b.box[1]),
                         max(a.box[2], b.box[2]), max(a.box[3], b.box[3]),
                     )
-                    lead = a if _KIND_PRIORITY.get(a.kind, 0) >= _KIND_PRIORITY.get(b.kind, 0) else b
                     # Coins arrondis seulement dans la mesure où ils ne découvrent rien de ce
                     # que les deux zones d'origine couvraient près de leurs propres coins.
                     radius = int(min(0.12 * min(box[2] - box[0], box[3] - box[1]), _corner(a), _corner(b)))
