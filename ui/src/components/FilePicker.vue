@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // Sélecteur de fichiers servi par le moteur : un navigateur ne donne pas le chemin réel d'un
 // fichier, or le moteur en a besoin pour lire la vidéo sans la copier.
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { call, type Browse } from "../api";
+import Icon from "./Icon.vue";
 
 const props = defineProps<{ title: string; start?: string }>();
 const emit = defineEmits<{ pick: [path: string]; close: [] }>();
@@ -31,30 +32,38 @@ function submitTyped(): void {
   if (/\.(mp4|mov|mkv|m4v|avi|mts|webm|json)$/i.test(value)) emit("pick", value);
   else void go(value);
 }
-onMounted(() => go(props.start));
+function onKey(event: KeyboardEvent): void {
+  if (event.key === "Escape") emit("close");
+}
+onMounted(() => {
+  window.addEventListener("keydown", onKey);
+  void go(props.start);
+});
+onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
   <div class="modal" @pointerdown.self="emit('close')">
-    <div class="dialog picker">
-      <h3>{{ title }}</h3>
+    <div class="dialog picker" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+      <h3 id="picker-title"><Icon name="folder" :size="18" />{{ title }}</h3>
       <form class="row" @submit.prevent="submitTyped">
-        <input v-model="typed" type="text" spellcheck="false" placeholder="Chemin d'un dossier ou d'une vidéo" />
+        <input v-model="typed" type="text" spellcheck="false" placeholder="Chemin d'un dossier ou d'une vidéo" aria-label="Chemin d'un dossier ou d'une vidéo" />
         <button type="submit">Aller</button>
       </form>
       <p v-if="error" class="error">{{ error }}</p>
       <div v-if="listing" class="row shortcuts">
-        <button :disabled="!listing.parent" @click="go(listing.parent!)">↑ Dossier parent</button>
-        <button @click="go(listing.home)">Dossier personnel</button>
-        <button v-for="r in listing.roots" :key="r" @click="go(r)">{{ r }}</button>
+        <button :disabled="!listing.parent" @click="go(listing.parent!)"><Icon name="arrowUp" />Dossier parent</button>
+        <button @click="go(listing.home)"><Icon name="home" />Dossier personnel</button>
+        <button v-for="r in listing.roots" :key="r" @click="go(r)"><Icon name="drive" />{{ r }}</button>
       </div>
-      <ul v-if="listing" class="files">
-        <li v-for="f in listing.folders" :key="'d' + f" class="folder" @click="go(join(f))">📁 {{ f }}</li>
-        <li v-for="f in listing.files" :key="'f' + f.name" @click="emit('pick', join(f.name))">
-          🎬 {{ f.name }} <span class="dim">{{ size(f.size) }}</span>
+      <ul v-if="listing" :key="listing.dir" class="files">
+        <li v-for="f in listing.folders" :key="'d' + f" class="folder" @click="go(join(f))"><Icon name="folder" /><span class="fname">{{ f }}</span><Icon class="go" name="chevronRight" :size="14" /></li>
+        <li v-for="f in listing.files" :key="'f' + f.name" class="file" @click="emit('pick', join(f.name))">
+          <Icon name="film" /><span class="fname">{{ f.name }}</span> <span class="dim mono">{{ size(f.size) }}</span>
         </li>
-        <li v-if="!listing.folders.length && !listing.files.length" class="dim">Aucune vidéo ni dossier ici.</li>
+        <li v-if="!listing.folders.length && !listing.files.length" class="dim none">Aucune vidéo ni dossier ici.</li>
       </ul>
+      <div v-else-if="!error" class="files loading"><span class="spinner"></span>Lecture du dossier…</div>
       <div class="row end"><button @click="emit('close')">Annuler</button></div>
     </div>
   </div>

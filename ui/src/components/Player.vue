@@ -3,8 +3,10 @@
 // exacte ; la lecture enchaîne les passages gardés en sautant ce qui est coupé.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ZoneTuple } from "../api";
+import Icon from "./Icon.vue";
+import { loop, outline, rate, removeZone, resume, review } from "../review";
 import {
-  current, duration, formatTime, kindLabel, notify, project, saveManual, seekTime, segments,
+  current, duration, formatTime, kindLabel, notify, player, project, saveManual, seekTime, segments,
   state, time, trackById, zonesNow,
 } from "../store";
 
@@ -17,6 +19,25 @@ let loadedClip = "";
 let frameCallback = 0;
 let drag: { x0: number; y0: number; x1: number; y1: number } | null = null;
 const scratch = document.createElement("canvas");
+
+// Volume de l'aperçu : ne concerne que l'écoute dans le lecteur, jamais le projet ni l'export.
+// Mémorisé dans le navigateur ; 50 % à la première utilisation.
+const VOLUME_KEY = "moto-blur:volume-apercu";
+function storedVolume(): { level: number; muted: boolean } {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VOLUME_KEY) ?? "null");
+    if (saved && typeof saved.level === "number" && saved.level >= 0 && saved.level <= 100) {
+      return { level: Math.round(saved.level), muted: saved.muted === true };
+    }
+  } catch {
+    /* stockage indisponible ou valeur illisible : réglage par défaut */
+  }
+  return { level: 50, muted: false };
+}
+const initialVolume = storedVolume();
+const volume = ref(initialVolume.level); // 0 à 100
+const userMuted = ref(initialVolume.muted);
+const silent = computed(() => userMuted.value || volume.value === 0);
 
 const clip = computed(() => current.value?.clip);
 const muted = computed(() => {
@@ -43,10 +64,12 @@ function sync(): void {
   if (loadedClip !== s.clip.id) {
     loadedClip = s.clip.id;
     el.src = `/media/${s.clip.id}`;
+    el.volume = volume.value / 100;
   }
+  if (el.playbackRate !== rate.value) el.playbackRate = rate.value; // une nouvelle source remet la vitesse à 1
   const target = mediaTime(state.frame, s.fps);
   if (Math.abs(el.currentTime - target) > 0.25 / s.fps) el.currentTime = target;
-  el.muted = muted.value;
+  el.muted = muted.value || userMuted.value;
   draw();
 }
 
@@ -62,17 +85,34 @@ function onVideoFrame(_now: number, meta: { mediaTime: number }): void {
         state.seg = next.index;
         state.frame = next.inFrame;
         sync();
+      } else if (loop.value) {
+        restartLoop();
       } else {
         pause();
         state.frame = s.outFrame - 1;
       }
     } else if (frame >= s.inFrame) {
       state.frame = frame;
+      // vérification guidée : le passage affiché tourne en boucle (simple comparaison, aucune mise en page)
+      if (loop.value && time.value >= loop.value.to) restartLoop();
     }
-    el.muted = muted.value;
+    el.muted = muted.value || userMuted.value;
   }
   draw();
   schedule();
+}
+
+function restartLoop(): void {
+  if (!loop.value) return;
+  seekTime(loop.value.from);
+  sync();
+}
+
+function onEnded(): void {
+  if (state.playing && loop.value) {
+    restartLoop();
+    void video.value?.play();
+  } else pause();
 }
 
 function schedule(): void {
@@ -99,6 +139,19 @@ async function play(): Promise<void> {
 function pause(): void {
   state.playing = false;
   video.value?.pause();
+}
+
+function applyVolume(): void {
+  const el = video.value;
+  if (!el) return;
+  el.volume = volume.value / 100;
+  // passage muet du montage OU aperçu coupé par l'utilisateur
+  el.muted = muted.value || userMuted.value;
+}
+
+function toggleSound(): void {
+  if (!userMuted.value && volume.value === 0) volume.value = 50; // curseur à zéro : le bouton rend le son
+  else userMuted.value = !userMuted.value;
 }
 
 function toggle(): void {
@@ -145,6 +198,10 @@ function draw(): void {
   ctx.clearRect(0, 0, w, h);
   const k = w / s.clip.width;
   const zones = state.preview === "off" ? [] : zonesNow(s.clip.id, state.frame, draw);
+  // vérification guidée : les zones du passage affiché sont entourées par-dessus l'aperçu du flou ;
+  // toutes le sont quand il faut en cliquer une pour la retirer
+  const marked = outline.value && outline.value.clip === s.clip.id ? outline.value.ids : null;
+  const outlineAll = review.sub === "extra";
   for (const z of zones ?? []) {
     const [x1, y1, x2, y2, , , kind, id, score] = z;
     const selected = state.selectedTrack?.id === id && state.selectedTrack.clip === s.clip.id;
@@ -168,7 +225,7 @@ function draw(): void {
         ctx.restore();
       }
     }
-    if (state.preview === "boxes" || selected) {
+    if (state.preview === "boxes" || selected || outlineAll || (marked && marked.has(id))) {
       ctx.lineWidth = (selected ? 3 : 1.5) * ratio;
       ctx.strokeStyle = colors[kind] ?? "#fff";
       ctx.setLineDash(score === null && kind !== "manual" ? [6 * ratio, 4 * ratio] : []);
@@ -216,6 +273,12 @@ function pointerDown(event: PointerEvent): void {
     const hits = (zonesNow(s.clip.id, state.frame) ?? [])
       .filter((z) => p.x >= z[0] && p.x <= z[2] && p.y >= z[1] && p.y <= z[3])
       .sort((a, b) => (a[2] - a[0]) * (a[3] - a[1]) - (b[2] - b[0]) * (b[3] - b[1]));
+    if (review.sub === "extra") {
+      // « Un flou est en trop » : le clic retire la zone visée
+      if (hits.length) void removeZone(s.clip.id, hits[0][7], hits[0][6]);
+      else notify("Cliquez directement sur un flou entouré dans l'image.");
+      return;
+    }
     state.selectedTrack = hits.length ? { clip: s.clip.id, id: hits[0][7] } : null;
     draw();
     return;
@@ -241,12 +304,22 @@ async function pointerUp(): Promise<void> {
   const tool = state.tool;
   state.tool = "none";
   draw();
+  const guidedLoop = review.sub === "missing" ? loop.value : null;
   if (box[2] - box[0] < 6 || box[3] - box[1] < 6) {
     notify("Zone trop petite : maintenez le bouton et tracez un rectangle.");
+    if (guidedLoop) state.tool = "manual"; // on reste sur « Il manque un flou » : nouvel essai
     return;
   }
   const t = state.frame / s.fps;
-  if (tool === "manual") {
+  if (tool === "manual" && guidedLoop) {
+    // vérification guidée : la zone couvre tout le passage en boucle (dans le passage du montage affiché)
+    const base = s.inFrame / s.fps - s.offset;
+    const from = Math.max(guidedLoop.from + base, s.inFrame / s.fps);
+    const to = Math.min(guidedLoop.to + base, (s.outFrame - 1) / s.fps);
+    await saveManual(s.clip.id, [[from, ...box], [Math.max(to, from + 1 / s.fps), ...box]]);
+    notify("Zone ajoutée sur tout le passage. Regardez la boucle : si l'objet bouge, retracez-la à un autre instant avec « Déplacer ici… » dans l'onglet « Zones ».");
+    resume();
+  } else if (tool === "manual") {
     // nouvelle zone : de l'image courante jusqu'à 2 s plus tard (ou la fin du passage)
     const end = Math.min(t + 2, (s.outFrame - 1) / s.fps);
     await saveManual(s.clip.id, [[t, ...box], [Math.max(end, t + 1 / s.fps), ...box]]);
@@ -275,6 +348,7 @@ function onKey(event: KeyboardEvent): void {
   else if (event.code === "Escape") {
     state.tool = "none";
     drag = null;
+    if (review.sub !== "ask") resume(); // abandon de la correction : retour à la question
     draw();
   } else return;
   event.preventDefault();
@@ -288,12 +362,25 @@ watch(() => [state.seg, state.frame, state.data.version, state.preview, state.se
 });
 watch(() => current.value?.clip.proxy, () => nextTick(sync));
 watch(exact, (value) => (exactLoading.value = !!value));
+watch(rate, (value) => video.value && (video.value.playbackRate = value));
+watch(() => [review.sub, review.current], draw);
+watch([volume, userMuted], () => {
+  applyVolume();
+  try {
+    localStorage.setItem(VOLUME_KEY, JSON.stringify({ level: volume.value, muted: userMuted.value }));
+  } catch {
+    /* stockage indisponible : le volume n'est simplement pas mémorisé */
+  }
+});
 
 const observer = new ResizeObserver(() => draw());
 onMounted(() => {
   window.addEventListener("keydown", onKey);
   if (stage.value) observer.observe(stage.value);
+  player.play = play;
+  player.pause = pause;
   schedule();
+  applyVolume();
   sync();
 });
 onBeforeUnmount(() => {
@@ -308,38 +395,53 @@ defineExpose({ toggle, step, pause });
 
 <template>
   <div class="player">
-    <div ref="stage" class="stage" :class="{ drawing: state.tool !== 'none' }">
+    <div ref="stage" class="stage" :class="{ drawing: state.tool !== 'none', picking: review.sub === 'extra' }">
       <template v-if="clip">
         <div class="frame" :style="{ aspectRatio: `${clip.width} / ${clip.height}` }">
-          <video ref="video" playsinline preload="auto" @seeked="draw" @loadeddata="sync" @ended="pause"></video>
+          <video ref="video" playsinline preload="auto" @seeked="draw" @loadeddata="sync" @ended="onEnded"></video>
           <img v-if="exactUrl && !state.playing" class="exact" :src="exactUrl" alt="" @load="exactLoading = false" />
           <canvas ref="canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"></canvas>
-          <div v-if="!clip.proxy" class="veil">Préparation de l'aperçu de ce clip…</div>
-          <div v-if="state.tool !== 'none'" class="hint">
-            {{ state.tool === "dash" ? "Tracez un rectangle autour du compteur" : "Tracez un rectangle sur la zone à flouter" }} — Échap pour annuler
-          </div>
-          <div v-if="exactLoading && exact && !state.playing" class="hint">Chargement de l'image exacte…</div>
+          <div v-if="!clip.proxy" class="veil"><span class="spinner"></span>Préparation de l'aperçu de ce clip…</div>
+          <Transition name="hint">
+            <div v-if="state.tool !== 'none'" class="hint tool">
+              {{ state.tool === "dash" ? "Tracez un rectangle autour du compteur" : "Tracez un rectangle sur la zone à flouter" }} — Échap pour annuler
+            </div>
+            <div v-else-if="review.sub === 'extra'" class="hint tool">Cliquez le flou à retirer — Échap pour annuler</div>
+            <div v-else-if="exactLoading && exact && !state.playing" class="hint"><span class="spinner small"></span>Chargement de l'image exacte…</div>
+          </Transition>
         </div>
       </template>
-      <div v-else class="empty">Aucun passage dans le montage.</div>
+      <div v-else class="empty">
+        <Icon name="film" :size="28" />
+        <strong>Aucun passage dans le montage.</strong>
+        <span>Ajoutez un clip pour continuer.</span>
+      </div>
     </div>
     <div class="transport">
-      <button title="Image précédente (←)" @click="step(-1)">◀︎|</button>
-      <button class="primary" title="Lecture / pause (Espace)" @click="toggle">{{ state.playing ? "Pause" : "Lecture" }}</button>
-      <button title="Image suivante (→)" @click="step(1)">|▶︎</button>
-      <span class="clock">{{ formatTime(time) }} / {{ formatTime(duration) }}</span>
-      <span v-if="current" class="dim">{{ current.clip.name }} · image {{ state.frame }} · source {{ formatTime(state.frame / current.fps) }}</span>
-      <span v-if="muted" class="badge">muet</span>
-      <span class="spacer"></span>
-      <label class="dim">Zones
-        <select v-model="state.preview">
+      <span class="cluster">
+        <button class="icon-btn" title="Image précédente (←)" aria-label="Image précédente" @click="step(-1)"><Icon name="stepBack" /></button>
+        <button class="primary play" title="Lecture / pause (Espace)" @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>
+        <button class="icon-btn" title="Image suivante (→)" aria-label="Image suivante" @click="step(1)"><Icon name="stepForward" /></button>
+      </span>
+      <span class="timecode">
+        <span class="clock">{{ formatTime(time) }} <span class="clock-total">/ {{ formatTime(duration) }}</span></span>
+        <span v-if="current" class="dim meta" :title="`${current.clip.name} · image ${state.frame} · source ${formatTime(state.frame / current.fps)}`">{{ current.clip.name }} · image {{ state.frame }} · source {{ formatTime(state.frame / current.fps) }}</span>
+      </span>
+      <span v-if="muted" class="badge"><Icon name="volumeOff" :size="12" />muet</span>
+      <span class="volume" title="Volume de l'aperçu (sans effet sur l'export)">
+        <button class="icon-btn" :class="{ on: userMuted }" :aria-pressed="userMuted" :aria-label="userMuted ? 'Rétablir le son de l\'aperçu' : 'Couper le son de l\'aperçu'" @click="toggleSound"><Icon :name="silent ? 'volumeOff' : 'volume'" /></button>
+        <input v-model.number="volume" type="range" min="0" max="100" step="1" aria-label="Volume de l'aperçu" :aria-valuetext="`${volume} %`" @pointerup="($event.target as HTMLInputElement).blur()" />
+        <span class="mono volume-value">{{ volume }} %</span>
+      </span>
+      <label class="dim field" title="Affichage des zones de flou sur l'aperçu"><span class="field-label">Zones</span>
+        <select v-model="state.preview" aria-label="Zones">
           <option value="boxes">cadres et scores</option>
           <option value="blur">aperçu du flou</option>
           <option value="off">masquées</option>
         </select>
       </label>
-      <label class="dim" title="Affiche l'image source exacte en pleine résolution, à l'arrêt">Image exacte
-        <select v-model="exact">
+      <label class="dim field" title="Affiche l'image source exacte en pleine résolution, à l'arrêt"><span class="field-label">Image exacte</span>
+        <select v-model="exact" aria-label="Image exacte">
           <option value="">non (aperçu rapide)</option>
           <option value="blur">rendu final flouté</option>
           <option value="source">source nette</option>

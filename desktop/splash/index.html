@@ -2,21 +2,46 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark" />
     <title>moto-blur</title>
     <style>
-      html, body { height: 100%; margin: 0; background: #111418; color: #e6e9ee; font: 14px system-ui, sans-serif; }
-      main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-      p { color: #93a0b0; max-width: 520px; text-align: center; white-space: pre-wrap; }
+      /* Mêmes couleurs et mêmes polices système que l'interface : aucune ressource externe. */
+      html, body { height: 100%; margin: 0; background: #0d0e10; color: #eceef1; font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+      main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; box-sizing: border-box; animation: rise .5s cubic-bezier(.22, 1, .36, 1) both; }
+      h1 { margin: 6px 0 0; font-size: 26px; font-weight: 680; letter-spacing: -.025em; line-height: 1.1; }
+      p { margin: 0; color: #a3aab4; max-width: 520px; text-align: center; white-space: pre-wrap; }
+      .spinner { width: 22px; height: 22px; margin-top: 6px; border: 3px solid #3a4048; border-top-color: #f5a623; border-radius: 50%; animation: spin .8s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+      @media (prefers-reduced-motion: reduce) { main { animation: none; } .spinner { animation-duration: 1.6s; } }
     </style>
   </head>
   <body>
     <main>
+      <svg width="56" height="56" viewBox="0 0 20 20" aria-hidden="true">
+        <rect width="20" height="20" rx="5" fill="#f5a623" />
+        <g fill="#1b1203">
+          <rect x="4" y="4" width="3.5" height="3.5" rx=".6" opacity=".9" />
+          <rect x="8.25" y="4" width="3.5" height="3.5" rx=".6" opacity=".45" />
+          <rect x="12.5" y="4" width="3.5" height="3.5" rx=".6" opacity=".2" />
+          <rect x="4" y="8.25" width="3.5" height="3.5" rx=".6" opacity=".45" />
+          <rect x="8.25" y="8.25" width="3.5" height="3.5" rx=".6" opacity=".9" />
+          <rect x="12.5" y="8.25" width="3.5" height="3.5" rx=".6" opacity=".45" />
+          <rect x="4" y="12.5" width="3.5" height="3.5" rx=".6" opacity=".2" />
+          <rect x="8.25" y="12.5" width="3.5" height="3.5" rx=".6" opacity=".45" />
+          <rect x="12.5" y="12.5" width="3.5" height="3.5" rx=".6" opacity=".9" />
+        </g>
+      </svg>
       <h1>moto-blur</h1>
       <p id="status">Démarrage du moteur…</p>
+      <div id="spinner" class="spinner" role="presentation"></div>
     </main>
     <script>
-      // Le programme hôte remplace ce texte si le moteur ne démarre pas.
-      window.motoBlurStatus = (text) => (document.getElementById("status").textContent = text);
+      // Le programme hôte remplace ce texte si le moteur ne démarre pas : l'attente est alors finie.
+      window.motoBlurStatus = (text) => {
+        document.getElementById("status").textContent = text;
+        document.getElementById("spinner").style.display = "none";
+      };
     </script>
   </body>
 </html>

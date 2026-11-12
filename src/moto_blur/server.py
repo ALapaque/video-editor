@@ -83,6 +83,11 @@ class Engine:
         self.version += 1
         pj.save(self.require())
 
+    def save_review(self) -> None:
+        """Enregistre l'état de la vérification. Les zones ne changent pas : `version` reste
+        tel quel, l'interface garde donc son cache de zones (important pendant la lecture)."""
+        pj.save(self.require())
+
     def open_project(self, path: Path) -> None:
         path = Path(path).expanduser()
         with self.lock:
@@ -165,8 +170,11 @@ class Engine:
                 )
                 state = project.analysis.get(clip.id)
                 tracks[clip.id] = [self._track_json(t, clip) for t in (state.tracks if state else [])]
+            done = set(project.review_done)
             review = [
                 {
+                    "key": pj.review_key(r),
+                    "done": pj.review_key(r) in done,
                     "clip": r["clip"],
                     "start": pts_to_sec(r["start_pts"], project.clip(r["clip"]).video),
                     "end": pts_to_sec(r["end_pts"], project.clip(r["clip"]).video),
@@ -196,6 +204,7 @@ class Engine:
                         "blur": asdict(project.blur_settings),
                     },
                     "review": review,
+                    "marks": [dict(m) for m in project.marks],
                     "conform": project.conform,
                     "mismatch": formats_differ(used_clips(project, resolve_segments(project))),
                     "tracks": tracks,
@@ -241,7 +250,44 @@ class Engine:
             used = {s.clip for s in timeline}
             if body.get("drop_unused_clips"):
                 project.clips = [c for c in project.clips if c.id in used]
+                pj.prune_review_state(project)
             self.touch()
+
+    # --- Vérification guidée -------------------------------------------------
+
+    def set_review_done(self, body: dict) -> None:
+        """Valide (ou remet à revoir) un passage douteux, désigné par sa clé."""
+        project = self.require()
+        with self.lock:
+            self._busy_check()
+            key = str(body.get("key", ""))
+            if key not in {pj.review_key(r) for r in project.review}:
+                raise ApiError("passage à vérifier introuvable.", 404)
+            kept = [k for k in project.review_done if k != key]
+            project.review_done = [*kept, key] if body.get("done", True) else kept
+            self.save_review()
+
+    def add_mark(self, body: dict) -> int:
+        """Pose un signalement de relecture : instant d'un clip, en secondes de temps source."""
+        project = self.require()
+        with self.lock:
+            self._busy_check()
+            clip = project.clip(body["clip"])
+            time = max(0.0, min(float(body["time"]), clip.video.duration_s))
+            mark_id = max((m["id"] for m in project.marks), default=0) + 1
+            project.marks.append({"id": mark_id, "clip": clip.id, "time": round(time, 6)})
+            self.save_review()
+            return mark_id
+
+    def delete_mark(self, mark_id: int) -> None:
+        project = self.require()
+        with self.lock:
+            self._busy_check()
+            kept = [m for m in project.marks if m["id"] != mark_id]
+            if len(kept) == len(project.marks):
+                raise ApiError("signalement introuvable.", 404)
+            project.marks = kept
+            self.save_review()
 
     def _find_track(self, clip_id: str, track_id: int) -> tuple[pj.ClipAnalysis, pj.Track]:
         state = self.require().analysis.get(clip_id)
@@ -644,6 +690,15 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/manual" and method == "POST":
                 track_id = engine.save_manual(self._body())
                 self._json({**engine.state(), "created": track_id})
+            elif route == "/api/review" and method == "PUT":
+                engine.set_review_done(self._body())
+                self._json(engine.state())
+            elif route == "/api/marks" and method == "POST":
+                mark_id = engine.add_mark(self._body())
+                self._json({**engine.state(), "created": mark_id})
+            elif route == "/api/marks" and method == "DELETE":
+                engine.delete_mark(int(query["id"]))
+                self._json(engine.state())
             elif route == "/api/dash" and method == "POST":
                 engine.start_dash(self._body())
                 self._json(engine.state())

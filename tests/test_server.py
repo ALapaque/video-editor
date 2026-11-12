@@ -14,11 +14,10 @@ from moto_blur.proxy import build_proxy
 from moto_blur.server import Engine, make_server
 
 
-@pytest.fixture
-def api(tmp_path):
+def _serve(tmp_path, detector):
     video = make_video(tmp_path / "clip.mp4", frames=90)
     project = make_project(tmp_path, video)
-    analyze_project(project, detect_fn=FakeDetector())
+    analyze_project(project, detect_fn=detector)
     engine = Engine(project)
     server = make_server(engine)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -33,9 +32,23 @@ def api(tmp_path):
 
     call.engine = engine
     call.project = project
+    call.close = lambda: (server.shutdown(), server.server_close())
+    return call
+
+
+@pytest.fixture
+def api(tmp_path):
+    call = _serve(tmp_path, FakeDetector())
     yield call
-    server.shutdown()
-    server.server_close()
+    call.close()
+
+
+@pytest.fixture
+def doubtful(tmp_path):
+    """Même projet, mais la plaque est détectée avec une confiance faible : un passage à vérifier."""
+    call = _serve(tmp_path, FakeDetector(score=0.32))  # douteux (sous 0,40) mais au-dessus du score minimal
+    yield call
+    call.close()
 
 
 def test_state_describes_the_project(api):
@@ -123,3 +136,70 @@ def test_browse_lists_videos_and_projects(api, tmp_path):
     listing = api("GET", "/api/browse")
     names = [f["name"] for f in listing["files"]]
     assert "clip.mp4" in names and "test.motoblur.json" in names
+
+
+def test_review_validation_is_saved_in_the_project(doubtful):
+    (item,) = doubtful("GET", "/api/state")["project"]["review"]
+    assert item["done"] is False and item["key"].startswith("c1:")
+    assert any(r.startswith("confiance faible") for r in item["reasons"])
+    version = doubtful.engine.version
+    state = doubtful("PUT", "/api/review", {"key": item["key"], "done": True})
+    assert state["project"]["review"][0]["done"] is True
+    assert state["version"] == version  # les zones n'ont pas changé : le cache de l'interface reste valable
+    assert pj.load(doubtful.project.path).review_done == [item["key"]]
+    # un projet rouvert retrouve la validation
+    reopened = Engine(pj.load(doubtful.project.path))
+    assert reopened.state()["project"]["review"][0]["done"] is True
+    state = doubtful("PUT", "/api/review", {"key": item["key"], "done": False})
+    assert state["project"]["review"][0]["done"] is False
+    assert pj.load(doubtful.project.path).review_done == []
+    with pytest.raises(urllib.error.HTTPError) as error:
+        doubtful("PUT", "/api/review", {"key": "c1:0:1", "done": True})
+    assert error.value.code == 404
+
+
+def test_validation_is_forgotten_when_the_passage_changes(doubtful):
+    state = doubtful("GET", "/api/state")
+    (item,) = state["project"]["review"]
+    doubtful("PUT", "/api/review", {"key": item["key"], "done": True})
+    # la piste douteuse est écartée : le passage disparaît, sa validation aussi
+    track_id = state["project"]["tracks"]["c1"][0]["id"]
+    state = doubtful("PATCH", "/api/tracks", {"clip": "c1", "id": track_id, "disabled": True})
+    assert state["project"]["review"] == []
+    assert pj.load(doubtful.project.path).review_done == []
+    # rétablie, elle est redemandée
+    state = doubtful("PATCH", "/api/tracks", {"clip": "c1", "id": track_id, "disabled": False})
+    assert [r["done"] for r in state["project"]["review"]] == [False]
+
+
+def test_marks_lifecycle(api):
+    assert api("GET", "/api/state")["project"]["marks"] == []
+    state = api("POST", "/api/marks", {"clip": "c1", "time": 1.25})
+    first = state["created"]
+    assert state["project"]["marks"] == [{"id": first, "clip": "c1", "time": 1.25}]
+    second = api("POST", "/api/marks", {"clip": "c1", "time": 99})["created"]  # borné à la durée du clip
+    saved = pj.load(api.project.path).marks
+    assert [m["id"] for m in saved] == [first, second] and saved[1]["time"] == 3.0
+    state = api("DELETE", f"/api/marks?id={first}")
+    assert [m["id"] for m in state["project"]["marks"]] == [second]
+    assert [m["id"] for m in pj.load(api.project.path).marks] == [second]
+    with pytest.raises(urllib.error.HTTPError) as error:
+        api("DELETE", f"/api/marks?id={first}")
+    assert error.value.code == 404
+    with pytest.raises(urllib.error.HTTPError):
+        api("POST", "/api/marks", {"clip": "inconnu", "time": 1})
+    # un signalement dont le clip est retiré du projet disparaît avec lui
+    api("PUT", "/api/montage", {"timeline": [], "mutes": [], "drop_unused_clips": True})
+    assert api("GET", "/api/state")["project"]["marks"] == []
+
+
+def test_older_project_files_load_without_review_state(api):
+    path = api.project.path
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["review_done"] == [] and doc["marks"] == []
+    del doc["review_done"], doc["marks"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    old = pj.load(path)
+    assert old.review_done == [] and old.marks == []
+    state = Engine(old).state()
+    assert state["project"]["marks"] == [] and all(r["done"] is False for r in state["project"]["review"])

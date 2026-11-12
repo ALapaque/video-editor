@@ -86,6 +86,10 @@ uv run moto-blur ui samples/ma-video.mp4
 
 ## 3. Premier essai, pas à pas
 
+En haut de la fenêtre, quatre étapes : **1 Montage, 2 Analyse, 3 Vérification, 4 Export**. Juste
+au-dessus de la vidéo, une ligne dit quoi faire maintenant et propose le bouton de l'action
+suivante. Ce guide ne bloque rien : vous pouvez cliquer n'importe quelle étape à tout moment.
+
 **Commencez par un extrait de 30 secondes à 1 minute**, pas par une vidéo entière. L'analyse
 ne porte que sur les passages gardés : il suffit donc de ne garder qu'un court passage pour
 tester vite.
@@ -94,21 +98,22 @@ tester vite.
    la vidéo. Un fichier projet `ma-video.motoblur.json` est créé à côté d'elle. Vos vidéos
    d'origine ne sont jamais modifiées.
 2. **Attendre l'aperçu.** Le logiciel fabrique une copie légère de la vidéo pour une lecture
-   fluide (barre de progression en haut). Pour une vidéo 4K de 10 minutes, comptez quelques
+   fluide (barre de progression au-dessus de la vidéo). Pour une vidéo 4K de 10 minutes, comptez quelques
    minutes ; ce n'est fait qu'une fois par vidéo.
 3. **Ne garder qu'un extrait.** Placez la tête de lecture (clic dans la timeline) au début du
-   passage voulu, cliquez « ✂ Couper ici ». Placez-la à la fin, « ✂ Couper ici » encore.
+   passage voulu, cliquez « Couper ici ». Placez-la à la fin, « Couper ici » encore.
    Cliquez les passages à jeter puis « Supprimer le passage ».
-4. **Analyser.** Cliquez « Analyser » (bouton orange). Au premier lancement, les modèles de
+4. **Analyser.** Cliquez « Analyser » (bouton orange, au-dessus de la vidéo). Au premier lancement, les modèles de
    détection sont téléchargés (environ 65 Mo). Le logiciel mesure ensuite, pendant quelques
    secondes, l'accélération matérielle contre le processeur et garde le plus rapide. À la fin,
    un bandeau indique la vitesse en images par seconde, ce qui a servi (`CoreML`, `Dml` ou
    `CPU`) et les deux temps mesurés. **Notez cette ligne**, elle m'intéresse.
-5. **Regarder.** Lancez la lecture (barre d'espace). Les zones détectées sont dessinées sur la
-   vidéo avec leur score. Dans le menu « Zones », choisissez « aperçu du flou » pour voir à peu
-   près le résultat.
-6. **Exporter.** Cliquez « Exporter… », gardez les réglages, validez. La vidéo est écrite dans
-   le dossier du projet.
+5. **Vérifier.** Cliquez « Commencer la vérification ». Le logiciel vous montre un par un les
+   passages où il a hésité : chacun tourne en boucle avec le flou affiché, et vous répondez à
+   une seule question, « Tout ce qui doit être flouté l'est-il ? ». Faites ensuite la
+   « Relecture complète » (détails plus bas, partie « Vérification »).
+6. **Exporter.** Cliquez « Passer à l'export » puis « Exporter… », gardez les réglages, validez.
+   La vidéo est écrite dans le dossier du projet.
 
 ## 4. L'interface en détail
 
@@ -120,24 +125,26 @@ tester vite.
 | Image précédente / suivante | `◀|` et `|▶` | ← et → |
 | Reculer / avancer d'une seconde | | Maj + ← et Maj + → |
 | Aller à un instant | clic ou glisser dans la timeline | Début, Fin |
+| Régler le volume de l'aperçu | curseur à côté du haut-parleur (50 % au départ) ; un clic sur le haut-parleur coupe ou rétablit le son | |
 
 Sous la vidéo, vous lisez l'instant dans le montage, le nom du clip, le numéro d'image et
-l'instant dans le fichier source.
+l'instant dans le fichier source. Le volume ne concerne que l'écoute dans l'aperçu : il ne change
+ni le projet ni la vidéo exportée (pour couper le son d'un passage à l'export, voir « Muet » plus bas).
 
 ### Montage
 
 | Vous voulez | Faites |
 |---|---|
 | Rogner le début ou la fin | glissez le bord gauche ou droit du passage dans la timeline |
-| Supprimer un passage au milieu | « ✂ Couper ici » au début et à la fin, cliquez le passage, « Supprimer le passage » (ou touche Suppr) |
+| Supprimer un passage au milieu | « Couper ici » au début et à la fin, cliquez le passage, « Supprimer le passage » (ou touche Suppr) |
 | Récupérer ce qui a été coupé | glissez le bord du passage voisin vers l'extérieur |
 | Ajouter un autre clip | « Ajouter un clip… » ; il se place à la fin |
 | Changer l'ordre | cliquez un passage, puis « ◀ Déplacer » ou « Déplacer ▶ » |
-| Couper le son sur un passage | tête de lecture au début, « 🔇 Muet : début » (ou M) ; tête à la fin, « 🔇 Muet : fin » |
+| Couper le son sur un passage | tête de lecture au début, « Muet : début » (ou M) ; tête à la fin, « Muet : fin » |
 | Retirer un passage muet | panneau « Zones », en bas, « Retirer » |
 
 Chaque modification est enregistrée aussitôt dans le fichier projet. Si vous rallongez un
-passage après une analyse, le bouton « Analyser » redevient orange : seule la partie ajoutée
+passage après une analyse, le guide propose de nouveau « Analyser » : seule la partie ajoutée
 sera analysée.
 
 Si vous assemblez des clips de résolution ou de fréquence d'images différentes, un bandeau vous
@@ -148,17 +155,58 @@ des bandes noires si le rapport d'image diffère) et leurs images sont dupliqué
 
 ### Vérification
 
-L'onglet **« À vérifier »** liste les passages où le logiciel n'est pas sûr de lui : confiance
-faible, suivi perdu puis retrouvé, objet très petit, piste très courte, objet au bord de
-l'image. Ces passages sont floutés comme les autres ; la liste dit où regarder. Ils sont aussi
-marqués en orange sous la timeline.
+La vérification se fait dans l'onglet **« Vérification »** (étape 3), en deux temps. Tout ce
+que vous validez ou signalez est enregistré dans le fichier projet : vous pouvez fermer le
+logiciel et reprendre plus tard.
 
-1. Cliquez un passage (ou « Suivant ▶ ») : la tête de lecture s'y place.
-2. Avancez image par image avec →.
-3. Pour voir l'image réelle en pleine résolution, choisissez « Image exacte : rendu final
-   flouté ». C'est exactement ce que produira l'export pour cette image. « Source nette »
-   montre l'original, utile pour chercher une plaque que le logiciel aurait manquée.
-4. Cochez la case du passage quand il est vérifié.
+**Important :** le logiciel ne signale que ce qu'il a détecté. Un visage ou une plaque qu'il
+n'a jamais vu n'apparaît dans aucune liste. Pour ne rien laisser passer, faites les deux temps.
+
+#### 1. Passages douteux
+
+Ce sont les endroits où le logiciel a hésité : objet très petit, vu très brièvement, perdu un
+instant, coupé par le bord de l'image… Ils sont floutés comme les autres, et marqués en orange
+sous la timeline (en rose pour le compteur).
+
+1. Cliquez « Commencer la vérification » (ou « Passages douteux »).
+2. Le premier passage tourne en boucle, flou affiché ; ses zones sont entourées. Une phrase
+   explique pourquoi le logiciel a hésité. Ralentissez si besoin : « Vitesse » 1×, 0,5× ou 0,25×.
+3. Répondez à la question « Tout ce qui doit être flouté l'est-il ? » :
+
+| Réponse | Effet |
+|---|---|
+| « Oui, c'est bon » (touche Entrée) | le passage est validé, le suivant s'affiche |
+| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image. Il couvre tout le passage, puis la boucle reprend pour que vous contrôliez |
+| « Un flou est en trop » | la lecture s'arrête ; cliquez le flou à retirer dans l'image. « Rétablir » l'annule |
+| « Plus tard » | passe au suivant sans valider ; le passage reste « à revoir » |
+| « Précédent » | revient au passage d'avant |
+
+4. À la fin, un bilan indique combien de passages sont validés et combien restent à revoir.
+
+Si vous corrigez les zones d'un passage déjà validé (flou retiré ou rétabli), il vous est
+redemandé : c'est voulu.
+
+#### 2. Relecture complète
+
+1. Cliquez « Relecture complète ». Tout le montage est lu, flou affiché (ralentissez avec
+   « Vitesse » si la scène est chargée).
+2. Dès qu'un visage, une plaque ou le compteur reste lisible, cliquez « Signaler ici » ou
+   appuyez sur **S**. La lecture ne s'arrête pas ; un repère rouge apparaît sur la timeline.
+3. À la fin (ou après « Arrêter la relecture »), cliquez « Traiter les signalements ». Chaque
+   signalement tourne en boucle, de 1,5 s avant à 1,5 s après, avec les mêmes boutons que pour
+   les passages douteux. « C'est réglé » retire le signalement.
+
+#### Voir une image de près, exporter
+
+Pour voir une image réelle en pleine résolution, mettez en pause et choisissez « Image exacte :
+rendu final flouté ». C'est exactement ce que produira l'export pour cette image. « Source
+nette » montre l'original, utile pour chercher une plaque que le logiciel aurait manquée.
+
+L'étape « 4 Export » résume la vérification (par exemple « 12 passages validés, 0 à revoir,
+0 signalement »). S'il reste des passages à revoir ou des signalements, le logiciel le dit et
+vous demande de cocher « J'exporte quand même, sans avoir tout vérifié » avant d'exporter.
+
+#### Travail libre sur les zones
 
 L'onglet **« Zones »** liste les zones présentes sur l'image affichée. Cliquez une zone dans
 la liste ou directement dans l'image pour la sélectionner.
@@ -180,7 +228,7 @@ la liste ou directement dans l'image pour la sélectionner.
    - **Suivre le compteur** si le cadrage bouge (cas d'une vidéo recadrée depuis le 360). Le
      compteur est suivi image par image, vers l'avant et l'arrière.
    - **Zone fixe** si la caméra est fixée à la moto et que le compteur ne bouge pas dans l'image.
-4. Si le suivi décroche, le passage apparaît dans « À vérifier » en rose. Placez-vous au début
+4. Si le suivi décroche, le passage apparaît parmi les « Passages douteux », en rose sur la timeline. Placez-vous au début
    du passage fautif et recommencez l'étape 2 : le suivi repart de là.
 
 ### Réglages
@@ -197,7 +245,7 @@ La partie « Détection » refait toute l'analyse.
 
 ### Export
 
-« Exporter… » propose le nom du fichier, la qualité (80 par défaut), le codec (celui de la
+À l'étape « 4 Export », « Exporter… » propose le nom du fichier, la qualité (80 par défaut), le codec (celui de la
 source par défaut) et l'encodeur. Cochez « Vidéo de contrôle » pour obtenir une vidéo où les
 cadres et les scores sont dessinés à la place du flou : pratique pour repérer ce qui a été
 manqué.
@@ -237,7 +285,7 @@ Le détail des options est dans le [README](README.md).
 | La vidéo reste noire dans l'interface | l'aperçu est encore en préparation (barre en haut) ; sinon essayez Chrome ou Edge |
 | L'analyse est très lente et le bandeau dit `CPU` | l'accélération n'a pas été utilisée ; envoyez-moi la sortie de `uv run moto-blur info` et les messages du terminal |
 | « un traitement est déjà en cours » | attendez la fin, ou cliquez « Annuler » |
-| L'export refuse : « passages non analysés » | cliquez « Analyser » |
+| L'export refuse : « passages non analysés » | cliquez l'étape « 2 Analyse » puis « Analyser » |
 | Les couleurs de l'aperçu sont ternes (vidéo HDR) | seul l'aperçu est concerné ; l'export garde les couleurs de la source |
 | Trop de faux flous | montez « Score minimal pour suivre un objet » à 0,30 (au prix d'un risque de fuite plus élevé) |
 
