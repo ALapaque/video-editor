@@ -63,11 +63,15 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
             + (f" ({d.note})" if d.note else "")
         )
 
-    # Les deux modèles travaillent en même temps, chacun dans son fil d'exécution : la
-    # préparation des tuiles (processeur) de l'un recouvre le calcul (carte graphique) de l'autre.
-    pool = ThreadPoolExecutor(max_workers=max(1, len(detectors)))
+    # Avec une carte graphique, les deux modèles travaillent en même temps, chacun dans son fil
+    # d'exécution : la préparation des tuiles (processeur) de l'un recouvre le calcul (carte
+    # graphique) de l'autre. Sur processeur seul, ils se gêneraient : ils passent l'un après l'autre.
+    on_gpu = any(d.provider != "CPUExecutionProvider" for d in detectors.values())
+    pool = ThreadPoolExecutor(max_workers=len(detectors)) if on_gpu and len(detectors) > 1 else None
 
     def detect(rgb: np.ndarray) -> dict[str, np.ndarray]:
+        if pool is None:
+            return {kind: d.detect(rgb) for kind, d in detectors.items()}
         jobs = {kind: pool.submit(d.detect, rgb) for kind, d in detectors.items()}
         return {kind: job.result() for kind, job in jobs.items()}
 
