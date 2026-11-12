@@ -109,7 +109,7 @@ def _apply_settings(project: pj.Project, args: argparse.Namespace) -> None:
         a.kinds = [args.only]
     if getattr(args, "conform", None):
         project.conform = args.conform
-    for name in ("margin", "extend_s", "style"):
+    for name in ("margin", "extend_s", "style", "face_min_score", "plate_min_score"):
         value = getattr(args, name, None)
         if value is not None:
             setattr(b, name, value)
@@ -312,6 +312,8 @@ def _add_render_options(p: argparse.ArgumentParser) -> None:
     g.add_argument("--conform", choices=["first", "largest"], help="clips de formats différents : aligner sur le premier clip, ou sur la plus grande résolution et fréquence")
     g.add_argument("--margin", type=float, help="marge autour des zones, en fraction de leur taille (défaut 0.30)")
     g.add_argument("--extend-s", type=float, help="prolongation du flou avant et après l'objet, en secondes (défaut 0.30)")
+    g.add_argument("--face-min-score", type=float, help="score minimal qu'un visage doit atteindre pour être flouté (défaut 0.40)")
+    g.add_argument("--plate-min-score", type=float, help="score minimal qu'une plaque doit atteindre pour être floutée (défaut 0.25)")
     g.add_argument("--style", choices=["pixelate", "solid"], help="type de flou (défaut pixelate)")
 
 

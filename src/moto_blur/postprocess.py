@@ -43,6 +43,18 @@ def _shift(box: Box, dx: float, dy: float) -> Box:
     return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
 
 
+def below_min_score(track: Track, settings: BlurSettings) -> bool:
+    """Vrai si une piste détectée n'atteint jamais le score minimal de sa catégorie."""
+    if track.source != "auto" or track.forced or not track.obs:
+        return False
+    return max(o[5] for o in track.obs) < settings.min_score_for(track.kind)
+
+
+def is_blurred(track: Track, settings: BlurSettings) -> bool:
+    """Vrai si la piste donne lieu à un flou : ni ignorée à la main, ni écartée par son score."""
+    return bool(track.obs) and not track.disabled and not below_min_score(track, settings)
+
+
 @dataclass(frozen=True)
 class Zone:
     """Zone à flouter sur une image. La boîte peut dépasser de l'image : le flou la rogne."""
@@ -196,7 +208,7 @@ class ZoneIndex:
     """Toutes les zones de flou d'un clip, avec recherche rapide par instant."""
 
     def __init__(self, tracks: list[Track], settings: BlurSettings, video: VideoInfo):
-        self.items = [TrackZones(t, settings, video) for t in tracks if t.obs and not t.disabled]
+        self.items = [TrackZones(t, settings, video) for t in tracks if is_blurred(t, settings)]
         self.bucket = max(1.0, float(1 / video.tb))  # une case par seconde
         self.buckets: dict[int, list[TrackZones]] = {}
         for item in self.items:
@@ -268,13 +280,20 @@ MAX_PASSAGE_S = 6.0
 
 
 def build_review(
-    clip_id: str, tracks: list[Track], video: VideoInfo, detect_every: int = 1, merge_s: float = 1.0
+    clip_id: str,
+    tracks: list[Track],
+    video: VideoInfo,
+    detect_every: int = 1,
+    merge_s: float = 1.0,
+    settings: BlurSettings | None = None,
 ) -> list[dict]:
     """Regroupe les pistes douteuses d'un clip en passages à vérifier (PTS source)."""
     flagged = []
     for t in tracks:
         if not t.obs or t.disabled or t.source != "auto":
             continue
+        if settings is not None and below_min_score(t, settings):
+            continue  # piste écartée : rien à vérifier, elle n'est pas floutée
         reasons = track_reasons(t, video, detect_every)
         if reasons:
             pts = [o[0] for o in t.obs]

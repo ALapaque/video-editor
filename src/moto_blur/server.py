@@ -25,7 +25,7 @@ from . import dash, progress
 from . import project as pj
 from .analyze import analyze_project, needed_intervals, refresh_review
 from .blur import SUPPORTED_FORMATS, blur_frame
-from .postprocess import ZoneIndex
+from .postprocess import ZoneIndex, below_min_score
 from .proxy import build_proxy, proxy_path
 from .render import RenderError, check_ready, formats_differ, render_project, used_clips
 from .timeline import pts_to_sec, resolve_segments, sec_to_pts
@@ -219,6 +219,8 @@ class Engine:
         scores = sorted(o[5] for o in t.obs)
         doc = {
             "id": t.id, "kind": t.kind, "source": t.source, "disabled": t.disabled,
+            "forced": t.forced, "below_min_score": below_min_score(t, self.require().blur_settings),
+            "best_score": round(max(o[5] for o in t.obs), 2),
             "start": pts_to_sec(int(t.obs[0][0]), v), "end": pts_to_sec(int(t.obs[-1][0]), v),
             "extend_before_s": t.extend_before_s, "extend_after_s": t.extend_after_s,
             "score": round(scores[len(scores) // 2], 2), "count": len(t.obs),
@@ -300,6 +302,8 @@ class Engine:
             _, track = self._find_track(body["clip"], int(body["id"]))
             if "disabled" in body:
                 track.disabled = bool(body["disabled"])
+            if "forced" in body:
+                track.forced = bool(body["forced"])
             for key in ("extend_before_s", "extend_after_s"):
                 if key in body:
                     value = body[key]
@@ -370,6 +374,7 @@ class Engine:
                     elif isinstance(current, float):
                         value = float(value)
                     setattr(target, key, value)
+            refresh_review(project)  # le score minimal change les passages à vérifier
             self.touch()
 
     def _after_zone_change(self) -> None:
