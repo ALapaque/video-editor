@@ -74,6 +74,8 @@ def test_busy_passage_is_split_into_one_item_per_object(video_info):
     weak = lambda i, x: pj.Track(i, "face", [[k * F, x, 100, x + 40, 140, 0.32] for k in range(20)])  # noqa: E731
     few = build_review("c1", [weak(1, 100), weak(2, 300)], video_info)
     assert len(few) == 1 and few[0]["tracks"] == [1, 2]
+    assert few[0]["reasons_by_track"].keys() == {"1", "2"}
+    assert all("confiance faible" in r[0] for r in few[0]["reasons_by_track"].values())
     many = build_review("c1", [weak(i, 100 * i) for i in range(1, 7)], video_info)
     assert [r["tracks"] for r in many] == [[1], [2], [3], [4], [5], [6]]
     # deux objets sur le même intervalle : deux clés différentes

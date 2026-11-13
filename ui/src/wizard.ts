@@ -20,6 +20,8 @@ export const wiz = reactive({
   format: "source" as ExportPreset, // format choisi pour la vidéo à créer
   extract: "", // chemin du dernier extrait d'essai créé
   dropReady: false, // glisser-déposer déjà installé sur la fenêtre
+  // vérification flou par flou : réponse donnée à chaque flou (« clip:numéro »), pour le projet `path`
+  answers: {} as Record<string, "yes" | "no">,
 });
 
 const VIDEO = /\.(mp4|mov|mkv|m4v|avi|mts|webm)$/i;

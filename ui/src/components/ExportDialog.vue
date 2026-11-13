@@ -68,7 +68,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <p><Icon name="alert" /><span><strong>La vérification n'est pas terminée.</strong> {{ doubtLeft }} {{ doubtLeft > 1 ? "passages douteux ne sont pas validés" : "passage douteux n'est pas validé" }}<template v-if="markEntries.length">, {{ markEntries.length }} {{ markEntries.length > 1 ? "signalements ne sont pas traités" : "signalement n'est pas traité" }}</template>. Un visage ou une plaque peut rester lisible dans la vidéo exportée.</span></p>
         <label class="check"><input v-model="confirmed" type="checkbox" /> J'exporte quand même, sans avoir tout vérifié</label>
       </div>
-      <p v-if="p.sweep && !p.sweep.done" class="note warn sweep-note"><Icon name="eye" /><span><strong>Vous n'avez pas relu la vidéo en entier.</strong> La relecture complète (onglet « Vérification ») est le seul moyen de repérer ce que le logiciel n'a jamais détecté. Vous pouvez exporter quand même.</span></p>
+      <p v-if="p.sweep && !p.sweep.done" class="note warn sweep-note"><Icon name="eye" /><span><strong>Vous n'avez pas relu la vidéo en entier.</strong> La relecture complète (onglet « Vérification ») est le seul moyen de repérer ce que le logiciel n'a jamais vu. Vous pouvez exporter quand même.</span></p>
       <label>Fichier de sortie (dans le dossier du projet, ou chemin complet)
         <input v-model="form.output" type="text" spellcheck="false" />
       </label>
@@ -95,7 +95,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <label>Encodeur
             <select v-model="form.encoder"><option value="auto">automatique (matériel si possible)</option><option value="hardware">matériel uniquement</option><option value="software">logiciel uniquement</option></select>
           </label>
-          <label class="check"><input v-model="form.debug" type="checkbox" /> Vidéo de contrôle : cadres et scores dessinés, sans flou</label>
+          <label class="check"><input v-model="form.debug" type="checkbox" /> Vidéo de contrôle : contours des flous dessinés (avec leur score) à la place du flou</label>
         </template>
       </div>
       <div class="try">

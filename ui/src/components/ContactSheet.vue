@@ -10,7 +10,8 @@ const checked = reactive(new Set<string>());
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { setTracksDisabled, thumbUrl } from "../extras";
+import { confidence, confidenceInfo, setTracksDisabled, thumbUrl } from "../extras";
+import { displayName } from "../blurs";
 import { closeSheet, review, sheetItems, type SheetItem } from "../review";
 import { busy, formatTime, notify, player, seekTime, state } from "../store";
 import Icon from "./Icon.vue";
@@ -68,11 +69,11 @@ const vSeen = {
   },
 };
 
-function score(item: SheetItem): string {
-  return item.track.best_score.toFixed(2).replace(".", ",");
+function level(item: SheetItem): string {
+  return confidenceInfo[confidence(item.track)].label;
 }
 function label(item: SheetItem): string {
-  return `${item.track.name} n° ${item.track.id}, score ${score(item)}, à ${formatTime(item.at, 0)}`;
+  return `${displayName(item.track)}, ${level(item)}, à ${formatTime(item.at, 0)}`;
 }
 
 let last = -1; // dernière vignette cliquée, pour cocher une série avec Maj
@@ -107,9 +108,9 @@ function see(item: SheetItem): void {
   review.sheetFilter = null;
   player.pause();
   seekTime(item.at);
-  state.preview = "boxes"; // le flou se juge sur l'image nette, entourée
+  state.preview = "boxes"; // le flou se juge sur l'image nette, entourée (contours)
   state.selectedTrack = { clip: item.clip, id: item.track.id };
-  notify(`Flou n° ${item.track.id} : il est entouré d'un trait épais dans l'image. Rouvrez la planche pour continuer${checked.size ? ", vos cases cochées sont gardées" : ""}.`);
+  notify(`${displayName(item.track)} : il est entouré d'un trait épais dans l'image. Rouvrez la planche pour continuer${checked.size ? ", vos cases cochées sont gardées" : ""}.`);
 }
 
 function close(): void {
@@ -156,9 +157,9 @@ onBeforeUnmount(() => {
             <img v-else-if="seen.has(item.key)" :src="thumb(item)" loading="lazy" alt="" width="220" height="165" @error="failed.add(item.key)" />
             <span v-else class="tile-missing"></span>
             <span class="tile-check"><Icon name="check" :size="13" /></span>
-            <span class="tile-text"><span class="dot" :class="item.track.kind"></span><span class="tile-name">{{ item.track.name }} n° {{ item.track.id }}</span><span class="mono">{{ score(item) }}</span></span>
+            <span class="tile-text"><span class="dot" :class="item.track.kind"></span><span class="tile-name">{{ displayName(item.track) }}</span><span class="level" :class="confidence(item.track)" :title="`${confidenceInfo[confidence(item.track)].help} (score ${item.track.best_score.toFixed(2).replace('.', ',')})`">{{ level(item) }}</span></span>
           </button>
-          <button class="icon-btn tile-see" :title="`Voir ce flou dans la vidéo, à ${formatTime(item.at, 0)}`" :aria-label="`Voir le flou n° ${item.track.id} dans la vidéo`" @click="see(item)"><Icon name="eye" /></button>
+          <button class="icon-btn tile-see" :title="`Voir ce flou dans la vidéo, à ${formatTime(item.at, 0)}`" :aria-label="`Voir ce flou (${displayName(item.track)}) dans la vidéo`" @click="see(item)"><Icon name="eye" /></button>
         </li>
       </ul>
       <p v-else class="blank"><Icon name="check" />{{ review.sheetFilter ? "Plus aucun flou automatique dans ce passage." : "Aucun flou automatique dans ce montage." }}</p>
