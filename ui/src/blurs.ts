@@ -45,9 +45,9 @@ export function matchesKind(track: Track, filter: KindFilter): boolean {
 }
 
 // --- Raisons d'un passage douteux, rattachées au flou concerné ---------------------------------
-// Le moteur regroupe les raisons de tous les flous d'un passage sans dire à quel flou chacune
-// s'applique. On les rattache quand l'état du flou suffit à le savoir ; les autres restent
-// affichées une fois, sous la liste.
+// Le moteur donne les raisons de chaque flou (`reasons_by_track`). Pour un projet enregistré par
+// une version plus ancienne, on les rattache quand l'état du flou suffit à le savoir ; les autres
+// restent affichées une fois, sous la liste.
 
 /** Raison s'appliquant à ce flou, d'après ce que l'on sait de lui (null : impossible à dire). */
 function appliesTo(raw: string, track: Track): boolean | null {
@@ -62,6 +62,18 @@ function appliesTo(raw: string, track: Track): boolean | null {
 export function splitReasons(item: ReviewItem, tracks: Track[]): { byTrack: Map<number, string[]>; rest: string[] } {
   const byTrack = new Map<number, string[]>();
   const rest: string[] = [];
+  // Le moteur donne les raisons de chaque flou : on s'en sert quand elles sont là.
+  const given = item.reasons_by_track;
+  if (given && Object.keys(given).length) {
+    const ids = new Set(tracks.map((t) => t.id));
+    for (const [id, reasons] of Object.entries(given)) {
+      if (ids.has(Number(id)) && reasons.length) byTrack.set(Number(id), [...reasons]);
+    }
+    // Raisons qui ne viennent d'aucun flou détaillé (objet suivi, par exemple) : sous la liste.
+    const attached = new Set([...byTrack.values()].flat().map((r) => r.split(" (")[0]));
+    for (const raw of item.reasons) if (!attached.has(raw.split(" (")[0])) rest.push(raw);
+    return { byTrack, rest };
+  }
   for (const raw of item.reasons) {
     if (tracks.length === 1) {
       byTrack.set(tracks[0].id, [...(byTrack.get(tracks[0].id) ?? []), raw]);
