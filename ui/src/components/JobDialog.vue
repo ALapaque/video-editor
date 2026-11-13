@@ -48,7 +48,7 @@ const phase = computed(() => {
   if (j.value.kind === "contour") return "Calcul du contour de l'objet, image par image. C'est long : comptez plusieurs fois la durée du passage suivi.";
   if (j.value.kind === "dataset") return "Enregistrement des images des plaques vérifiées.";
   const named = j.value.label.replace(/\bc\d+\b/g, (id) => project.value?.clips.find((c) => c.id === id)?.name ?? id);
-  return named.replace(/^Analyse /, "Détection des visages et des plaques : ");
+  return named.replace(/^Analyse /, "Recherche des visages et des plaques : ");
 });
 const after = computed(() => {
   switch (j.value.kind) {

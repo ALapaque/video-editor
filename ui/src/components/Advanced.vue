@@ -8,13 +8,15 @@ import Icon from "./Icon.vue";
 import Logo from "./Logo.vue";
 import Player from "./Player.vue";
 import PresetChoice from "./PresetChoice.vue";
+import Shortcuts from "./Shortcuts.vue";
 import SidePanel from "./SidePanel.vue";
 import Timeline from "./Timeline.vue";
 import WelcomeArt from "./WelcomeArt.vue";
 import { followBlur, formatDuration, measureEstimate, redo, undo } from "../extras";
+import { panels } from "../blurs";
 import { addMark, doubtDone, doubtEntries, doubtLeft, guided, leave, markEntries, pending, resume, review, startQueue, summary, validate } from "../review";
 import {
-  addMute, busy, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, project, refresh, saveManual, segments, send,
+  addMute, busy, current, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, project, refresh, saveManual, segments, send,
   setMode, splitAtPlayhead, start, state, time,
 } from "../store";
 
@@ -111,7 +113,7 @@ async function picked(path: string): Promise<void> {
 function muteMark(): void {
   if (state.muteIn === null) {
     state.muteIn = time.value;
-    notify("Début du passage muet posé. Placez la tête de lecture à la fin puis cliquez « Muet : fin ».");
+    notify("Début du son coupé posé. Placez la tête de lecture à la fin puis cliquez « Couper le son : fin » (ou M).");
   } else {
     const from = state.muteIn;
     state.muteIn = null;
@@ -153,7 +155,7 @@ async function dashChoice(mode: "track" | "fixed" | "cancel"): Promise<void> {
 
 // --- Flou ajouté à la main : il suit ce qui est entouré, ou reste fixe ----------
 const followButton = ref<HTMLButtonElement>();
-/** Suivi lancé depuis le dialogue : clip de la zone à sélectionner à la fin, et retour à la boucle de vérification. */
+/** Suivi lancé depuis le dialogue : clip du flou à sélectionner à la fin, et retour à la boucle de vérification. */
 let followed: { clip: string; guided: boolean } | null = null;
 watch(() => state.pendingBlur, (pending) => {
   if (pending) void nextTick(() => followButton.value?.focus()); // Entrée = le choix par défaut
@@ -179,9 +181,9 @@ async function blurChoice(mode: "follow" | "fixed" | "cancel"): Promise<void> {
   }
   await saveManual(pending.clip, pending.fixed);
   if (pending.guided) {
-    notify("Zone ajoutée sur tout le passage. Regardez la boucle : si l'objet bouge, retracez-la à un autre instant avec « Déplacer ici… » dans l'onglet « Zones ».");
+    notify("Flou ajouté sur tout le passage. Regardez la boucle : si l'objet bouge, retracez-le à un autre instant avec « Déplacer ici… » dans l'onglet « Flous ».");
     resume();
-  } else notify("Zone ajoutée pour 2 s. Réglez son début et sa fin dans le panneau « Zones ».");
+  } else notify("Flou ajouté pour 2 s. Réglez son début et sa fin dans l'onglet « Flous ».");
 }
 
 // Fin d'un traitement court : le suivi d'un flou ajouté et la mesure de vitesse n'ont pas besoin
@@ -196,7 +198,7 @@ watch(() => job.value?.state, (now, before) => {
       state.jobOpen = false;
       state.jobFinished = false;
       if (from && j.created !== null && j.created !== undefined) state.selectedTrack = { clip: from.clip, id: j.created };
-      notify(`${j.message.replace(/(\d)\.(\d)/g, "$1,$2")} ${from?.guided ? "Regardez la boucle : s'il ne couvre pas tout, ajoutez-en un autre." : "Il est sélectionné : réglez-le dans l'onglet « Zones »."}`);
+      notify(`${j.message.replace(/(\d)\.(\d)/g, "$1,$2")} ${from?.guided ? "Regardez la boucle : s'il ne couvre pas tout, ajoutez-en un autre." : "Il est sélectionné : réglez-le dans l'onglet « Flous »."}`);
       if (from?.guided) resume();
     } else if (from?.guided && review.sub === "missing") state.tool = "manual";
   } else if (j.kind === "estimate" && j.state === "done") {
@@ -225,6 +227,7 @@ function cancelJob(): void {
 /** Pendant la vérification guidée, le montage ne se modifie pas : aucun risque de couper par erreur. */
 const locked = computed(() => guided.value);
 const lockedTip = "Quittez la vérification pour modifier le montage";
+const muteTip = "Couper le son d'un passage : posez le début, puis la fin (M)";
 
 /** Vers le mode simple : la vérification guidée en cours est quittée, le projet reste ouvert. */
 function toSimple(): void {
@@ -247,8 +250,14 @@ function onKey(event: KeyboardEvent): void {
     void blurChoice("cancel");
     return;
   }
-  if (target.tagName === "INPUT" || target.tagName === "SELECT" || busy.value) return;
-  if (picker.value || exporting.value || state.pendingDash || state.pendingBlur || review.sheet || state.jobOpen) return; // un dialogue est ouvert
+  if (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
+  if (picker.value || exporting.value || state.pendingDash || state.pendingBlur || review.sheet || state.jobOpen || panels.shortcuts) return; // un dialogue est ouvert
+  if (event.key === "?" && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    panels.shortcuts = true;
+    return;
+  }
+  if (busy.value) return;
   if (event.ctrlKey || event.metaKey || event.altKey) return; // Ctrl+Z, Ctrl+C… ne sont pas des raccourcis de montage
   // vérification guidée : Entrée valide le passage affiché, S pose un signalement pendant la relecture
   if (event.key === "Enter" && review.mode === "queue" && target.tagName !== "BUTTON" && target.tagName !== "A") {
@@ -266,8 +275,45 @@ function onKey(event: KeyboardEvent): void {
   else if (event.key === "m" || event.key === "M") muteMark();
 }
 
-onMounted(() => window.addEventListener("keydown", onKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+// --- Vidéo verticale (1440 × 2560…) -----------------------------------------------
+// La vidéo prend toute la hauteur de la fenêtre ; la consigne, les barres « Lecture » et
+// « Montage », la légende et la timeline passent à sa droite au lieu de la réduire par-dessous.
+const left = ref<HTMLDivElement>();
+const portrait = computed(() => {
+  const c = current.value?.clip;
+  return !!c && c.height > c.width * 1.05;
+});
+const stageWidth = ref(0);
+function layout(): void {
+  const el = left.value;
+  const c = current.value?.clip;
+  if (!el || !c || !portrait.value) return;
+  const style = getComputedStyle(el);
+  const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  const height = el.clientHeight - padY;
+  const width = el.clientWidth - padX;
+  const side = Math.min(600, Math.max(520, width * 0.45)); // place gardée à droite : commandes et timeline
+  stageWidth.value = Math.round(Math.max(180, Math.min((height * c.width) / c.height, width - side - 14)));
+}
+const resizer = new ResizeObserver(layout);
+watch(portrait, () => void nextTick(layout));
+watch(() => [current.value?.clip.width, current.value?.clip.height], () => void nextTick(layout));
+watch(left, (el, before) => {
+  if (before) resizer.unobserve(before);
+  if (el) resizer.observe(el);
+});
+
+onMounted(() => {
+  window.addEventListener("keydown", onKey);
+  // le mode avancé s'ouvre sur l'aperçu du flou ; « Voir les contours », sous la vidéo, pour les régler
+  if (review.mode === "home") state.preview = "blur";
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  resizer.disconnect();
+  panels.shortcuts = false;
+});
 </script>
 
 <template>
@@ -295,6 +341,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           :aria-label="project.history?.redo ? `Rétablir : ${project.history.redo}` : 'Rétablir (rien à rétablir)'" @click="redo()"
         ><Icon name="redo" /></button>
       </span>
+      <button class="icon-btn keys-btn" title="Raccourcis clavier (?)" aria-label="Raccourcis clavier" @click="panels.shortcuts = true">?</button>
       <button :disabled="busy" @click="picker = 'open'"><Icon name="folder" />Ouvrir…</button>
       <button v-if="project" :disabled="busy" @click="picker = 'add'"><Icon name="plus" />Ajouter un clip…</button>
       <button class="mode-switch" title="L'assistant pas à pas, une question à la fois. Le projet ouvert est conservé." @click="toSimple"><Icon name="steps" />Passer en mode simple</button>
@@ -309,7 +356,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     </Transition>
 
     <main v-if="project" class="work">
-      <div class="left">
+      <div ref="left" class="left" :class="{ portrait }" :style="portrait && stageWidth ? { '--stage-w': `${stageWidth}px` } : undefined">
         <div v-if="missing.length" class="banner error"><Icon name="alert" /><div>Fichier source introuvable : {{ missing.map((c) => c.path).join(", ") }}</div></div>
         <div v-else-if="project.mismatch && !project.conform" class="banner">
           <Icon name="alert" />
@@ -364,17 +411,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <!-- là où on lance l'analyse : le préréglage, avec son avertissement -->
         <div v-if="guide.action === 'analyse' && !busy && !(job && state.jobFinished)" class="analysis-bar"><PresetChoice compact /></div>
         <Player />
-        <div class="tools">
+        <div class="tools" role="group" aria-labelledby="group-montage">
+          <span id="group-montage" class="group-name">Montage</span>
           <button :disabled="busy || locked" :title="locked ? lockedTip : 'Couper le passage à la tête de lecture (C)'" @click="splitAtPlayhead"><Icon name="scissors" />Couper ici</button>
           <button :disabled="busy || locked || state.selected < 0" :title="locked ? lockedTip : 'Supprimer le passage sélectionné (Suppr)'" @click="deleteSegment(state.selected)"><Icon name="trash" />Supprimer le passage</button>
           <span class="joined">
-            <button :disabled="busy || locked || state.selected <= 0" :title="locked ? lockedTip : 'Déplacer le passage sélectionné vers le début'" @click="moveSegment(state.selected, -1)"><Icon name="arrowLeft" />Déplacer</button>
-            <button :disabled="busy || locked || state.selected < 0 || state.selected >= project.timeline.length - 1" :title="locked ? lockedTip : 'Déplacer le passage sélectionné vers la fin'" @click="moveSegment(state.selected, 1)">Déplacer<Icon name="arrowRight" /></button>
+            <button :disabled="busy || locked || state.selected <= 0" :title="locked ? lockedTip : 'Déplacer le passage sélectionné vers le début'" @click="moveSegment(state.selected, -1)"><Icon name="arrowLeft" />Déplacer à gauche</button>
+            <button :disabled="busy || locked || state.selected < 0 || state.selected >= project.timeline.length - 1" :title="locked ? lockedTip : 'Déplacer le passage sélectionné vers la fin'" @click="moveSegment(state.selected, 1)">Déplacer à droite<Icon name="arrowRight" /></button>
           </span>
-          <button class="mute-btn" :class="{ on: state.muteIn !== null }" :disabled="busy || locked" :title="locked ? lockedTip : 'Poser le début puis la fin d\'un passage muet (M)'" @click="muteMark"><Icon name="volumeOff" />{{ state.muteIn === null ? "Muet : début" : "Muet : fin" }}</button>
+          <button class="mute-btn" :class="{ on: state.muteIn !== null }" :disabled="busy || locked" :title="locked ? lockedTip : muteTip" @click="muteMark"><Icon name="volumeOff" />{{ state.muteIn === null ? "Couper le son : début" : "Couper le son : fin" }}</button>
           <span class="spacer"></span>
           <span class="dim total">Durée du montage : <span class="mono">{{ formatTime(duration) }}</span></span>
-          <label class="dim zoom"><Icon name="zoom" /><span>Zoom</span> <input v-model.number="state.zoom" type="range" min="0" max="400" step="5" title="0 = tout le montage visible" /></label>
+          <label class="dim zoom" title="Zoom de la timeline (tout à gauche : tout le montage visible)"><Icon name="zoom" /><span>Zoom</span> <input v-model.number="state.zoom" type="range" min="0" max="400" step="5" aria-label="Zoom de la timeline" /></label>
         </div>
         <Timeline />
       </div>
@@ -410,6 +458,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <ExportDialog v-if="exporting" @close="exporting = false" />
     </Transition>
     <Transition name="modal">
+      <Shortcuts v-if="panels.shortcuts" @close="panels.shortcuts = false" />
+    </Transition>
+    <Transition name="modal">
       <div v-if="state.pendingDash" class="modal">
         <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dash-title">
           <h3 id="dash-title"><Icon name="target" :size="18" />Flouter un objet</h3>
@@ -419,12 +470,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
               <input v-model="objectName" type="text" maxlength="40" spellcheck="false" placeholder="Autre nom" aria-label="Nom de l'objet" />
             </span>
           </label>
-          <p v-if="replaces" class="note warn"><Icon name="alert" />« {{ chosenName }} » existe déjà dans ce clip : ses zones seront remplacées à partir de cette image.</p>
+          <p v-if="replaces" class="note warn"><Icon name="alert" />« {{ chosenName }} » existe déjà dans ce clip : son flou sera remplacé à partir de cette image.</p>
           <p v-else-if="!chosenName" class="note"><Icon name="info" />Donnez un nom à l'objet pour continuer.</p>
           <p>Que faire du rectangle que vous venez de tracer ?</p>
           <div class="choices">
             <button class="primary" :disabled="!chosenName" @click="dashChoice('track')"><span>Suivre l'objet<small>Il est suivi image par image sur tout le clip, vers l'avant et l'arrière. À choisir s'il bouge dans l'image.</small></span></button>
-            <button :disabled="!chosenName" @click="dashChoice('fixed')"><span>Zone fixe<small>Le même rectangle sur tout le clip. À choisir si l'objet ne bouge pas dans l'image (caméra fixée à la moto, cadrage constant).</small></span></button>
+            <button :disabled="!chosenName" @click="dashChoice('fixed')"><span>Flou fixe<small>Le même rectangle sur tout le clip. À choisir si l'objet ne bouge pas dans l'image (caméra fixée à la moto, cadrage constant).</small></span></button>
           </div>
           <div class="row end"><button @click="dashChoice('cancel')">Annuler</button></div>
         </div>
@@ -437,7 +488,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <p>Que faire du rectangle que vous venez de tracer ?</p>
           <div class="choices">
             <button ref="followButton" class="primary" @click="blurChoice('follow')"><span>Suivre ce que j'ai entouré<small>Le flou suit ce que vous avez entouré, image par image, dans tout ce passage du montage. Il s'arrête seul à un changement de plan. À choisir pour une personne, une plaque, tout ce qui bouge dans l'image.</small></span></button>
-            <button @click="blurChoice('fixed')"><span>Zone fixe<small>{{ state.pendingBlur.guided ? "Le même rectangle, immobile, pendant tout le passage vérifié." : "Le même rectangle, immobile, pendant 2 s. Vous réglerez son début et sa fin dans l'onglet « Zones »." }}</small></span></button>
+            <button @click="blurChoice('fixed')"><span>Flou fixe<small>{{ state.pendingBlur.guided ? "Le même rectangle, immobile, pendant tout le passage vérifié." : "Le même rectangle, immobile, pendant 2 s. Vous réglerez son début et sa fin dans l'onglet « Flous »." }}</small></span></button>
           </div>
           <div class="row end"><button @click="blurChoice('cancel')">Annuler</button></div>
         </div>
@@ -445,3 +496,35 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     </Transition>
   </div>
 </template>
+
+<style>
+/* === 12 points : barre « Montage », vidéo verticale === */
+.tools { flex-wrap: wrap; row-gap: 6px; }
+.tools .zoom input { width: 84px; }
+/* la durée du montage est déjà affichée sous la vidéo (« / 00:08.00 ») : elle ne s'ajoute ici
+   que sur les grands écrans, pour garder la barre « Montage » sur une ligne */
+@media (max-width: 1600px) { .tools .total { display: none; } }
+@media (max-width: 1280px) {
+  .tools button { padding: 0 8px; }
+  .tools .zoom input { width: 64px; }
+}
+.keys-btn { font-weight: 650; font-size: 14px; color: var(--dim); }
+/* Vidéo verticale : la vidéo occupe toute la hauteur ; la consigne, les barres « Lecture » et
+   « Montage », la légende et la timeline se rangent dans la colonne à sa droite. */
+.left.portrait {
+  display: grid; grid-template-columns: var(--stage-w, 40%) minmax(0, 1fr);
+  grid-template-rows: repeat(6, auto) minmax(0, 1fr) auto; gap: 10px 16px;
+}
+.left.portrait > .player { display: contents; }
+.left.portrait .stage { grid-column: 1; grid-row: 1 / 9; }
+.left.portrait > .timeline { grid-column: 2; grid-row: 8; }
+.left.portrait > :not(.player), .left.portrait .transport, .left.portrait .legend { grid-column: 2; min-width: 0; }
+.left.portrait .timecode { flex: 1 0 150px; }
+.left.portrait .legend { grid-column: 2; min-width: 0; }
+.left.portrait .legend { height: auto; flex-wrap: wrap; white-space: normal; overflow: visible; }
+.left.portrait .legend-tip { margin-left: 0; }
+.left.portrait .transport, .left.portrait .tools { padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); }
+.left.portrait .group-name { flex-basis: 100%; }
+.left.portrait .guide { flex-wrap: wrap; }
+.left.portrait .guide-text { flex-basis: 200px; }
+</style>

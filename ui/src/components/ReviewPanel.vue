@@ -1,13 +1,16 @@
 <script setup lang="ts">
 // Onglet « Vérification » : écran de choix, passages un par un, relecture complète, bilan.
-import { computed, ref } from "vue";
-import { thumbUrl } from "../extras";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import type { Track } from "../api";
+import { blurSpan, confidence, confidenceInfo, thumbUrl } from "../extras";
+import { byDoubt, displayName, splitReasons } from "../blurs";
 import {
   addMark, currentEntry, currentIndex, dismiss, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
-  markEntries, missing, next, objectHere, openSheet, previous, relocate, replay, restoreZone, resume, resumeSweep, review, sheetItems, showObject, soloTrack, speeds,
+  markEntries, missing, next, objectHere, openSheet, previous, relocate, removeZone, replay, restoreZone, resume, resumeSweep, review, sheetItems, showObject, soloTrack, speeds,
   startQueue, startSweep, sweepResume, unvalidate, validate,
 } from "../review";
-import { busy, droppedHere, duration, formatTime, kindLabel, needsAnalysis, objectNames, player, project, state, time } from "../store";
+import { busy, droppedHere, duration, formatTime, kindLabel, needsAnalysis, objectNames, player, project, state, time, trackById } from "../store";
+import BlurRow from "./BlurRow.vue";
 import ContactSheet from "./ContactSheet.vue";
 import Icon from "./Icon.vue";
 
@@ -28,7 +31,40 @@ const progress = computed(() => {
   if (review.scope === "marks") return 0;
   return doubtEntries.value.length ? doubtDone.value / doubtEntries.value.length : 0;
 });
-const reasons = computed(() => (entry.value?.item ? explain(entry.value.item.reasons) : []));
+/** Flous du passage affiché (8 au plus ; au-delà, la planche les montre tous), le plus douteux d'abord. */
+const blurs = computed<Track[]>(() => {
+  const item = entry.value?.item;
+  if (!item || item.tracks.length > 8) return [];
+  return item.tracks.map((id) => trackById(item.clip, id)).filter((t): t is Track => !!t && !t.disabled).sort(byDoubt);
+});
+/** Raisons du passage : rattachées au flou concerné quand on peut le savoir, les autres une seule fois en dessous. */
+const split = computed(() => {
+  const item = entry.value?.item;
+  if (!item) return { byTrack: new Map<number, string[]>(), rest: [] as string[] };
+  if (soloTrack.value || !blurs.value.length) return { byTrack: new Map<number, string[]>(), rest: item.reasons };
+  return splitReasons(item, blurs.value);
+});
+const reasons = computed(() => explain(split.value.rest));
+function reasonsOf(track: Track): { text: string; raw: string }[] {
+  return explain(split.value.byTrack.get(track.id) ?? []);
+}
+
+// Survoler ou sélectionner un flou de la liste le fait ressortir sur la vidéo (le reste est assombri).
+const pinned = ref<number | null>(null);
+function focusOn(id: number | null): void {
+  const e = entry.value;
+  const target = id ?? pinned.value;
+  state.focus = e && target !== null ? { clip: e.clip, ids: [target] } : null;
+}
+function pin(track: Track): void {
+  pinned.value = pinned.value === track.id ? null : track.id;
+  focusOn(null);
+}
+watch(() => [review.current, review.mode, review.sub], () => {
+  pinned.value = null;
+  state.focus = null;
+});
+onBeforeUnmount(() => (state.focus = null));
 /** Étiquettes du passage : catégories détectées, et nom de chaque objet désigné à la main. */
 const tags = computed(() => {
   const item = entry.value?.item;
@@ -124,22 +160,42 @@ function stopSweep(): void {
           <span v-for="t in tags" :key="t.kind + t.label" class="tag"><span class="dot" :class="t.kind"></span>{{ t.label }}</span>
         </div>
         <!-- élément qui ne porte que sur un objet : on le montre, pour savoir de quoi il est question -->
-        <div v-if="soloTrack" class="card-object">
+        <div v-if="soloTrack" class="card-object" @mouseenter="focusOn(soloTrack.id)" @mouseleave="focusOn(null)">
           <img v-if="soloThumb && thumbFailed !== soloThumb" :src="soloThumb" alt="" width="220" height="165" @error="thumbFailed = soloThumb" />
           <span class="grow">
-            <strong>{{ soloTrack.name }} n° {{ soloTrack.id }}</strong>
-            <small v-if="soloTrack.source === 'auto'">meilleur score {{ soloTrack.best_score.toFixed(2).replace(".", ",") }}</small>
-            <small v-else>{{ soloTrack.source === "tracker" ? "objet suivi" : "zone tracée à la main" }}</small>
+            <strong>{{ displayName(soloTrack) }} · <span class="level" :class="confidence(soloTrack)" :title="confidenceInfo[confidence(soloTrack)].help">{{ confidenceInfo[confidence(soloTrack)].label }}</span></strong>
+            <small>{{ blurSpan(soloTrack) }} dans ce clip</small>
             <small>La question porte sur ce seul flou, encadré ici là où il est le plus net.</small>
           </span>
         </div>
+        <!-- quelques flous : un par ligne, le plus douteux d'abord, avec ce qui le rend douteux -->
+        <template v-else-if="blurs.length">
+          <p class="blur-list-head">{{ blurs.length > 1 ? `${blurs.length} flous dans ce passage, le plus douteux d'abord. Survolez-en un pour le voir sur la vidéo.` : "Le flou de ce passage :" }}</p>
+          <ul class="blur-list" @mouseleave="focusOn(null)">
+            <li v-for="t in blurs" :key="t.id" :data-id="t.id" :class="{ pinned: pinned === t.id }">
+              <button
+                class="blur-pick" :aria-pressed="pinned === t.id" :title="pinned === t.id ? 'Ne plus faire ressortir ce flou' : 'Faire ressortir ce flou sur la vidéo'"
+                @mouseenter="focusOn(t.id)" @focus="focusOn(t.id)" @blur="focusOn(null)" @click="pin(t)"
+              >
+                <BlurRow :clip="entry.clip" :track="t" />
+              </button>
+              <ul v-if="reasonsOf(t).length" class="why small">
+                <li v-for="r in reasonsOf(t)" :key="r.text" :title="`Détail technique : ${r.raw}`">{{ r.text }}</li>
+              </ul>
+              <button
+                v-if="entry.type === 'doubt' && review.sub === 'ask'" class="icon-btn bare blur-remove" :disabled="busy"
+                :title="`Faux flou : retirer « ${displayName(t)} » (vous pourrez le rétablir)`" :aria-label="`Retirer le flou ${displayName(t)}`" @click="removeZone(entry.clip, t.id)"
+              ><Icon name="close" :size="14" /></button>
+            </li>
+          </ul>
+        </template>
         <ul v-if="reasons.length" class="why">
           <li v-for="r in reasons" :key="r.text" :title="`Détail technique : ${r.raw}`">{{ r.text }}</li>
         </ul>
-        <p v-else class="why-text">Vous avez signalé cet endroit pendant la relecture.</p>
+        <p v-else-if="!entry.item" class="why-text">Vous avez signalé cet endroit pendant la relecture.</p>
         <!-- passage chargé (foule) : la planche, limitée à ses flous, permet de les trier d'un coup -->
         <button v-if="crowd" class="quiet small wrap sheet-link" :disabled="busy" @click="openSheet({ clip: entry.clip, ids: entry.item!.tracks })">
-          <Icon name="grid" />Beaucoup d'objets ici ({{ crowd }}) : triez-les d'un coup avec la planche
+          <Icon name="grid" />Beaucoup de flous ici ({{ crowd }}) : triez-les d'un coup avec la planche
         </button>
 
         <div class="loop-row">
@@ -162,7 +218,7 @@ function stopSweep(): void {
             <button :disabled="busy" title="Tracer un flou là où il en manque un" @click="missing">Il manque un flou</button>
             <button :disabled="busy" title="Retirer un flou posé à tort" @click="extra">Un flou est en trop</button>
           </div>
-          <button v-if="soloTrack?.source === 'auto' && entry.type === 'doubt'" class="wide" :disabled="busy" :title="`Faux flou : retirer « ${soloTrack.name} n° ${soloTrack.id} », et lui seul, puis passer au suivant`" @click="dismiss">
+          <button v-if="soloTrack?.source === 'auto' && entry.type === 'doubt'" class="wide" :disabled="busy" :title="`Faux flou : retirer « ${displayName(soloTrack)} », et lui seul, puis passer au suivant`" @click="dismiss">
             <Icon name="close" />Ce n'est pas à flouter
           </button>
           <button v-if="objectHere" class="wide" :disabled="busy" title="Entourer l'objet sur cette image : son suivi est refait sur ce plan seulement" @click="showObject">
@@ -178,13 +234,13 @@ function stopSweep(): void {
           <strong>Il manque un flou</strong>
           <p>Tracez un rectangle sur l'image, à l'endroit à flouter. Il couvrira tout le passage, puis la boucle reprendra.</p>
           <template v-if="droppedInPassage">
-            <button v-if="!state.showDropped" class="wide wrap" @click="state.showDropped = true">Le logiciel a écarté {{ droppedInPassage }} {{ droppedInPassage > 1 ? "détections" : "détection" }} ici : les afficher</button>
+            <button v-if="!state.showDropped" class="wide wrap" @click="state.showDropped = true">Le logiciel a vu ici {{ droppedInPassage }} {{ droppedInPassage > 1 ? "objets trop peu sûrs pour les flouter" : "objet trop peu sûr pour le flouter" }} : les afficher</button>
             <template v-else>
-              <p>Les détections écartées sont entourées en gris. Si l'une d'elles couvre ce qui manque, floutez-la :</p>
+              <p>Ils sont entourés en gris. Si l'un d'eux couvre ce qui manque, floutez-le :</p>
               <p v-if="!droppedHere.length" class="dim">Aucune sur cette image. Avancez image par image (touche →) pour en voir d'autres.</p>
               <ul class="list dropped">
-                <li v-for="tr in droppedHere" :key="tr.id">
-                  <span class="grow"><strong>{{ tr.name }}</strong> <span class="dim">n° {{ tr.id }} · {{ tr.best_score.toFixed(2) }}</span></span>
+                <li v-for="tr in droppedHere" :key="tr.id" :data-id="tr.id">
+                  <BlurRow class="grow" :clip="entry.clip" :track="tr" />
                   <button class="small" :disabled="busy" @click="forceZone(entry.clip, tr.id)">Flouter quand même</button>
                 </li>
               </ul>
@@ -272,3 +328,18 @@ function stopSweep(): void {
     </Teleport>
   </section>
 </template>
+
+<style>
+/* === 12 points : vérification objet par objet === */
+.blur-list-head { color: var(--dim); font-size: 12px; line-height: 1.45; }
+.blur-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.blur-list > li { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; transition: border-color var(--m-out) var(--ease); }
+.blur-list > li:hover, .blur-list > li.pinned { border-color: var(--line-strong); }
+.blur-list > li.pinned { border-color: rgba(255, 255, 255, .72); }
+.blur-pick { width: 100%; height: auto; justify-content: flex-start; padding: 2px 30px 2px 2px; text-align: left; white-space: normal; font-weight: 400; background: transparent; border-color: transparent; }
+.blur-pick:hover:not(:disabled) { background: transparent; border-color: transparent; }
+.blur-pick:active:not(:disabled) { transform: none; background: transparent; }
+.blur-remove { position: absolute; top: 6px; right: 5px; }
+.why.small { margin: 0 4px 2px 70px; padding-left: 12px; gap: 1px; color: var(--dim); font-size: 12px; line-height: 1.4; }
+.card-object .level { font-weight: 600; }
+</style>

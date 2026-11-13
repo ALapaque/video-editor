@@ -1,27 +1,42 @@
 <script setup lang="ts">
-// Panneau latéral : vérification guidée, zones de l'image courante, réglages.
-import { computed, nextTick, reactive, ref, watch } from "vue";
+// Panneau latéral : vérification guidée, flous de l'image affichée, réglages.
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import type { Track } from "../api";
 import { applyProfile, presetInfo, saveProfile } from "../extras";
+import { byDoubt, displayName, kindFilters, matchesKind, type KindFilter } from "../blurs";
 import { pending } from "../review";
+import BlurRow from "./BlurRow.vue";
 import Icon from "./Icon.vue";
 import PresetChoice from "./PresetChoice.vue";
 import ReviewPanel from "./ReviewPanel.vue";
 import {
-  busy, current, deleteTrack, droppedHere, formatTime, kindLabel, notify, patchTrack, project, removeMute, saveManual,
+  busy, clipById, current, deleteTrack, droppedHere, kindLabel, notify, patchTrack, project, removeMute, saveManual,
   send, start, state, tracksNow,
 } from "../store";
 
 const tab = computed({ get: () => state.tab, set: (value) => (state.tab = value) });
 const tabIndex = computed(() => ["review", "zones", "settings"].indexOf(tab.value));
 
-// --- Zones de l'image courante ---
+/** « 0:12 » : temps du clip, sans décimales. */
+function clock(x: number): string {
+  return `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, "0")}`;
+}
+function span(a: number, b: number): string {
+  return clock(a) === clock(b) ? `à ${clock(a)}` : `de ${clock(a)} à ${clock(b)}`;
+}
+
+// --- Flous de l'image affichée ---
 const sourceTime = computed(() => (current.value ? state.frame / current.value.fps : 0));
-// zones floutées (ou désactivées à la main) à l'image courante ; les détections écartées par le
-// score minimal sont listées à part
+const filter = ref<KindFilter>("all");
+// flous appliqués (ou retirés à la main) à l'image affichée, du plus douteux au plus sûr ; ceux
+// qui sont trop peu sûrs pour être floutés sont listés à part
 const tracksHere = computed<Track[]>(() =>
-  tracksNow.value.filter((tr) => !tr.below_min_score).sort((a, b) => Number(a.disabled) - Number(b.disabled) || a.id - b.id),
+  tracksNow.value.filter((tr) => !tr.below_min_score).sort((a, b) => Number(a.disabled) - Number(b.disabled) || byDoubt(a, b)),
 );
+const shownHere = computed(() => tracksHere.value.filter((tr) => matchesKind(tr, filter.value)));
+function countOf(f: KindFilter): number {
+  return tracksHere.value.filter((tr) => matchesKind(tr, f)).length;
+}
 
 // --- Objets désignés à la main dans le clip affiché (compteur, téléphone…) ---
 const objects = computed(() => {
@@ -61,9 +76,12 @@ async function clearContour(target: { label: string } | { id: number }): Promise
   if (current.value && (await send("POST", "/api/contour", { clip: current.value.clip.id, ...target, clear: true }))) notify("Forme simple rétablie.");
 }
 
-// une zone sélectionnée ailleurs (clic dans l'image, flou qui vient d'être ajouté) est amenée à l'écran dans la liste
+// un flou sélectionné ailleurs (clic dans l'image, flou qui vient d'être ajouté) est amené à l'écran dans la liste
 watch(() => [state.selectedTrack?.id, tab.value, contourAsk.value], () => {
   if (state.selectedTrack && tab.value === "zones") {
+    const sel = state.selectedTrack;
+    const track = tracksHere.value.find((t) => t.id === sel.id);
+    if (track && !matchesKind(track, filter.value)) filter.value = "all"; // sinon il resterait caché par le filtre
     void nextTick(() => document.querySelector(".zones li.selected")?.scrollIntoView({ block: "nearest" }));
   }
 });
@@ -74,6 +92,14 @@ function isSelected(tr: Track): boolean {
 function select(tr: Track): void {
   if (current.value) state.selectedTrack = { clip: current.value.clip.id, id: tr.id };
 }
+// survol d'un flou de la liste : il ressort sur la vidéo
+function hover(tr: Track | null): void {
+  const s = current.value;
+  state.focus = tr && s ? { clip: s.clip.id, ids: [tr.id] } : null;
+}
+watch(tab, () => (state.focus = null));
+onBeforeUnmount(() => (state.focus = null));
+
 async function extend(tr: Track, side: "extend_before_s" | "extend_after_s", delta: number): Promise<void> {
   const general = Number(project.value?.settings.blur.extend_s ?? 0.3);
   const value = Math.max(0, Math.round(((tr[side] ?? general) + delta) * 100) / 100);
@@ -86,7 +112,7 @@ async function setEdge(tr: Track, edge: "start" | "end"): Promise<void> {
   const inside = edge === "start" ? frames.filter((k) => k[0] > t) : frames.filter((k) => k[0] < t);
   const anchor = edge === "start" ? frames[0] : frames[frames.length - 1];
   if (!inside.length) {
-    notify(edge === "start" ? "Le début doit être avant la fin de la zone." : "La fin doit être après le début de la zone.");
+    notify(edge === "start" ? "Le début doit être avant la fin du flou." : "La fin doit être après le début du flou.");
     return;
   }
   const moved = [t, ...anchor.slice(1)];
@@ -96,7 +122,10 @@ function redraw(tr: Track): void {
   select(tr);
   state.tool = "redraw";
 }
-const mutesList = computed(() => (project.value?.mutes ?? []).map((m, index) => ({ ...m, index })));
+function seconds(x: number): string {
+  return `${x.toFixed(1).replace(".", ",")} s`;
+}
+const mutesList = computed(() => (project.value?.mutes ?? []).map((m, index) => ({ ...m, index, name: clipById(m.clip)?.name ?? m.clip })));
 
 // --- Réglages ---
 const blur = reactive<Record<string, string | number | boolean>>({});
@@ -106,6 +135,16 @@ watch(() => project.value?.settings, (settings) => {
   Object.assign(blur, settings.blur);
   Object.assign(analysis, settings.analysis);
 }, { immediate: true, deep: true });
+/** Marge autour des flous, en pour cent de leur taille. */
+const marginPct = computed({
+  get: () => Math.round(Number(blur.margin ?? 0) * 100),
+  set: (value: number) => (blur.margin = Math.round(value) / 100),
+});
+const extendS = computed({
+  get: () => Number(blur.extend_s ?? 0.3),
+  set: (value: number) => (blur.extend_s = Math.round(value * 10) / 10),
+});
+
 // Scores minimaux : appliqués en direct pendant le glissement (envoi regroupé toutes les 200 ms).
 // Tant qu'un envoi est en attente, l'état reçu du moteur ne remet pas le curseur en arrière.
 const minScore = reactive({ face: 0.4, plate: 0.25, hits: 3 });
@@ -124,12 +163,39 @@ function setMinScore(): void {
     void send("PUT", "/api/settings", { blur: { face_min_score: minScore.face, plate_min_score: minScore.plate, min_hits: minScore.hits } });
   }, 200);
 }
-function droppedCount(kind: string): number {
+function droppedCount(kind?: string): number {
   const s = current.value;
-  return s ? (project.value?.tracks[s.clip.id] ?? []).filter((t) => t.kind === kind && t.below_min_score).length : 0;
+  return s ? (project.value?.tracks[s.clip.id] ?? []).filter((t) => (!kind || t.kind === kind) && t.below_min_score).length : 0;
 }
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n > 1 ? many : one}`;
+}
+
+// Curseur unique « Moins de faux flous ↔ Moins de risques » : cinq crans autour des scores
+// minimaux du préréglage. À droite, les scores baissent (on floute davantage, au risque de faux
+// flous) ; à gauche, ils montent. Les curseurs détaillés restent dans les réglages experts.
+const SENS_FACE = 0.1;
+const SENS_PLATE = 0.05;
+const sensBase = computed(() => (project.value?.preset === "difficile" ? { face: 0.3, plate: 0.18 } : { face: 0.4, plate: 0.25 }));
+const sensSteps = ["Très peu de faux flous", "Peu de faux flous", "Équilibré (conseillé)", "Prudent", "Très prudent"];
+function round2(x: number): number {
+  return Math.round(x * 100) / 100;
+}
+/** Cran correspondant aux scores minimaux actuels (null : réglés à la main dans les réglages experts). */
+const sensNow = computed<number | null>(() => {
+  const v = Math.round((sensBase.value.face - minScore.face) / SENS_FACE);
+  if (Math.abs(v) > 2) return null;
+  const face = round2(sensBase.value.face - v * SENS_FACE);
+  const plate = round2(sensBase.value.plate - v * SENS_PLATE);
+  return Math.abs(face - minScore.face) < 0.011 && Math.abs(plate - minScore.plate) < 0.011 ? v : null;
+});
+const sens = ref(0);
+watch(sensNow, (v) => v !== null && (sens.value = v), { immediate: true });
+function setSens(): void {
+  const v = sens.value;
+  minScore.face = Math.min(0.9, Math.max(0.05, round2(sensBase.value.face - v * SENS_FACE)));
+  minScore.plate = Math.min(0.9, Math.max(0.05, round2(sensBase.value.plate - v * SENS_PLATE)));
+  setMinScore();
 }
 
 async function saveBlur(): Promise<void> {
@@ -139,6 +205,7 @@ async function saveAnalysis(): Promise<void> {
   const { kinds: _kinds, ...rest } = analysis;
   if (await send("PUT", "/api/settings", { analysis: rest })) notify("Réglages d'analyse enregistrés. Relancez « Analyser » : toute l'analyse sera refaite.");
 }
+const expert = ref(false); // réglages experts : repliés par défaut
 
 // Modèles proposés : ceux que le moteur annonce (fournis, puis personnels), sinon la liste d'origine.
 // Le modèle du projet reste dans la liste même s'il n'est plus annoncé.
@@ -174,7 +241,7 @@ async function confirmProfile(): Promise<void> {
   <aside class="side">
     <nav class="tabs" role="tablist">
       <button role="tab" :aria-selected="tab === 'review'" :class="{ on: tab === 'review' }" @click="tab = 'review'">Vérification <b v-if="pending">{{ pending }}</b></button>
-      <button role="tab" :aria-selected="tab === 'zones'" :class="{ on: tab === 'zones' }" @click="tab = 'zones'">Zones</button>
+      <button role="tab" :aria-selected="tab === 'zones'" :class="{ on: tab === 'zones' }" @click="tab = 'zones'">Flous</button>
       <button role="tab" :aria-selected="tab === 'settings'" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">Réglages</button>
       <span class="tab-ind" :style="{ transform: `translateX(${tabIndex * 100}%)` }"></span>
     </nav>
@@ -184,20 +251,20 @@ async function confirmProfile(): Promise<void> {
 
       <section v-else-if="tab === 'zones'" key="zones" class="pane">
         <div class="row pair">
-          <button :class="{ on: state.tool === 'manual' }" :disabled="busy" title="Tracer un rectangle à flouter sur l'image courante" @click="state.tool = state.tool === 'manual' ? 'none' : 'manual'">+ Zone manuelle</button>
-          <button :class="{ on: state.tool === 'dash' }" :disabled="busy" title="Désigner sur l'image courante un objet à flouter : compteur, téléphone, GPS…" @click="state.tool = state.tool === 'dash' ? 'none' : 'dash'"><Icon name="target" />Suivre un objet…</button>
+          <button :class="{ on: state.tool === 'manual' }" :disabled="busy" title="Tracer un rectangle à flouter sur l'image affichée" @click="state.tool = state.tool === 'manual' ? 'none' : 'manual'"><Icon name="plus" />Ajouter un flou</button>
+          <button :class="{ on: state.tool === 'dash' }" :disabled="busy" title="Désigner sur l'image affichée un objet à flouter : compteur, téléphone, GPS…" @click="state.tool = state.tool === 'dash' ? 'none' : 'dash'"><Icon name="target" />Suivre un objet…</button>
         </div>
         <template v-if="objects.length">
           <h4 class="plain">Objets suivis</h4>
           <ul class="list objects">
             <li v-for="o in objects" :key="o.name">
               <span class="dot dash"></span>
-              <span class="grow"><strong>{{ o.name }}</strong> <span class="dim">· {{ o.tracked ? "suivi" : "zone fixe" }}</span><small>source <span class="mono">{{ formatTime(o.start, 1) }} → {{ formatTime(o.end, 1) }}</span></small></span>
+              <span class="grow"><strong>{{ o.name }}</strong> <span class="dim">· {{ o.tracked ? "suivi" : "flou fixe" }}</span><small>{{ span(o.start, o.end) }} dans ce clip</small></span>
               <template v-if="confirmDelete === o.name">
                 <button class="small danger" :disabled="busy" @click="clearObject(o.name)">Confirmer</button>
                 <button class="small" @click="confirmDelete = ''">Annuler</button>
               </template>
-              <button v-else class="small danger" :disabled="busy" :title="`Supprimer toutes les zones de « ${o.name} » dans ce clip`" @click="confirmDelete = o.name">Supprimer</button>
+              <button v-else class="small danger" :disabled="busy" :title="`Supprimer tous les flous de « ${o.name} » dans ce clip`" @click="confirmDelete = o.name">Supprimer</button>
               <div v-if="canContour && o.tracked" class="object-more">
                 <template v-if="contourAsk === `o:${o.name}`">
                   <p>Le calcul est long : {{ contourTime(o.length) }} pour cet objet. La première fois, un modèle de 155 Mo est téléchargé.</p>
@@ -213,40 +280,54 @@ async function confirmProfile(): Promise<void> {
             </li>
           </ul>
         </template>
-        <h4 v-if="objects.length" class="plain">Zones de cette image</h4>
-        <p class="help">Zones actives sur l'image affichée. Cliquez une zone dans l'image pour la sélectionner.</p>
-        <p v-if="!tracksHere.length" class="blank">Aucune zone sur cette image.</p>
+        <h4 class="plain">Flous de cette image</h4>
+        <div v-if="tracksHere.length" class="joined kind-filter" role="group" aria-label="Type de flou à afficher">
+          <button
+            v-for="f in kindFilters" :key="f.id" class="small" :class="{ on: filter === f.id }" :aria-pressed="filter === f.id"
+            :disabled="f.id !== 'all' && !countOf(f.id)" @click="filter = f.id"
+          >{{ f.label }}<span class="mono kind-count">{{ countOf(f.id) }}</span></button>
+        </div>
+        <p class="help">Du plus douteux au plus sûr. Cliquez un flou ici ou dans l'image pour le régler.</p>
+        <p v-if="!tracksHere.length" class="blank">Aucun flou sur cette image.</p>
         <ul class="list zones">
-          <li v-for="tr in tracksHere" :key="tr.id" :class="{ selected: isSelected(tr), off: tr.disabled }" @click="select(tr)">
+          <li
+            v-for="tr in shownHere" :key="tr.id" :data-id="tr.id" :class="{ selected: isSelected(tr), off: tr.disabled }" tabindex="0"
+            :aria-label="`${displayName(tr)}${tr.disabled ? ', retiré' : ''}`" :aria-current="isSelected(tr) ? 'true' : undefined"
+            @click="select(tr)" @keydown.enter.self="select(tr)" @keydown.space.self.prevent="select(tr)" @mouseenter="hover(tr)" @mouseleave="hover(null)"
+          >
             <div class="head">
-              <span class="dot" :class="tr.kind"></span>
-              <strong>{{ tr.name }}</strong>
-              <span class="dim">n° {{ tr.id }}<template v-if="tr.source === 'auto'"> · score {{ tr.score.toFixed(2) }}</template><template v-else-if="tr.kind === 'dash' && tr.source === 'manual'"> · zone fixe</template><template v-else-if="tr.source === 'manual'"> · manuelle</template><template v-else> · suivi</template></span>
-              <span v-if="tr.forced" class="tag" title="Floutée bien que son score soit sous le minimum">forcée</span>
+              <BlurRow :clip="current!.clip.id" :track="tr" defer>
+                <span class="dim span">
+                  <template v-if="tr.disabled">retiré</template>
+                  <template v-else-if="tr.kind === 'dash' && tr.source === 'manual'">flou fixe</template>
+                  <template v-else-if="tr.source === 'manual'">ajouté à la main</template>
+                  <template v-else-if="tr.source === 'tracker'">suit ce que vous avez entouré</template>
+                  <span v-if="tr.forced" class="tag" title="Flouté bien que le logiciel soit peu sûr">flouté quand même</span>
+                </span>
+              </BlurRow>
             </div>
-            <div class="dim span">source <span class="mono">{{ formatTime(tr.start, 1) }} → {{ formatTime(tr.end, 1) }}</span></div>
             <div v-if="isSelected(tr)" class="actions">
               <template v-if="tr.source === 'manual'">
-                <button :disabled="busy" @click.stop="setEdge(tr, 'start')">Début = cette image</button>
-                <button :disabled="busy" @click.stop="setEdge(tr, 'end')">Fin = cette image</button>
-                <button :disabled="busy" title="Retracer le rectangle sur l'image courante : la zone se déplacera progressivement jusqu'ici" @click.stop="redraw(tr)">Déplacer ici…</button>
+                <button :disabled="busy" title="Le flou commence à l'image affichée" @click.stop="setEdge(tr, 'start')">Début = cette image</button>
+                <button :disabled="busy" title="Le flou finit à l'image affichée" @click.stop="setEdge(tr, 'end')">Fin = cette image</button>
+                <button :disabled="busy" title="Retracer le rectangle sur l'image affichée : le flou se déplacera progressivement jusqu'ici" @click.stop="redraw(tr)">Déplacer ici…</button>
                 <button class="danger" :disabled="busy" @click.stop="deleteTrack(current!.clip.id, tr.id)"><Icon name="trash" />Supprimer</button>
               </template>
               <template v-else>
-                <div class="stepper"><span class="stepper-label">Avant</span>
-                  <button :disabled="busy" aria-label="Réduire la prolongation avant" @click.stop="extend(tr, 'extend_before_s', -0.5)">−</button>
-                  <span class="mono">{{ (tr.extend_before_s ?? Number(blur.extend_s)).toFixed(1) }} s</span>
-                  <button :disabled="busy" aria-label="Augmenter la prolongation avant" @click.stop="extend(tr, 'extend_before_s', 0.5)">+</button>
+                <div class="stepper" title="Le flou commence un peu avant que l'objet soit vu"><span class="stepper-label">Avant</span>
+                  <button :disabled="busy" aria-label="Commencer le flou plus tard" @click.stop="extend(tr, 'extend_before_s', -0.5)">−</button>
+                  <span class="mono">{{ seconds(tr.extend_before_s ?? Number(blur.extend_s)) }}</span>
+                  <button :disabled="busy" aria-label="Commencer le flou plus tôt" @click.stop="extend(tr, 'extend_before_s', 0.5)">+</button>
                 </div>
-                <div class="stepper"><span class="stepper-label">Après</span>
-                  <button :disabled="busy" aria-label="Réduire la prolongation après" @click.stop="extend(tr, 'extend_after_s', -0.5)">−</button>
-                  <span class="mono">{{ (tr.extend_after_s ?? Number(blur.extend_s)).toFixed(1) }} s</span>
-                  <button :disabled="busy" aria-label="Augmenter la prolongation après" @click.stop="extend(tr, 'extend_after_s', 0.5)">+</button>
+                <div class="stepper" title="Le flou reste un peu après que l'objet a disparu"><span class="stepper-label">Après</span>
+                  <button :disabled="busy" aria-label="Finir le flou plus tôt" @click.stop="extend(tr, 'extend_after_s', -0.5)">−</button>
+                  <span class="mono">{{ seconds(tr.extend_after_s ?? Number(blur.extend_s)) }}</span>
+                  <button :disabled="busy" aria-label="Finir le flou plus tard" @click.stop="extend(tr, 'extend_after_s', 0.5)">+</button>
                 </div>
-                <button v-if="!tr.disabled" class="danger" :disabled="busy" title="Faux positif : ne pas flouter cette zone" @click.stop="patchTrack(current!.clip.id, tr.id, { disabled: true })">Ne pas flouter</button>
+                <button v-if="!tr.disabled" class="danger" :disabled="busy" title="Faux flou : ne pas flouter ceci" @click.stop="patchTrack(current!.clip.id, tr.id, { disabled: true })">Ne pas flouter</button>
                 <button v-else :disabled="busy" @click.stop="patchTrack(current!.clip.id, tr.id, { disabled: false })">Rétablir le flou</button>
-                <button v-if="tr.forced" :disabled="busy" title="Revenir à la règle du score minimal pour cette détection" @click.stop="patchTrack(current!.clip.id, tr.id, { forced: false })">Ne plus forcer</button>
-                <button v-if="tr.source === 'tracker'" class="danger" :disabled="busy" @click.stop="deleteTrack(current!.clip.id, tr.id)"><Icon name="trash" />Supprimer le suivi</button>
+                <button v-if="tr.forced" :disabled="busy" title="Le flou suit de nouveau la règle normale : il n'est appliqué que si le logiciel est assez sûr" @click.stop="patchTrack(current!.clip.id, tr.id, { forced: false })">Ne plus flouter quand même</button>
+                <button v-if="tr.source === 'tracker'" class="danger" :disabled="busy" @click.stop="deleteTrack(current!.clip.id, tr.id)"><Icon name="trash" />Supprimer ce flou</button>
                 <!-- flou ajouté qui suit : contour précis, comme pour un objet suivi -->
                 <template v-if="canContour && tr.source === 'tracker' && tr.kind === 'manual'">
                   <div v-if="contourAsk === `t:${tr.id}`" class="object-more" @click.stop>
@@ -261,30 +342,29 @@ async function confirmProfile(): Promise<void> {
             </div>
           </li>
         </ul>
-        <!-- Détections écartées par le score minimal : repliées par défaut ; ouvertes, elles sont entourées en gris sur la vidéo -->
+        <!-- Non floutés (trop peu sûrs) : repliés par défaut ; ouverts, ils sont entourés en gris sur la vidéo -->
         <div class="fold" :class="{ open: state.showDropped }">
           <button class="fold-head" :aria-expanded="state.showDropped" @click="state.showDropped = !state.showDropped">
-            <Icon :name="state.showDropped ? 'chevronDown' : 'chevronRight'" :size="14" />Détections écartées <b class="count">{{ droppedHere.length }}</b>
+            <Icon :name="state.showDropped ? 'chevronDown' : 'chevronRight'" :size="14" />Non floutés (trop peu sûrs) <b class="count">{{ droppedHere.length }}</b>
           </button>
           <template v-if="state.showDropped">
-            <p class="help">Détections dont le meilleur score est sous le minimum (onglet « Réglages ») : elles ne sont pas floutées. Elles sont entourées en gris sur l'image.</p>
-            <p v-if="!droppedHere.length" class="dim">Aucune sur cette image.</p>
+            <p class="help">Le logiciel a cru voir quelque chose, mais pas assez nettement pour le flouter. C'est réglable avec le curseur « Moins de faux flous ↔ Moins de risques » (onglet « Réglages »). Ils sont entourés en gris sur l'image.</p>
+            <p v-if="!droppedHere.length" class="dim">Aucun sur cette image.</p>
             <ul class="list dropped">
-              <li v-for="tr in droppedHere" :key="tr.id">
-                <span class="dot off"></span>
-                <span class="grow"><strong>{{ tr.name }}</strong> <span class="dim">n° {{ tr.id }} · meilleur score {{ tr.best_score.toFixed(2) }}</span></span>
-                <button class="small" :disabled="busy" title="Flouter cette détection malgré son score" @click="patchTrack(current!.clip.id, tr.id, { forced: true })">Flouter quand même</button>
+              <li v-for="tr in droppedHere" :key="tr.id" :data-id="tr.id" @mouseenter="hover(tr)" @mouseleave="hover(null)">
+                <BlurRow class="grow" :clip="current!.clip.id" :track="tr" defer />
+                <button class="small" :disabled="busy" title="Flouter ceci malgré le doute" @click="patchTrack(current!.clip.id, tr.id, { forced: true })">Flouter quand même</button>
               </li>
             </ul>
           </template>
         </div>
 
         <template v-if="mutesList.length">
-          <h4>Passages muets</h4>
+          <h4>Son coupé</h4>
           <ul class="list mutes">
             <li v-for="m in mutesList" :key="m.index">
               <Icon name="volumeOff" />
-              <span class="grow">{{ m.clip }} · source <span class="mono">{{ formatTime(m.start, 1) }} → {{ formatTime(m.end, 1) }}</span></span>
+              <span class="grow">{{ span(m.start, m.end) }} <span class="dim">· {{ m.name }}</span></span>
               <button class="danger" @click="removeMute(m.index)">Retirer</button>
             </li>
           </ul>
@@ -293,9 +373,7 @@ async function confirmProfile(): Promise<void> {
 
       <section v-else key="settings" class="pane settings">
         <h4>Flou</h4>
-        <p class="help">Appliqué au prochain rendu, sans refaire l'analyse.</p>
-        <label>Marge autour des zones <input v-model.number="blur.margin" type="number" min="0" max="2" step="0.05" @change="saveBlur" /></label>
-        <label>Prolongation avant / après (s) <input v-model.number="blur.extend_s" type="number" min="0" max="5" step="0.1" @change="saveBlur" /></label>
+        <p class="help">Appliqué au prochain export, sans refaire l'analyse.</p>
         <label>Type de flou
           <select v-model="blur.style" @change="saveBlur"><option value="pixelate">mosaïque lissée</option><option value="solid">aplat de couleur</option></select>
         </label>
@@ -305,23 +383,29 @@ async function confirmProfile(): Promise<void> {
         <label>Forme pour les plaques
           <select v-model="blur.plate_shape" @change="saveBlur"><option value="rounded">rectangle arrondi</option><option value="rect">rectangle</option><option value="ellipse">ellipse</option></select>
         </label>
+        <div class="slider-row">
+          <label for="blur-margin">Marge autour des flous <span class="mono value">{{ marginPct }} %</span></label>
+          <input id="blur-margin" v-model.number="marginPct" type="range" min="0" :max="Math.max(100, marginPct)" step="5" :aria-valuetext="`${marginPct} %`" @change="saveBlur" />
+          <small class="dim">Le flou déborde de l'objet de {{ marginPct }} % de sa taille, de chaque côté.</small>
+        </div>
+        <div class="slider-row">
+          <label for="blur-extend">Garder le flou avant et après <span class="mono value">{{ seconds(extendS) }}</span></label>
+          <input id="blur-extend" v-model.number="extendS" type="range" min="0" :max="Math.max(2, extendS)" step="0.1" :aria-valuetext="seconds(extendS)" @change="saveBlur" />
+          <small class="dim">Le flou apparaît un peu avant que l'objet soit vu et reste un peu après.</small>
+        </div>
         <label>Stabiliser les flous <input v-model="blur.smooth" type="checkbox" aria-describedby="smooth-help" @change="saveBlur" /></label>
         <p id="smooth-help" class="help">Le flou ne tremble plus et ne change plus de taille à chaque image.</p>
-        <div class="slider-row">
-          <label for="min-face">Score minimal des visages <span class="mono value">{{ minScore.face.toFixed(2) }}</span></label>
-          <input id="min-face" v-model.number="minScore.face" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
-          <small class="dim">{{ plural(droppedCount("face"), "détection écartée", "détections écartées") }} dans ce clip</small>
+
+        <h4>Ce qui est flouté</h4>
+        <div class="slider-row sens">
+          <label for="sensitivity" class="sens-ends"><span>Moins de faux flous</span><span aria-hidden="true">↔</span><span>Moins de risques</span></label>
+          <input
+            id="sensitivity" v-model.number="sens" type="range" min="-2" max="2" step="1" :disabled="busy"
+            :aria-valuetext="sensSteps[sens + 2]" @input="setSens"
+          />
+          <small><strong>{{ sensNow === null ? "Réglage personnalisé" : sensSteps[sens + 2] }}</strong> · {{ plural(droppedCount(), "objet non flouté", "objets non floutés") }} dans ce clip, car trop peu sûrs.</small>
         </div>
-        <div class="slider-row">
-          <label for="min-plate">Score minimal des plaques <span class="mono value">{{ minScore.plate.toFixed(2) }}</span></label>
-          <input id="min-plate" v-model.number="minScore.plate" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
-          <small class="dim">{{ plural(droppedCount("plate"), "détection écartée", "détections écartées") }} dans ce clip</small>
-        </div>
-        <div class="slider-row">
-          <label for="min-hits">Images sûres exigées <span class="mono value">{{ minScore.hits }}</span></label>
-          <input id="min-hits" v-model.number="minScore.hits" type="range" min="1" max="8" step="1" :disabled="busy" @input="setMinScore" />
-        </div>
-        <p class="help">Une détection n'est floutée que si elle atteint ce score minimal sur ce nombre d'images (une seule suffit si elle est très nette). Les fausses détections clignotent ; les vrais visages et plaques restent à l'écran. Plus haut : moins de faux flous, mais un vrai visage aperçu très brièvement peut être manqué.</p>
+        <p class="help">Vers la gauche : moins de flous inutiles (reflets, feuillage…), mais un visage aperçu très brièvement peut rester net. Vers la droite : rien n'échappe, au prix de quelques faux flous à retirer. Appliqué tout de suite, sans refaire l'analyse.</p>
         <template v-if="project?.mismatch">
           <h4>Clips de formats différents</h4>
           <label>Aligner sur
@@ -332,21 +416,45 @@ async function confirmProfile(): Promise<void> {
             </select>
           </label>
         </template>
-        <h4>Détection</h4>
+        <h4>Analyse</h4>
         <PresetChoice />
-        <p class="help">Réglages fins, pour les cas particuliers. Modifier ces réglages refait toute l'analyse.</p>
-        <label>Modèle de visages
-          <select v-model="analysis.face_model"><option v-for="m in faceModels" :key="m">{{ m }}</option></select>
-        </label>
-        <label>Modèle de plaques
-          <select v-model="analysis.plate_model"><option v-for="m in plateModels" :key="m">{{ m }}</option></select>
-        </label>
-        <label>Score minimal pour suivre un objet <input v-model.number="analysis.conf_new" type="number" min="0.01" max="0.9" step="0.05" /></label>
-        <label>Taille des tuiles (0 = auto, -1 = aucune) <input v-model.number="analysis.tile_size" type="number" min="-1" step="64" /></label>
-        <label>Détecter une image sur <input v-model.number="analysis.detect_every" type="number" min="1" max="10" step="1" /></label>
-        <button :disabled="busy" @click="saveAnalysis">Enregistrer les réglages de détection</button>
-        <button class="wrap" :disabled="busy" title="Enregistre dans un dossier les images des plaques vérifiées de ce projet, pour entraîner un modèle de plaques" @click="start('/api/dataset')">Exporter des images d'entraînement (plaques)</button>
-        <p class="help">Pour améliorer la détection des plaques avec vos propres vidéos. Le dossier créé est indiqué à la fin.</p>
+
+        <div class="fold expert" :class="{ open: expert }">
+          <button class="fold-head" :aria-expanded="expert" aria-controls="expert-settings" @click="expert = !expert">
+            <Icon :name="expert ? 'chevronDown' : 'chevronRight'" :size="14" />Réglages experts
+          </button>
+          <div v-if="expert" id="expert-settings" class="expert-body">
+            <p class="help">Pour les cas particuliers. Les réglages de flou s'appliquent tout de suite ; ceux de la détection obligent à refaire toute l'analyse.</p>
+            <div class="slider-row">
+              <label for="min-face">Score minimal des visages <span class="mono value">{{ minScore.face.toFixed(2) }}</span></label>
+              <input id="min-face" v-model.number="minScore.face" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
+              <small class="dim">{{ plural(droppedCount("face"), "visage non flouté", "visages non floutés") }} dans ce clip</small>
+            </div>
+            <div class="slider-row">
+              <label for="min-plate">Score minimal des plaques <span class="mono value">{{ minScore.plate.toFixed(2) }}</span></label>
+              <input id="min-plate" v-model.number="minScore.plate" type="range" min="0" max="0.9" step="0.05" :disabled="busy" @input="setMinScore" />
+              <small class="dim">{{ plural(droppedCount("plate"), "plaque non floutée", "plaques non floutées") }} dans ce clip</small>
+            </div>
+            <div class="slider-row">
+              <label for="min-hits">Images sûres exigées <span class="mono value">{{ minScore.hits }}</span></label>
+              <input id="min-hits" v-model.number="minScore.hits" type="range" min="1" max="8" step="1" :disabled="busy" @input="setMinScore" />
+            </div>
+            <p class="help">Un objet n'est flouté que s'il atteint ce score minimal sur ce nombre d'images (une seule suffit s'il est très net). Les faux flous clignotent ; les vrais visages et plaques restent à l'écran. Plus haut : moins de faux flous, mais un vrai visage aperçu très brièvement peut être manqué.</p>
+            <h5>Détection</h5>
+            <label>Modèle de visages
+              <select v-model="analysis.face_model"><option v-for="m in faceModels" :key="m">{{ m }}</option></select>
+            </label>
+            <label>Modèle de plaques
+              <select v-model="analysis.plate_model"><option v-for="m in plateModels" :key="m">{{ m }}</option></select>
+            </label>
+            <label>Score minimal pour suivre un objet <input v-model.number="analysis.conf_new" type="number" min="0.01" max="0.9" step="0.05" /></label>
+            <label>Taille des tuiles (0 = auto, -1 = aucune) <input v-model.number="analysis.tile_size" type="number" min="-1" step="64" /></label>
+            <label>Analyser une image sur <input v-model.number="analysis.detect_every" type="number" min="1" max="10" step="1" /></label>
+            <button :disabled="busy" @click="saveAnalysis">Enregistrer les réglages de détection</button>
+            <button class="wrap" :disabled="busy" title="Enregistre dans un dossier les images des plaques vérifiées de ce projet, pour entraîner un modèle de plaques" @click="start('/api/dataset')">Exporter des images d'entraînement (plaques)</button>
+            <p class="help">Pour améliorer la reconnaissance des plaques avec vos propres vidéos. Le dossier créé est indiqué à la fin.</p>
+          </div>
+        </div>
 
         <h4>Profil « ma moto »</h4>
         <p class="help">Le profil garde les réglages de ce projet et l'aspect de vos objets suivis (compteur, téléphone…), pour les retrouver dans vos prochaines vidéos.</p>
@@ -355,7 +463,7 @@ async function confirmProfile(): Promise<void> {
           <span class="grow">
             <strong>Profil enregistré le {{ profileDate }}</strong>
             <small>{{ profile.objects.length ? `Objets : ${profile.objects.join(", ")}` : "Aucun objet suivi" }}</small>
-            <small>Détection : {{ profileKinds || "aucune" }} · préréglage {{ presetInfo[profile.preset]?.label ?? profile.preset }}</small>
+            <small>À flouter : {{ profileKinds || "rien" }} · préréglage {{ presetInfo[profile.preset]?.label ?? profile.preset }}</small>
           </span>
         </div>
         <p v-else class="blank">Aucun profil enregistré pour l'instant.</p>
@@ -375,3 +483,25 @@ async function confirmProfile(): Promise<void> {
     </Transition>
   </aside>
 </template>
+
+<style>
+/* === 12 points : liste des flous, réglages en clair === */
+.kind-filter { align-self: flex-start; }
+.kind-filter button { gap: 5px; padding: 0 8px; }
+.kind-count { color: var(--faint); font-size: 11px; }
+.kind-filter button.on .kind-count { color: var(--accent-hi); }
+.list.zones li { padding: 6px 8px 6px 6px; }
+.zones li:focus-visible { outline-offset: -2px; }
+.list.zones .head { align-items: flex-start; }
+.zones .head .blur-row { flex: 1; }
+.zones .span .tag { margin-left: 4px; }
+.dropped li .blur-row { flex: 1; }
+.list.dropped li { padding: 5px 6px; }
+.settings .slider-row small strong { color: var(--text); font-weight: 600; }
+.pane .sens-ends { display: flex; justify-content: space-between; gap: 8px; min-height: 22px; color: var(--text); }
+.sens-ends span[aria-hidden] { color: var(--faint); }
+.fold.expert { padding-top: 6px; border-top: 1px solid var(--line); }
+.fold.expert .fold-head { margin-left: -6px; font-weight: 600; }
+.expert-body { display: flex; flex-direction: column; gap: 9px; animation: fade-in var(--m-panel) var(--ease); }
+.expert-body h5 { margin: 6px 0 0; font-size: 12.5px; font-weight: 650; color: var(--text); }
+</style>
