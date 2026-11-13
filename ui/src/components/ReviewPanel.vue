@@ -1,12 +1,14 @@
 <script setup lang="ts">
-// Onglet « Vérification » : écran de choix, passages un par un, relecture complète, bilan.
+// Onglet « Vérification » : plus rien à valider. Écran de choix (relecture d'abord, puis les
+// signalements, les alertes, les flous gênants et les objets non floutés), relecture, alertes ou
+// signalements un par un, bilan.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { Track } from "../api";
 import { blurSpan, confidence, confidenceInfo, thumbUrl } from "../extras";
 import { byDoubt, displayName, splitReasons } from "../blurs";
 import {
-  addMark, currentEntry, currentIndex, dismiss, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
-  markEntries, missing, next, objectHere, openSheet, previous, relocate, removeZone, replay, restoreZone, resume, resumeSweep, review, sheetItems, showObject, soloTrack, speeds,
+  addMark, allClear, almostItems, annoyingItems, currentEntry, currentIndex, dismiss, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
+  markEntries, missing, next, objectHere, openSheet, previous, relocate, remaining, removeZone, replay, restoreZone, resume, resumeSweep, review, sheetItems, showObject, soloTrack, speeds,
   startQueue, startSweep, sweepResume, unvalidate, validate,
 } from "../review";
 import { busy, droppedHere, duration, formatTime, kindLabel, needsAnalysis, objectNames, player, project, state, time, trackById } from "../store";
@@ -101,59 +103,69 @@ function stopSweep(): void {
     <!-- Écran de choix -->
     <template v-if="review.mode === 'home'">
       <h4>Vérifier le floutage</h4>
-      <p class="help">Avant d'exporter, regardez ce que le logiciel a flouté. Deux façons de faire, à enchaîner dans cet ordre.</p>
+      <p class="help">Tout ce que le logiciel a détecté est flouté : il n'y a rien à valider. Il vous reste à regarder la vidéo une fois.</p>
       <p v-if="needsAnalysis && !busy" class="note warn"><Icon name="alert" />L'analyse n'est pas à jour : lancez-la d'abord, sinon des passages sortiraient sans flou.</p>
-      <div class="choices">
-        <button class="choice" :class="{ suggested: doubtLeft > 0 }" :disabled="busy || !doubtEntries.length" @click="startQueue('doubt')">
-          <span>
-            <span class="choice-title">Passages douteux <b class="count">{{ doubtLeft }}</b></span>
-            <small v-if="doubtEntries.length">Le logiciel vous montre un par un les endroits où il a hésité.{{ doubtDone ? ` ${plural(doubtDone, "passage déjà validé", "passages déjà validés")} sur ${doubtEntries.length}.` : "" }}</small>
-            <small v-else>Le logiciel n'a hésité nulle part dans ce montage.</small>
-          </span>
-        </button>
-        <button class="choice" :class="{ suggested: doubtLeft === 0 && !markEntries.length && !sweepDone }" :disabled="busy" @click="resumeSweep()">
-          <span>
-            <span class="choice-title">Relecture complète <span v-if="sweepDone" class="tag ok"><Icon name="check" :size="12" />faite</span></span>
-            <small v-if="sweepResume !== null">Vous vous étiez arrêté à {{ formatTime(Math.floor(sweepResume), 0) }} sur {{ formatTime(duration, 0) }}. Vous regardez le montage avec le flou affiché et vous signalez d'une touche ce qui n'est pas flouté.</small>
-            <small v-else>Vous regardez tout le montage avec le flou affiché et vous signalez d'une touche ce qui n'est pas flouté. C'est le seul moyen de repérer ce que le logiciel n'a jamais détecté.</small>
-          </span>
-        </button>
-        <div v-if="sweepResume !== null" class="row pair sweep-resume">
-          <button class="on" :disabled="busy" @click="resumeSweep()"><Icon name="play" :size="12" />Reprendre à {{ formatTime(Math.floor(sweepResume), 0) }}</button>
-          <button :disabled="busy" @click="startSweep(true)">Depuis le début</button>
+      <div class="choices review-home">
+        <!-- la relecture : la seule étape qui protège vraiment -->
+        <div class="card entry-main" :class="{ todo: !sweepDone }">
+          <span class="choice-title">Relecture <span v-if="sweepDone" class="tag ok"><Icon name="check" :size="12" />faite</span></span>
+          <p class="entry-text">Regardez la vidéo une fois, en accéléré, flou affiché. C'est le seul moyen de voir ce que le logiciel n'a jamais détecté.</p>
+          <ul class="rules">
+            <li><Icon name="close" :size="14" /><span><strong>Cliquez un flou en trop</strong> pour le retirer. La lecture continue.</span></li>
+            <li><Icon name="flag" :size="14" /><span><strong>Touche S</strong> si quelque chose reste lisible. Vous corrigerez à la fin.</span></li>
+          </ul>
+          <button class="wide entry-go" :class="{ primary: !sweepDone }" data-entry="sweep" :disabled="busy" @click="resumeSweep()">
+            <Icon name="play" :size="13" />{{ sweepResume !== null ? `Reprendre à ${formatTime(Math.floor(sweepResume), 0)}` : sweepDone ? "Relire la vidéo" : "Commencer la relecture" }}
+          </button>
+          <button v-if="sweepResume !== null" class="quiet small" :disabled="busy" @click="startSweep(true)">Depuis le début</button>
         </div>
-        <button v-if="markEntries.length" class="choice" :class="{ suggested: doubtLeft === 0 }" :disabled="busy" @click="startQueue('marks')">
+        <button v-if="markEntries.length" class="choice suggested" data-entry="marks" :disabled="busy" @click="startQueue('marks')">
           <span>
-            <span class="choice-title">Signalements à traiter <b class="count">{{ markEntries.length }}</b></span>
+            <span class="choice-title"><Icon name="flag" />Signalements à traiter <b class="count">{{ markEntries.length }}</b></span>
             <small>Les endroits que vous avez signalés pendant la relecture, un par un.</small>
           </span>
         </button>
-        <button class="choice" :disabled="!sheetItems.length" @click="openSheet()">
+        <!-- alertes : seulement s'il y en a -->
+        <button v-if="doubtEntries.length" class="choice" :class="{ suggested: doubtLeft > 0 }" data-entry="alerts" :disabled="busy" @click="startQueue('doubt')">
           <span>
-            <span class="choice-title"><Icon name="grid" />Planche des flous <b class="count">{{ sheetItems.length }}</b></span>
-            <small v-if="sheetItems.length">Tous les flous du logiciel en vignettes, les plus douteux d'abord. Cochez les faux flous et retirez-les d'un coup.</small>
-            <small v-else>Aucun flou automatique dans ce montage pour l'instant.</small>
+            <span class="choice-title"><Icon name="alert" />Alertes <b class="count">{{ doubtLeft }}</b></span>
+            <small v-if="doubtLeft">Des endroits où quelque chose peut rester visible : un objet suivi a été perdu, par exemple. À regarder un par un.{{ doubtDone ? ` ${plural(doubtDone, "alerte déjà regardée", "alertes déjà regardées")} sur ${doubtEntries.length}.` : "" }}</small>
+            <small v-else>{{ doubtEntries.length > 1 ? `Les ${doubtEntries.length} alertes sont regardées.` : "L'alerte est regardée." }} Vous pouvez les revoir.</small>
+          </span>
+        </button>
+        <button class="choice" data-entry="annoying" :disabled="!annoyingItems.length && !sheetItems.length" @click="openSheet(undefined, annoyingItems.length ? 'annoying' : 'all')">
+          <span>
+            <span class="choice-title"><Icon name="grid" />Flous gênants <b class="count">{{ annoyingItems.length }}</b></span>
+            <small v-if="annoyingItems.length">Facultatif. Les flous qui se voient le plus, gros ou longs. Cochez ceux qui sont en trop et retirez-les d'un coup.</small>
+            <small v-else-if="sheetItems.length">Aucun flou ne prend beaucoup de place. Vous pouvez voir {{ sheetItems.length > 1 ? `les ${sheetItems.length} flous` : "le flou" }} du logiciel.</small>
+            <small v-else>Aucun flou posé par le logiciel dans ce montage.</small>
+          </span>
+        </button>
+        <button class="choice" data-entry="almost" :disabled="!almostItems.length" @click="openSheet(undefined, 'almost')">
+          <span>
+            <span class="choice-title"><Icon name="eye" />Non floutés à regarder <b class="count">{{ almostItems.length }}</b></span>
+            <small v-if="almostItems.length">Ce que le logiciel a cru voir sans le flouter, car trop peu sûr. Un vrai visage peut s'y cacher : cochez ce qui doit être flouté.</small>
+            <small v-else>Rien : le logiciel a flouté tout ce qu'il a vu.</small>
           </span>
         </button>
       </div>
-      <p class="note"><Icon name="info" />Le logiciel ne signale que ce qu'il a détecté : pour ne rien laisser passer, faites aussi la relecture complète.</p>
     </template>
 
     <!-- Un passage à la fois -->
     <template v-else-if="review.mode === 'queue'">
       <div class="guided-head">
-        <h4>{{ review.scope === "doubt" ? "Passages douteux" : "Signalements" }}</h4>
+        <h4>{{ review.scope === "doubt" ? "Alertes" : "Signalements" }}</h4>
         <button class="quiet small" title="Revenir au choix du mode de vérification" @click="leave"><Icon name="close" :size="14" />Quitter</button>
       </div>
-      <div v-if="review.scope === 'doubt'" class="progress" :title="`${doubtDone} validés sur ${doubtEntries.length}`">
+      <div v-if="review.scope === 'doubt'" class="progress" :title="`${doubtDone} regardées sur ${doubtEntries.length}`">
         <span class="bar still"><span :style="{ transform: `scaleX(${progress})` }"></span></span>
-        <span class="progress-text"><span class="mono">{{ doubtDone }} / {{ doubtEntries.length }}</span> validés</span>
+        <span class="progress-text"><span class="mono">{{ doubtDone }} / {{ doubtEntries.length }}</span> regardées</span>
       </div>
 
       <div v-if="entry" class="card" :class="{ done: entry.done }">
         <div class="card-top">
-          <strong class="card-pos">{{ entry.type === "doubt" ? "Passage" : "Signalement" }} {{ currentIndex + 1 }} sur {{ total }}</strong>
-          <span v-if="entry.done" class="tag ok"><Icon name="check" :size="12" />validé</span>
+          <strong class="card-pos">{{ entry.type === "doubt" ? "Alerte" : "Signalement" }} {{ currentIndex + 1 }} sur {{ total }}</strong>
+          <span v-if="entry.done" class="tag ok"><Icon name="check" :size="12" />regardée</span>
         </div>
         <div class="card-when">
           <span class="mono">{{ formatTime(entry.at, 1) }}<template v-if="entry.end > entry.at"> → {{ formatTime(entry.end, 1) }}</template></span>
@@ -260,45 +272,48 @@ function stopSweep(): void {
             <button class="small" :disabled="busy" @click="restoreZone(r)">Rétablir</button>
           </li>
         </ul>
-        <button v-if="entry.done && review.sub === 'ask'" class="quiet small left" :disabled="busy" @click="unvalidate">Remettre ce passage à revoir</button>
+        <button v-if="entry.done && review.sub === 'ask'" class="quiet small left" :disabled="busy" @click="unvalidate">Remettre cette alerte à regarder</button>
       </div>
       <div v-else class="card">
-        <p class="why-text">Ce passage n'est plus dans la liste : il a changé ou il a été coupé du montage.</p>
+        <p class="why-text">Cet endroit n'est plus dans la liste : il a changé ou il a été coupé du montage.</p>
         <button class="primary wide" @click="relocate">Continuer</button>
       </div>
 
       <div class="row pair nav">
         <button :disabled="currentIndex <= 0" @click="previous"><Icon name="chevronLeft" />Précédent</button>
-        <button title="Passer au suivant sans valider celui-ci" @click="next">Plus tard<Icon name="chevronRight" /></button>
+        <button title="Passer au suivant sans répondre pour celui-ci" @click="next">Plus tard<Icon name="chevronRight" /></button>
       </div>
     </template>
 
-    <!-- Relecture complète -->
+    <!-- Relecture -->
     <template v-else-if="review.mode === 'sweep'">
       <div class="guided-head">
-        <h4>Relecture complète</h4>
-        <button class="quiet small" title="Revenir au choix du mode de vérification" @click="leave"><Icon name="close" :size="14" />Quitter</button>
+        <h4>Relecture</h4>
+        <button class="quiet small" title="Revenir au choix de la vérification" @click="leave"><Icon name="close" :size="14" />Quitter</button>
       </div>
-      <p class="help">Regardez le montage, flou affiché. Dès qu'un visage, une plaque ou le compteur reste lisible, signalez-le : la lecture continue, vous corrigerez à la fin.</p>
+      <ul class="rules sweep-rules">
+        <li><Icon name="close" :size="14" /><span><strong>Cliquez un flou en trop</strong> pour le retirer.</span></li>
+        <li><Icon name="flag" :size="14" /><span><strong>Touche S</strong> si quelque chose reste lisible.</span></li>
+      </ul>
       <div class="progress">
         <span class="bar still"><span :style="{ transform: `scaleX(${duration ? Math.min(1, time / duration) : 0})` }"></span></span>
         <span class="progress-text mono">{{ formatTime(time, 0) }} / {{ formatTime(duration, 0) }}</span>
       </div>
       <button class="primary signal" :disabled="busy" @click="addMark"><Icon name="flag" :size="18" />Signaler ici<kbd>S</kbd></button>
-      <p class="flash" :class="{ shown: !!review.flash }" role="status">{{ review.flash || " " }}</p>
-      <div class="speed" role="group" aria-label="Vitesse de l'aperçu">
+      <p class="flash" :class="{ shown: !!review.flash }" role="status">{{ review.flash || " " }}</p>
+      <div class="speed" role="group" aria-label="Vitesse de la relecture">
         <span class="dim">Vitesse</span>
         <span class="joined">
           <button v-for="s in speeds" :key="s.value" class="small" :class="{ on: review.speed === s.value }" :aria-pressed="review.speed === s.value" @click="review.speed = s.value">{{ s.label }}</button>
         </span>
       </div>
       <div class="card">
-        <p v-if="state.playing" class="why-text">Lecture en cours. {{ plural(markEntries.length, "signalement", "signalements") }} pour l'instant.</p>
-        <p v-else-if="sweepEnded" class="why-text"><strong>Relecture terminée.</strong> {{ markEntries.length ? plural(markEntries.length, "signalement à traiter", "signalements à traiter") + "." : "Vous n'avez rien signalé." }}</p>
-        <p v-else class="why-text">Relecture en pause à <span class="mono">{{ formatTime(time, 1) }}</span>. {{ plural(markEntries.length, "signalement", "signalements") }}.</p>
-        <button v-if="state.playing" class="wide" @click="stopSweep"><Icon name="pause" />Arrêter la relecture</button>
+        <p v-if="state.playing" class="why-text">Lecture en cours. {{ markEntries.length ? plural(markEntries.length, "signalement", "signalements") + " pour l'instant." : "Aucun signalement pour l'instant." }}</p>
+        <p v-else-if="sweepEnded" class="why-text"><strong>Relecture faite.</strong> {{ markEntries.length ? plural(markEntries.length, "signalement à traiter", "signalements à traiter") + "." : "Vous n'avez rien signalé." }}</p>
+        <p v-else class="why-text">Relecture en pause à <span class="mono">{{ formatTime(time, 1) }}</span>. Le clic retire toujours un flou.{{ markEntries.length ? " " + plural(markEntries.length, "signalement", "signalements") + "." : "" }}</p>
+        <button v-if="state.playing" class="wide" @click="stopSweep"><Icon name="pause" />Mettre en pause<kbd>Espace</kbd></button>
         <template v-else>
-          <button v-if="markEntries.length" class="primary wide" @click="startQueue('marks')">Traiter {{ plural(markEntries.length, "le signalement", "les signalements") }}</button>
+          <button v-if="markEntries.length" class="primary wide" @click="startQueue('marks')">{{ markEntries.length > 1 ? `Traiter les ${markEntries.length} signalements` : "Traiter le signalement" }}</button>
           <button v-if="!sweepEnded" class="wide" @click="startSweep()"><Icon name="play" :size="12" />Reprendre la relecture</button>
           <button v-else class="wide" @click="startSweep(true)">Relire depuis le début</button>
           <button v-if="!markEntries.length" class="wide" :class="{ primary: sweepEnded }" @click="finish">Terminer</button>
@@ -306,20 +321,26 @@ function stopSweep(): void {
       </div>
     </template>
 
-    <!-- Bilan -->
+    <!-- Bilan : ce qui reste vraiment avant d'exporter -->
     <template v-else>
-      <h4>Vérification terminée</h4>
+      <h4>Bilan</h4>
       <div class="card result">
-        <p class="result-line"><Icon name="check" :size="18" /><span><strong>Vérification terminée :</strong> {{ plural(doubtDone, "passage validé", "passages validés") }}, {{ doubtLeft }} à revoir.</span></p>
-        <p v-if="markEntries.length" class="why-text">{{ plural(markEntries.length, "signalement", "signalements") }} de relecture à traiter.</p>
-        <button v-if="doubtLeft" class="wide" :class="{ primary: doubtLeft > 0 }" @click="startQueue('doubt')">Revoir les passages restants</button>
-        <button v-if="markEntries.length" class="wide" :class="{ primary: !doubtLeft }" @click="startQueue('marks')">Traiter {{ plural(markEntries.length, "le signalement", "les signalements") }}</button>
-        <button v-if="sweepResume !== null" class="wide" @click="resumeSweep()">Reprendre la relecture à {{ formatTime(Math.floor(sweepResume), 0) }}</button>
-        <button class="wide" @click="startSweep(true)">{{ sweepResume !== null ? "Relecture complète depuis le début" : "Relecture complète" }}</button>
-        <button v-if="sheetItems.length" class="wide" @click="openSheet()"><Icon name="grid" />Planche des flous</button>
-        <button class="wide" :class="{ primary: !doubtLeft && !markEntries.length }" @click="toExport">Passer à l'export</button>
+        <p v-if="allClear" class="result-line"><Icon name="check" :size="18" /><span><strong>Relecture faite :</strong> vous pouvez exporter.</span></p>
+        <template v-else>
+          <p class="result-line todo"><Icon name="alert" :size="18" /><span><strong>Avant d'exporter, il reste :</strong></span></p>
+          <ul class="why left-list">
+            <li v-if="!remaining.swept">la relecture : regardez la vidéo une fois ;</li>
+            <li v-if="remaining.marks">{{ plural(remaining.marks, "signalement à traiter", "signalements à traiter") }} ;</li>
+            <li v-if="remaining.risks">{{ plural(remaining.risks, "alerte à regarder", "alertes à regarder") }}.</li>
+          </ul>
+        </template>
+        <button v-if="remaining.marks" class="primary wide" @click="startQueue('marks')">{{ remaining.marks > 1 ? `Traiter les ${remaining.marks} signalements` : "Traiter le signalement" }}</button>
+        <button v-if="!remaining.swept" class="wide" :class="{ primary: !remaining.marks }" @click="resumeSweep()">{{ sweepResume !== null ? `Reprendre la relecture à ${formatTime(Math.floor(sweepResume), 0)}` : "Faire la relecture" }}</button>
+        <button v-if="remaining.risks" class="wide" :class="{ primary: remaining.swept && !remaining.marks }" @click="startQueue('doubt')">{{ remaining.risks > 1 ? `Regarder les ${remaining.risks} alertes` : "Regarder l'alerte" }}</button>
+        <button v-if="annoyingItems.length" class="wide" @click="openSheet()"><Icon name="grid" />Flous gênants ({{ annoyingItems.length }})</button>
+        <button v-if="remaining.swept" class="wide" @click="startSweep(true)">Relire la vidéo</button>
+        <button class="wide" :class="{ primary: allClear }" @click="toExport">Passer à l'export</button>
       </div>
-      <p class="note"><Icon name="info" />Le logiciel ne signale que ce qu'il a détecté : pour ne rien laisser passer, faites aussi la relecture complète.</p>
     </template>
     <Teleport to="body">
       <Transition name="modal">
@@ -342,4 +363,22 @@ function stopSweep(): void {
 .blur-remove { position: absolute; top: 6px; right: 5px; }
 .why.small { margin: 0 4px 2px 70px; padding-left: 12px; gap: 1px; color: var(--dim); font-size: 12px; line-height: 1.4; }
 .card-object .level { font-weight: 600; }
+
+/* === nouveau flux : plus rien à valider === */
+.entry-main { gap: 8px; animation: none; }
+.entry-main.todo { border-color: var(--accent-line); }
+.entry-main .choice-title { font-size: 14px; }
+.entry-text { color: var(--dim); font-size: 12.5px; line-height: 1.45; }
+.rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; line-height: 1.4; }
+.rules li { display: flex; align-items: flex-start; gap: 8px; color: var(--dim); }
+.rules li .icon { margin-top: 2px; color: var(--faint); }
+.rules strong { color: var(--text); font-weight: 600; }
+.sweep-rules { padding: 9px 10px; background: var(--raised); border-radius: 8px; }
+.choices .entry-main button { justify-content: center; padding: 0 11px; text-align: center; white-space: nowrap; border-radius: var(--r-sm); font-size: 13px; }
+.choices .entry-main .entry-go { height: 38px; font-size: 14px; }
+.choices .entry-main button.small { align-self: center; height: 26px; font-size: 12px; }
+.review-home .choice { font-size: 13.5px; }
+.review-home .choice small { font-size: 12px; }
+.result-line.todo .icon { color: var(--accent); }
+.why.left-list { color: var(--dim); }
 </style>

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// Panneau latéral : vérification guidée, flous de l'image affichée, réglages.
+// Panneau latéral : vérification, flous de l'image affichée (et endroits à ne jamais flouter), réglages.
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import type { Track } from "../api";
-import { applyProfile, presetInfo, saveProfile } from "../extras";
-import { byDoubt, displayName, kindFilters, matchesKind, type KindFilter } from "../blurs";
+import { applyProfile, presetInfo, removeIgnoreZone, saveProfile } from "../extras";
+import { byDoubt, displayName, kindFilters, matchesKind, panels, placeOf, type KindFilter } from "../blurs";
 import { pending } from "../review";
 import BlurRow from "./BlurRow.vue";
 import Icon from "./Icon.vue";
@@ -60,6 +60,47 @@ async function clearObject(name: string): Promise<void> {
   if (current.value) await send("POST", "/api/dash", { clip: current.value.clip.id, label: name, mode: "clear" });
 }
 
+// --- Endroits à ne jamais flouter dans le clip affiché ---
+// Là où le logiciel se trompe toujours (rétroviseur, autocollant, cadran pris pour un visage) :
+// on trace un rectangle, et plus aucun flou automatique n'y est posé, même après une nouvelle analyse.
+const ignoreZones = computed(() => {
+  const c = current.value?.clip;
+  return c ? (project.value?.ignore?.[c.id] ?? []).map((box) => ({
+    box, place: placeOf(box, c.width, c.height),
+    share: Math.max(1, Math.round((100 * (box[2] - box[0]) * (box[3] - box[1])) / Math.max(1, c.width * c.height))),
+  })) : [];
+});
+function toggleManual(): void {
+  const on = state.tool === "manual" && !panels.ignoring;
+  panels.ignoring = false;
+  state.tool = on ? "none" : "manual";
+}
+function toggleIgnore(): void {
+  if (panels.ignoring) {
+    panels.ignoring = false;
+    state.tool = "none";
+  } else {
+    state.tool = "manual"; // même tracé qu'un flou ajouté ; le lecteur en fait une zone à ne jamais flouter
+    panels.ignoring = true;
+  }
+}
+async function dropIgnore(index: number): Promise<void> {
+  const c = current.value?.clip;
+  if (!c) return;
+  const off = () => (project.value?.tracks[c.id] ?? []).filter((t) => t.disabled).length;
+  const before = off();
+  const zones = project.value?.ignore?.[c.id]?.length ?? 0;
+  panels.ignoreHover = null;
+  await removeIgnoreZone(c.id, index);
+  if ((project.value?.ignore?.[c.id]?.length ?? 0) >= zones) return; // refusé : le moteur a dit pourquoi
+  const n = before - off();
+  notify(n > 0 ? `Cet endroit peut de nouveau être flouté. ${n > 1 ? `${n} flous remis` : "1 flou remis"}.` : "Cet endroit peut de nouveau être flouté.");
+}
+onBeforeUnmount(() => {
+  panels.ignoreHover = null;
+  if (panels.ignoring) toggleIgnore();
+});
+
 // --- Contour précis d'un objet suivi (si cette installation le permet) ---
 const canContour = computed(() => state.data.features?.contour === true);
 const contourAsk = ref(""); // objet (« o:nom ») ou flou suivi (« t:numéro ») dont le calcul attend une confirmation
@@ -97,7 +138,11 @@ function hover(tr: Track | null): void {
   const s = current.value;
   state.focus = tr && s ? { clip: s.clip.id, ids: [tr.id] } : null;
 }
-watch(tab, () => (state.focus = null));
+watch(tab, () => {
+  state.focus = null;
+  panels.ignoreHover = null;
+  if (panels.ignoring) toggleIgnore(); // l'outil ne reste pas armé hors de l'onglet « Flous »
+});
 onBeforeUnmount(() => (state.focus = null));
 
 async function extend(tr: Track, side: "extend_before_s" | "extend_after_s", delta: number): Promise<void> {
@@ -139,6 +184,11 @@ watch(() => project.value?.settings, (settings) => {
 const marginPct = computed({
   get: () => Math.round(Number(blur.margin ?? 0) * 100),
   set: (value: number) => (blur.margin = Math.round(value) / 100),
+});
+/** Contre-vérification des objets douteux : activée tant que le moteur ne dit pas le contraire. */
+const confirmDoubt = computed({
+  get: () => blur.confirm !== false,
+  set: (value: boolean) => (blur.confirm = value),
 });
 const extendS = computed({
   get: () => Number(blur.extend_s ?? 0.3),
@@ -251,9 +301,33 @@ async function confirmProfile(): Promise<void> {
 
       <section v-else-if="tab === 'zones'" key="zones" class="pane">
         <div class="row pair">
-          <button :class="{ on: state.tool === 'manual' }" :disabled="busy" title="Tracer un rectangle à flouter sur l'image affichée" @click="state.tool = state.tool === 'manual' ? 'none' : 'manual'"><Icon name="plus" />Ajouter un flou</button>
+          <button :class="{ on: state.tool === 'manual' && !panels.ignoring }" :disabled="busy" title="Tracer un rectangle à flouter sur l'image affichée" @click="toggleManual"><Icon name="plus" />Ajouter un flou</button>
           <button :class="{ on: state.tool === 'dash' }" :disabled="busy" title="Désigner sur l'image affichée un objet à flouter : compteur, téléphone, GPS…" @click="state.tool = state.tool === 'dash' ? 'none' : 'dash'"><Icon name="target" />Suivre un objet…</button>
         </div>
+        <button
+          class="ignore-tool" :class="{ on: panels.ignoring }" :aria-pressed="panels.ignoring" :disabled="busy"
+          title="Tracer un rectangle là où le logiciel se trompe toujours (rétroviseur, autocollant…) : plus aucun flou automatique n'y sera posé dans ce clip"
+          @click="toggleIgnore"
+        ><Icon name="ban" />Ne jamais flouter ici…</button>
+        <!-- l'avertissement, une seule fois : pendant le tracé, puis au-dessus de la liste -->
+        <p v-if="panels.ignoring || ignoreZones.length" class="note warn ignore-note">
+          <Icon name="alert" />
+          <span v-if="panels.ignoring">Tracez un rectangle sur l'endroit où le logiciel se trompe toujours : rétroviseur, autocollant, cadran… <strong>Un visage ou une plaque qui se tiendrait dans cette zone ne sera pas flouté.</strong></span>
+          <span v-else>{{ ignoreZones.length > 1 ? "À ces endroits" : "À cet endroit" }}, le logiciel ne pose plus de flou dans ce clip, même après une nouvelle analyse. <strong>Un visage ou une plaque qui s'y tiendrait ne sera pas flouté.</strong></span>
+        </p>
+        <template v-if="ignoreZones.length">
+          <h4 class="plain">Endroits jamais floutés</h4>
+          <ul class="list ignores" @mouseleave="panels.ignoreHover = null">
+            <li v-for="(z, i) in ignoreZones" :key="z.box.join()" :class="{ here: panels.ignoreHover === i }" @mouseenter="panels.ignoreHover = i">
+              <i class="sw sw-ignore" aria-hidden="true"></i>
+              <span class="grow"><strong>Endroit {{ i + 1 }}</strong> <span class="dim">· {{ z.place }}</span><small>{{ z.share <= 1 ? "environ 1 %" : `${z.share} %` }} de l'image</small></span>
+              <button
+                class="small danger" :disabled="busy" :title="`Les flous que cet endroit écartait reviennent`" :aria-label="`Retirer l'endroit ${i + 1} (${z.place}) : il pourra de nouveau être flouté`"
+                @focus="panels.ignoreHover = i" @blur="panels.ignoreHover = null" @click="dropIgnore(i)"
+              >Retirer</button>
+            </li>
+          </ul>
+        </template>
         <template v-if="objects.length">
           <h4 class="plain">Objets suivis</h4>
           <ul class="list objects">
@@ -395,6 +469,10 @@ async function confirmProfile(): Promise<void> {
         </div>
         <label>Stabiliser les flous <input v-model="blur.smooth" type="checkbox" aria-describedby="smooth-help" @change="saveBlur" /></label>
         <p id="smooth-help" class="help">Le flou ne tremble plus et ne change plus de taille à chaque image.</p>
+        <template v-if="project?.settings.blur.confirm !== undefined">
+          <label>Contre-vérifier les flous douteux <input v-model="confirmDoubt" type="checkbox" aria-describedby="confirm-help" @change="saveBlur" /></label>
+          <p id="confirm-help" class="help">Un objet douteux que le logiciel ne retrouve pas en le revoyant de plus près n'est pas flouté (arbre, reflet…). Il reste dans la liste des non floutés.</p>
+        </template>
 
         <h4>Ce qui est flouté</h4>
         <div class="slider-row sens">
@@ -504,4 +582,11 @@ async function confirmProfile(): Promise<void> {
 .fold.expert .fold-head { margin-left: -6px; font-weight: 600; }
 .expert-body { display: flex; flex-direction: column; gap: 9px; animation: fade-in var(--m-panel) var(--ease); }
 .expert-body h5 { margin: 6px 0 0; font-size: 12.5px; font-weight: 650; color: var(--text); }
+
+/* === nouveau flux : endroits à ne jamais flouter === */
+.ignore-tool { align-self: stretch; }
+.ignore-note strong { font-weight: 600; }
+.list.ignores li { align-items: center; padding: 6px 6px 6px 10px; font-size: 12.5px; }
+.list.ignores li small { margin-top: 0; }
+.list.ignores .sw-ignore { width: 18px; height: 14px; }
 </style>

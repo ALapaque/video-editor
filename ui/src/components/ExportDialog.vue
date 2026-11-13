@@ -13,7 +13,7 @@ const kept = reactive({
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { RenderOptions } from "../api";
 import { exportPresets, render, renderExtract } from "../extras";
-import { doubtLeft, markEntries, pending } from "../review";
+import { allClear, remaining } from "../review";
 import { duration, formatTime, project, time } from "../store";
 import Icon from "./Icon.vue";
 
@@ -26,7 +26,8 @@ if (kept.path !== p.path) {
 const form = kept;
 const presetText = computed(() => exportPresets.find((e) => e.id === form.preset)?.text ?? "");
 
-// Export alors que tout n'est pas vérifié : il faut le confirmer explicitement.
+// Export alors qu'il reste quelque chose (relecture non faite, alertes, signalements) : il faut
+// le confirmer explicitement. Si rien ne reste, rien n'est demandé.
 const confirmed = ref(false);
 
 /** Réglages envoyés au moteur : le format choisi, et la qualité ou le codec seulement s'ils ont été réglés à la main. */
@@ -64,11 +65,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     <div class="dialog export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title">
       <h3 id="export-title"><Icon name="export" :size="18" />Exporter la vidéo</h3>
       <p v-if="p.problem" class="error">{{ p.problem }}</p>
-      <div v-if="pending" class="unchecked">
-        <p><Icon name="alert" /><span><strong>La vérification n'est pas terminée.</strong> {{ doubtLeft }} {{ doubtLeft > 1 ? "passages douteux ne sont pas validés" : "passage douteux n'est pas validé" }}<template v-if="markEntries.length">, {{ markEntries.length }} {{ markEntries.length > 1 ? "signalements ne sont pas traités" : "signalement n'est pas traité" }}</template>. Un visage ou une plaque peut rester lisible dans la vidéo exportée.</span></p>
-        <label class="check"><input v-model="confirmed" type="checkbox" /> J'exporte quand même, sans avoir tout vérifié</label>
+      <div v-if="!allClear" class="unchecked">
+        <p><Icon name="alert" /><span><strong>Avant d'exporter, il reste :</strong></span></p>
+        <ul class="unchecked-list">
+          <li v-if="!remaining.swept" data-left="sweep"><strong>La relecture n'est pas faite.</strong> Regarder la vidéo une fois est le seul moyen de voir ce que le logiciel n'a jamais détecté.</li>
+          <li v-if="remaining.marks" data-left="marks"><strong>{{ remaining.marks > 1 ? `${remaining.marks} signalements ne sont pas traités` : "1 signalement n'est pas traité" }}.</strong> Vous y avez vu quelque chose de lisible.</li>
+          <li v-if="remaining.risks" data-left="alerts"><strong>{{ remaining.risks > 1 ? `${remaining.risks} alertes ne sont pas regardées` : "1 alerte n'est pas regardée" }}.</strong> À ces endroits, quelque chose peut rester visible.</li>
+        </ul>
+        <label class="check"><input v-model="confirmed" type="checkbox" /> J'exporte quand même</label>
       </div>
-      <p v-if="p.sweep && !p.sweep.done" class="note warn sweep-note"><Icon name="eye" /><span><strong>Vous n'avez pas relu la vidéo en entier.</strong> La relecture complète (onglet « Vérification ») est le seul moyen de repérer ce que le logiciel n'a jamais vu. Vous pouvez exporter quand même.</span></p>
       <label>Fichier de sortie (dans le dossier du projet, ou chemin complet)
         <input v-model="form.output" type="text" spellcheck="false" />
       </label>
@@ -104,8 +109,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </div>
       <div class="row end">
         <button @click="emit('close')">Annuler</button>
-        <button class="primary" :disabled="!!p.problem || (pending > 0 && !confirmed)" @click="run"><Icon name="export" />Exporter</button>
+        <button class="primary" :disabled="!!p.problem || (!allClear && !confirmed)" @click="run"><Icon name="export" />Exporter</button>
       </div>
     </div>
   </div>
 </template>
+
+<style>
+/* === nouveau flux : ce qui reste avant d'exporter === */
+.unchecked-list { margin: -3px 0 0; padding: 0 0 0 41px; display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: 12.5px; line-height: 1.45; }
+.unchecked-list strong { color: var(--text); font-weight: 600; }
+</style>

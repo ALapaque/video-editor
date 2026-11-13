@@ -43,8 +43,9 @@ const groups: { title: string; keys: { keys: string[]; text: string }[] }[] = [
   {
     title: "Vérification",
     keys: [
-      { keys: ["Entrée"], text: "« Oui, c'est bon » : valider le passage affiché" },
-      { keys: ["S"], text: "Signaler ici, pendant la relecture complète" },
+      { keys: ["Clic sur un flou"], text: "Pendant la relecture : retirer ce flou, sans arrêter la lecture" },
+      { keys: ["S"], text: "Pendant la relecture : signaler que quelque chose reste lisible" },
+      { keys: ["Entrée"], text: "« Oui, c'est bon » : passer à l'alerte ou au signalement suivant" },
       { keys: ["Maj + clic"], text: "Dans la planche des flous : cocher toute une série" },
       { keys: ["Échap"], text: "Annuler un tracé ou une correction, fermer une fenêtre" },
       { keys: ["?"], text: "Afficher cette liste" },
