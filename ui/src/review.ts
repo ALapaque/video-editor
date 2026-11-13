@@ -5,7 +5,8 @@
 
 import { computed, reactive, watch } from "vue";
 import type { Mark, ReviewItem, Track } from "./api";
-import { saveSweep } from "./extras";
+import { blurSpan, saveSweep } from "./extras";
+import { displayName } from "./blurs";
 import {
   current, duration, formatTime, mapRange, patchTrack, player, project, seekTime, send,
   state, time, trackById,
@@ -80,7 +81,7 @@ export const loop = computed(() => {
   return { from: Math.max(0, e.at - pad), to: Math.min(duration.value, e.end + pad) };
 });
 
-/** Zones à entourer dans l'aperçu : celles du passage affiché. */
+/** Flous à entourer dans l'aperçu : ceux du passage affiché. */
 export const outline = computed(() => {
   const e = currentEntry.value;
   if (review.mode !== "queue" || !e?.item) return null;
@@ -288,9 +289,10 @@ export function resume(): void {
 }
 
 export async function removeZone(clip: string, id: number): Promise<void> {
-  const name = trackById(clip, id)?.name ?? "zone";
+  const track = trackById(clip, id);
+  const label = track ? `${displayName(track)}, ${blurSpan(track)}` : "flou";
   await patchTrack(clip, id, { disabled: true });
-  review.removed.push({ clip, id, label: `${name} n° ${id}` });
+  review.removed.push({ clip, id, label });
   resume();
 }
 
@@ -358,7 +360,7 @@ export async function dismiss(): Promise<void> {
   if (!(await send("PATCH", "/api/tracks", { clip: e.clip, id: track.id, disabled: true }))) return;
   // l'élément a quitté la file (son seul flou est retiré) : le suivant a pris sa place
   showAt(entries.value[index]?.id === e.id ? index + 1 : index);
-  if (review.mode === "queue") review.removed = [{ clip: e.clip, id: track.id, label: `${track.name} n° ${track.id}` }];
+  if (review.mode === "queue") review.removed = [{ clip: e.clip, id: track.id, label: `${displayName(track)}, ${blurSpan(track)}` }];
 }
 
 // --- Relecture complète -----------------------------------------------------

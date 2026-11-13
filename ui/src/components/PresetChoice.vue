@@ -64,7 +64,7 @@ function keep(): void {
     <p class="preset-text">{{ presetInfo[choice].text }}</p>
     <p v-if="presetInfo[choice].warning" class="preset-warning"><Icon name="alert" /><span>{{ presetInfo[choice].warning }}</span></p>
     <div v-if="confirming" class="preset-confirm" role="alert">
-      <span class="grow">Changer de préréglage oblige à refaire toute l'analyse : celle qui est déjà faite ne servira plus. Les scores minimaux de flou reviennent aussi à ceux du préréglage.</span>
+      <span class="grow">Changer de préréglage oblige à refaire toute l'analyse : celle qui est déjà faite ne servira plus. Le curseur « Moins de faux flous ↔ Moins de risques » revient aussi à la position du préréglage.</span>
       <button class="small" @click="keep">Garder « {{ presetInfo[current].label }} »</button>
       <button class="small attention" :disabled="busy" @click="apply">Changer de préréglage</button>
     </div>

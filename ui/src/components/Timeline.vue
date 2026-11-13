@@ -2,7 +2,7 @@
 // Timeline unique : passages gardés bout à bout (bande d'images et niveau sonore), passages
 // muets, passages douteux, tête de lecture.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { currentEntry, guided, loop, markEntries } from "../review";
+import { currentEntry, explain, guided, loop, markEntries } from "../review";
 import {
   busy, duration, formatTime, mapRange, moveSegment, project, saveMontage, seekTime, segments, state, time, trimSegment,
   visibleReview, type Resolved,
@@ -207,7 +207,7 @@ onBeforeUnmount(() => observer.disconnect());
       <div class="segments">
         <div
           v-for="(s, n) in segments" :key="s.index" class="segment"
-          :class="{ selected: state.selected === s.index, trimming: trim?.index === s.index, moving: moving?.index === s.index }" :style="blockStyle(s)" :title="`${s.clip.name} — source ${formatTime(s.inFrame / s.fps)} → ${formatTime(s.outFrame / s.fps)}`"
+          :class="{ selected: state.selected === s.index, trimming: trim?.index === s.index, moving: moving?.index === s.index }" :style="blockStyle(s)" :title="`${s.clip.name}, de ${formatTime(s.inFrame / s.fps)} à ${formatTime(s.outFrame / s.fps)} dans le clip`"
           @pointerdown="state.selected = s.index"
         >
           <span class="handle left" title="Glisser pour rogner ou rallonger le début" @pointerdown="trimStart($event, s, 'start')"></span>
@@ -232,7 +232,7 @@ onBeforeUnmount(() => observer.disconnect());
         <div
           v-for="r in visibleReview" :key="r.key + r.at" class="marker" :class="[r.item.kinds[0], { done: r.item.done, current: currentEntry?.id === r.key }]"
           :style="{ left: `${r.at * pxPerSecond}px`, width: `${Math.max((r.end - r.at) * pxPerSecond, 4)}px` }"
-          :title="`${r.item.done ? 'Passage validé' : 'Passage à vérifier'} : ${r.item.reasons.join(' ; ')}`"
+          :title="`${r.item.done ? 'Passage validé' : 'Passage à vérifier'} : ${explain(r.item.reasons).map((x) => x.text).join(' ')}`"
           @pointerdown.stop="seekTime(Math.max(0, r.at - 0.4))"
         ></div>
       </div>
