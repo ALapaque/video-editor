@@ -97,7 +97,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <p v-if="freed" class="storage-freed" role="status"><Icon name="check" />{{ formatSize(freed) }} libérés.</p>
         <dl class="storage-totals">
           <div><dt>Total des fichiers d'aperçu</dt><dd class="mono">{{ previews.length ? formatSize(total) : "0 Mo" }}</dd></div>
-          <div><dt>Modèles de détection <small>nécessaires au logiciel, ils ne se suppriment pas ici</small></dt><dd class="mono">{{ data && data.models ? formatSize(data.models) : "pas encore téléchargés" }}</dd></div>
+          <div><dt>Modèles d'analyse <small>nécessaires au logiciel, ils ne se suppriment pas ici</small></dt><dd class="mono">{{ data && data.models ? formatSize(data.models) : "pas encore téléchargés" }}</dd></div>
         </dl>
       </template>
 
