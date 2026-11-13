@@ -43,6 +43,11 @@ export const state = reactive({
   // Flou mis en évidence sur la vidéo (vérification objet par objet, survol d'une vignette…) :
   // le lecteur le fait ressortir et assombrit le reste de l'image. null : rien de mis en évidence.
   focus: null as { clip: string; ids: number[] } | null,
+  // Pendant la relecture : un clic sur un flou le retire aussitôt, sans arrêter la lecture.
+  clickRemoves: false,
+  // Dernier retrait fait d'un clic : de quoi proposer « Annuler », « Retirer aussi les N flous au
+  // même endroit » et « Ne plus jamais flouter cet endroit ». null : rien à proposer.
+  lastRemoved: null as { clip: string; ids: number[]; name: string; similar: number[] } | null,
 });
 
 // --- Mode simple ou avancé ----------------------------------------------------

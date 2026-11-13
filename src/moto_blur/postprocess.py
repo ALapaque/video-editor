@@ -494,6 +494,72 @@ class ZoneIndex:
         return merge_zones(zones) if self.merge and len(zones) > 1 else zones
 
 
+# --- Gêne, flous semblables, zones à ne jamais flouter ----------------------
+#
+# Un flou douteux qui reste en place ne fait courir aucun risque : il est au pire inutile. On ne
+# demande donc pas de le confirmer. Ces fonctions servent à retirer vite ceux qui gênent.
+
+
+def median_box(track: Track) -> Box:
+    arr = np.asarray([o[1:5] for o in track.obs], dtype=np.float64)
+    return tuple(float(x) for x in np.median(arr, axis=0))  # type: ignore[return-value]
+
+
+def footprint(track: Track, video: VideoInfo) -> tuple[float, float]:
+    """Place qu'un flou prend à l'écran : (part de l'image en %, durée en secondes)."""
+    x1, y1, x2, y2 = median_box(track)
+    area = 100.0 * max(0.0, x2 - x1) * max(0.0, y2 - y1) / max(1, video.width * video.height)
+    seconds = float((track.obs[-1][0] - track.obs[0][0]) * video.tb) + float(video.frame_pts * video.tb)
+    return area, seconds
+
+
+def nuisance(track: Track, video: VideoInfo) -> float:
+    """Gêne d'un flou s'il est inutile : sa taille (en % de l'image) multipliée par sa durée,
+    comptée jusqu'à 5 s. Un petit flou bref ne se remarque pas ; un gros flou durable, si."""
+    area, seconds = footprint(track, video)
+    return area * min(seconds, 5.0)
+
+
+def similar_tracks(tracks: list[Track], reference: Track) -> list[Track]:
+    """Flous automatiques « comme celui-ci » : même catégorie, au même endroit de l'image et de
+    taille comparable. C'est le cas d'une fausse détection qui revient (rétroviseur, autocollant,
+    cadran pris pour un visage) quand la caméra est fixée à la moto."""
+    rx1, ry1, rx2, ry2 = median_box(reference)
+    rw, rh = rx2 - rx1, ry2 - ry1
+    if rw <= 0 or rh <= 0:
+        return []
+    out = []
+    for t in tracks:
+        if t is reference or t.source != "auto" or t.kind != reference.kind or not t.obs:
+            continue
+        x1, y1, x2, y2 = median_box(t)
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        inside = rx1 - rw / 4 <= cx <= rx2 + rw / 4 and ry1 - rh / 4 <= cy <= ry2 + rh / 4
+        ratio = ((x2 - x1) * (y2 - y1)) / (rw * rh)
+        if inside and 0.4 <= ratio <= 2.5:
+            out.append(t)
+    return out
+
+
+def in_ignore_zone(track: Track, zones: list[list[int]], share: float = 0.8) -> bool:
+    """Vrai si le flou se tient dans une zone à ne jamais flouter : sur la plupart de ses images,
+    l'essentiel de sa boîte est dans la zone. Un objet qui ne fait que traverser la zone, ou
+    qui en déborde largement, reste flouté."""
+    if not zones or not track.obs:
+        return False
+    for zx1, zy1, zx2, zy2 in zones:
+        hits = 0
+        for o in track.obs:
+            w = min(o[3], zx2) - max(o[1], zx1)
+            h = min(o[4], zy2) - max(o[2], zy1)
+            area = max(1.0, (o[3] - o[1]) * (o[4] - o[2]))
+            if w > 0 and h > 0 and w * h >= 0.6 * area:
+                hits += 1
+        if hits >= share * len(track.obs):
+            return True
+    return False
+
+
 # --- Passages douteux -----------------------------------------------------
 
 
@@ -593,6 +659,7 @@ def build_review(
                     "kinds": [kind],
                     "reasons": list(reasons),
                     "tracks": [track_id],
+                    "risk": False,  # flouté de toute façon : le vérifier est facultatif
                     "_parts": [(start, end, kind, reasons, track_id)],
                 }
             )
@@ -608,6 +675,6 @@ def build_review(
             continue
         for start, end, kind, reasons, track_id in parts:
             out.append({"clip": clip_id, "start_pts": start, "end_pts": end, "kinds": [kind],
-                        "reasons": list(reasons), "tracks": [track_id],
+                        "reasons": list(reasons), "tracks": [track_id], "risk": False,
                         "reasons_by_track": {str(track_id): list(reasons)}})
     return sorted(out, key=lambda r: (r["start_pts"], r["end_pts"]))

@@ -38,6 +38,7 @@ def snapshot(project: pj.Project) -> dict:
         "review_done": list(project.review_done),
         "marks": copy.deepcopy(project.marks),
         "sweep": dict(project.sweep),
+        "ignore": copy.deepcopy(project.ignore),
         "edits": edits,
         "extra": extra,
     }
@@ -51,6 +52,7 @@ def restore(project: pj.Project, snap: dict) -> None:
     project.review_done = list(snap["review_done"])
     project.marks = copy.deepcopy(snap["marks"])
     project.sweep = dict(snap["sweep"])
+    project.ignore = copy.deepcopy(snap.get("ignore", {}))
     for clip_id, state in project.analysis.items():
         edits = snap["edits"].get(clip_id, {})
         auto = [t for t in state.tracks if t.source == "auto"]

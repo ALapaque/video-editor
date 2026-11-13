@@ -232,6 +232,9 @@ class Project:
     preset: str = "normal"
     # Relecture complète : position atteinte dans le montage (secondes) et si elle est terminée.
     sweep: dict = field(default_factory=lambda: {"position": 0.0, "done": False})
+    # Zones à ne jamais flouter (un morceau de la moto pris pour un visage, par exemple) :
+    # identifiant du clip -> rectangles [x1, y1, x2, y2] en pixels de l'image source.
+    ignore: dict[str, list[list[int]]] = field(default_factory=dict)
     path: Path | None = None
 
     def clip(self, clip_id: str) -> Clip:
@@ -338,6 +341,7 @@ def dumps(project: Project) -> str:
         "conform": project.conform,
         "preset": project.preset,
         "sweep": project.sweep,
+        "ignore": project.ignore,
         "review_done": project.review_done,
         "marks": project.marks,
         "review": project.review,
@@ -407,6 +411,7 @@ def load(path: Path) -> Project:
         ],
         conform=doc.get("conform", ""),
         preset=doc.get("preset", "normal"),
+        ignore={k: [[int(x) for x in box] for box in v] for k, v in doc.get("ignore", {}).items()},
         sweep={"position": float(doc.get("sweep", {}).get("position", 0.0)),
                "done": bool(doc.get("sweep", {}).get("done", False))},
         path=path,

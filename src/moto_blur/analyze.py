@@ -255,6 +255,25 @@ def analyze_project(project: pj.Project, device: str = "auto", detect_fn: Detect
     return complete
 
 
+def apply_ignore_zones(project: pj.Project, clip_id: str | None = None) -> int:
+    """Retire les flous automatiques situés dans une zone à ne jamais flouter. Renvoie leur nombre.
+
+    Appelé quand une zone est posée et après chaque analyse (les nouvelles détections aussi).
+    """
+    from .postprocess import in_ignore_zone
+
+    count = 0
+    for cid, zones in project.ignore.items():
+        state = project.analysis.get(cid)
+        if not state or (clip_id is not None and cid != clip_id):
+            continue
+        for t in state.tracks:
+            if t.source == "auto" and not t.disabled and in_ignore_zone(t, zones):
+                t.disabled = True
+                count += 1
+    return count
+
+
 def refresh_review(project: pj.Project) -> None:
     review = []
     for clip in project.clips:

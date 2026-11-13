@@ -3,7 +3,8 @@
 // Couche commune aux deux modes : les composants l'importent, sans la dupliquer.
 
 import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track } from "./api";
-import { busy, notify, project, refresh, send, start, state } from "./store";
+import { computed } from "vue";
+import { busy, notify, project, refresh, send, start, state, trackById } from "./store";
 
 // --- Annuler / rétablir -------------------------------------------------------
 
@@ -267,4 +268,101 @@ export function blurName(track: Track): string {
 export function blurSpan(track: Track): string {
   const t = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, "0")}`;
   return t(track.start) === t(track.end) ? `à ${t(track.start)}` : `de ${t(track.start)} à ${t(track.end)}`;
+}
+
+// --- Plus rien à valider -----------------------------------------------------------------------
+// Tout ce que le logiciel a détecté est flouté : un flou douteux ne fait courir aucun risque, il
+// est au pire inutile. On ne demande donc plus de confirmer les flous. Il reste :
+//  - la relecture (seul moyen de voir ce qui n'a jamais été détecté), où un clic retire un flou ;
+//  - les flous « gênants » (gros ou longs), à retirer par lot si on veut ;
+//  - les alertes (`risk`) : endroits où quelque chose peut rester visible.
+
+/** Gêne à partir de laquelle un flou inutile se remarque (taille en % de l'image × durée en s). */
+export const NUISANCE_MIN = 0.3;
+
+/** Flous automatiques appliqués (ni retirés, ni écartés pour manque de confiance). */
+export function appliedBlurs(tracks: Track[]): Track[] {
+  return tracks.filter((t) => t.source === "auto" && !t.disabled && (!t.below_min_score || t.forced));
+}
+
+/** Parmi les flous appliqués, ceux qui se voient : les plus gênants d'abord. */
+export function annoyingBlurs(tracks: Track[]): Track[] {
+  return appliedBlurs(tracks).filter((t) => t.nuisance >= NUISANCE_MIN).sort((a, b) => b.nuisance - a.nuisance);
+}
+
+/** Objets que le logiciel a vus mais n'a PAS floutés (trop peu sûr), les plus probables d'abord.
+ *  C'est là qu'un vrai visage ou une vraie plaque peut se cacher. */
+export function almostBlurs(tracks: Track[]): Track[] {
+  return tracks
+    .filter((t) => t.source === "auto" && !t.disabled && t.below_min_score && !t.forced && t.best_score >= 0.2)
+    .sort((a, b) => b.best_score - a.best_score);
+}
+
+/** Alertes : passages où quelque chose peut rester visible, pas encore regardés. */
+export const pendingRisks = computed(() => (project.value?.review ?? []).filter((r) => r.risk && !r.done));
+
+/** Ce qui reste avant d'exporter l'esprit tranquille. Rien d'autre n'est demandé. */
+export const beforeExport = computed(() => ({
+  swept: project.value?.sweep.done ?? false,
+  risks: pendingRisks.value.length,
+  marks: project.value?.marks.length ?? 0,
+}));
+
+/** Retire un flou d'un clic (relecture, liste, planche) et prépare les suites possibles dans
+ *  `state.lastRemoved` : annuler, retirer les flous au même endroit, ne plus jamais flouter là. */
+export async function removeBlur(clip: string, id: number): Promise<void> {
+  const track = trackById(clip, id);
+  if (!track || track.disabled) return;
+  if (track.source !== "auto") {
+    notify("Ce flou a été ajouté par vous : supprimez-le depuis la liste des flous.");
+    return;
+  }
+  if (!(await send("PATCH", "/api/tracks", { clip, id, disabled: true }))) return;
+  let similar: number[] = [];
+  try {
+    similar = (await call<{ ids: number[] }>("GET", `/api/similar?clip=${encodeURIComponent(clip)}&id=${id}`)).ids;
+  } catch {
+    /* sans gravité : pas de proposition */
+  }
+  state.lastRemoved = { clip, ids: [id], name: blurName(track), similar };
+}
+
+/** « Retirer aussi les N flous au même endroit ». */
+export async function removeSimilar(): Promise<void> {
+  const last = state.lastRemoved;
+  if (!last?.similar.length) return;
+  await setTracksDisabled(last.clip, last.similar, true);
+  state.lastRemoved = { ...last, ids: [...last.ids, ...last.similar], similar: [] };
+}
+
+/** « Annuler » : remet les flous du dernier retrait. */
+export async function restoreRemoved(): Promise<void> {
+  const last = state.lastRemoved;
+  if (!last) return;
+  await setTracksDisabled(last.clip, last.ids, false);
+  state.lastRemoved = null;
+}
+
+/** « Ne plus jamais flouter cet endroit » : zone à ne jamais flouter autour du flou retiré.
+ *  Vaut pour tout le clip, maintenant et après une nouvelle analyse. */
+export async function neverBlurHere(): Promise<void> {
+  const last = state.lastRemoved;
+  if (!last) return;
+  const next = await send("POST", "/api/ignore", { clip: last.clip, id: last.ids[0] });
+  if (next) {
+    const n = (next as State & { ignored?: number }).ignored ?? 0;
+    notify(n ? `Cet endroit ne sera plus flouté (${n} autre${n > 1 ? "s" : ""} flou${n > 1 ? "s" : ""} retiré${n > 1 ? "s" : ""}).` : "Cet endroit ne sera plus flouté.");
+    state.lastRemoved = null;
+  }
+}
+
+/** Zone à ne jamais flouter tracée à la main (`box` en pixels de l'image source). */
+export async function addIgnoreZone(clip: string, box: number[]): Promise<number | undefined> {
+  const next = await send("POST", "/api/ignore", { clip, box });
+  return next ? ((next as State & { ignored?: number }).ignored ?? 0) : undefined;
+}
+
+/** Retire une zone à ne jamais flouter ; les flous qu'elle écartait reviennent. */
+export async function removeIgnoreZone(clip: string, index: number): Promise<void> {
+  await send("DELETE", `/api/ignore?clip=${encodeURIComponent(clip)}&index=${index}`);
 }

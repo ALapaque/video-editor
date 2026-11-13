@@ -619,3 +619,67 @@ def test_hand_made_detection_settings_show_as_custom(api):
     state = api("PUT", "/api/settings", {"blur": {"margin": 0.4}})
     assert state["project"]["preset"] == "rapide"
     assert api("GET", "/api/filmstrip?clip=c1&count=4&h=20", raw=True)[:2] == b"\xff\xd8"
+
+
+# --- Plus rien à valider : gêne, flous semblables, zones à ne jamais flouter ---------------
+
+
+def test_nuisance_similar_blurs_and_ignore_zones(video_info):
+    from moto_blur.analyze import apply_ignore_zones
+    from moto_blur.postprocess import footprint, in_ignore_zone, nuisance, similar_tracks
+
+    def blur(i, x, y, w, h, frames, kind="face"):
+        return pj.Track(i, kind, [[k * F, x, y, x + w, y + h, 0.5] for k in range(frames)])
+
+    small_brief = blur(1, 100, 100, 20, 20, 5)
+    big_long = blur(2, 800, 400, 300, 200, 150)
+    area, seconds = footprint(big_long, video_info)
+    assert area == pytest.approx(100 * 300 * 200 / (1920 * 1080), rel=1e-6) and seconds == pytest.approx(5.0, abs=0.05)
+    assert nuisance(big_long, video_info) > 100 * nuisance(small_brief, video_info)
+    # le même faux flou qui revient au même endroit, sous des identifiants différents
+    mirror = [blur(10 + i, 1500 + 3 * i, 600 - 2 * i, 90, 90, 12) for i in range(4)]
+    elsewhere = blur(20, 300, 300, 90, 90, 12)
+    plate_there = blur(21, 1500, 600, 90, 90, 12, kind="plate")
+    huge_there = blur(22, 1400, 500, 400, 400, 12)
+    tracks = [small_brief, big_long, *mirror, elsewhere, plate_there, huge_there]
+    assert [t.id for t in similar_tracks(tracks, mirror[0])] == [11, 12, 13]
+    # zone à ne jamais flouter : seuls les flous qui s'y tiennent sont retirés
+    zone = [1450, 540, 1650, 720]
+    assert in_ignore_zone(mirror[0], [zone]) and not in_ignore_zone(elsewhere, [zone])
+    passing = pj.Track(30, "face", [[k * F, 1000 + 60 * k, 600, 1090 + 60 * k, 690, 0.8] for k in range(20)])
+    assert not in_ignore_zone(passing, [zone])  # un visage qui ne fait que traverser reste flouté
+    p = pj.Project(clips=[pj.Clip("c1", "a.mp4", "x", video_info)], timeline=[pj.Segment("c1", 0, 5)])
+    p.analysis["c1"] = pj.ClipAnalysis("s", [], [*tracks, passing])
+    p.ignore = {"c1": [zone]}
+    assert apply_ignore_zones(p) == 5 and apply_ignore_zones(p) == 0
+    assert {t.id for t in p.analysis["c1"].tracks if t.disabled} == {10, 11, 12, 13, 21}
+
+
+def test_ignore_zone_similar_and_risk_over_the_api(api):
+    state = api("GET", "/api/state")
+    (track,) = state["project"]["tracks"]["c1"]
+    assert track["area"] > 0 and track["nuisance"] > 0 and state["project"]["ignore"] == {}
+    assert api("GET", f"/api/similar?clip=c1&id={track['id']}")["ids"] == []
+    # le carré blanc se déplace de x=20 à x=240 : une zone qui le contient presque toujours
+    state = api("POST", "/api/ignore", {"clip": "c1", "box": [0, 40, 260, 120]})
+    assert state["ignored"] == 1 and state["project"]["tracks"]["c1"][0]["disabled"]
+    assert state["project"]["ignore"] == {"c1": [[0, 40, 260, 120]]}
+    assert pj.load(api.project.path).ignore == {"c1": [[0, 40, 260, 120]]}
+    state = api("POST", "/api/undo")
+    assert state["project"]["ignore"] == {} and not state["project"]["tracks"]["c1"][0]["disabled"]
+    api("POST", "/api/redo")
+    state = api("DELETE", "/api/ignore?clip=c1&index=0")
+    assert state["restored"] == 1 and not state["project"]["tracks"]["c1"][0]["disabled"]
+    with pytest.raises(urllib.error.HTTPError):
+        api("POST", "/api/ignore", {"clip": "c1", "box": [0, 0, 3, 3]})
+    # « ne plus jamais flouter cet endroit » à partir d'un flou : sa place habituelle, élargie
+    track_id = state["project"]["tracks"]["c1"][0]["id"]
+    state = api("POST", "/api/ignore", {"clip": "c1", "id": track_id})
+    (zone,) = state["project"]["ignore"]["c1"]
+    assert zone[1] < 60 and zone[3] > 100 and zone[2] - zone[0] == 60  # carré de 40 px, élargi d'un quart
+    api("DELETE", "/api/ignore?clip=c1&index=0")
+    # un flou douteux n'est pas un risque ; un objet suivi perdu en est un
+    api.project.analysis["c1"].tracks[0].obs = [[o[0], *o[1:5], 0.3] for o in api.project.analysis["c1"].tracks[0].obs]
+    api("PUT", "/api/settings", {"blur": {"plate_min_score": 0.1}})
+    review = api("GET", "/api/state")["project"]["review"]
+    assert review and all(r["risk"] is False for r in review)

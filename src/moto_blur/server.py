@@ -29,6 +29,7 @@ from . import project as pj
 from .analyze import (
     PRESETS,
     analyze_project,
+    apply_ignore_zones,
     apply_preset,
     estimate,
     frames_to_analyze,
@@ -39,7 +40,15 @@ from .analyze import (
 from .blur import SUPPORTED_FORMATS, blur_frame, zone_outline
 from .history import History, snapshot
 from .models import available
-from .postprocess import ZoneIndex, below_min_score
+from .postprocess import (
+    ZoneIndex,
+    below_min_score,
+    footprint,
+    in_ignore_zone,
+    median_box,
+    nuisance,
+    similar_tracks,
+)
 from .proxy import build_proxy, proxy_path
 from .render import RenderError, check_ready, formats_differ, render_project, used_clips
 from .timeline import pts_to_sec, resolve_segments, sec_to_pts
@@ -274,6 +283,9 @@ class Engine:
                     "end": pts_to_sec(r["end_pts"], project.clip(r["clip"]).video),
                     "kinds": r["kinds"], "reasons": r["reasons"], "tracks": r["tracks"],
                     "reasons_by_track": r.get("reasons_by_track", {}),
+                    # Vrai : quelque chose peut rester visible ici (objet suivi perdu…). Faux :
+                    # flou douteux mais appliqué, donc sans risque ; le vérifier est facultatif.
+                    "risk": bool(r.get("risk", False)),
                 }
                 for r in project.review
             ]
@@ -303,6 +315,7 @@ class Engine:
                     "conform": project.conform,
                     "preset": project.preset,
                     "sweep": dict(project.sweep),
+                    "ignore": project.ignore,
                     "history": self.history.labels(),
                     "estimate": self._current_estimate(),
                     "mismatch": formats_differ(used_clips(project, resolve_segments(project))),
@@ -336,6 +349,8 @@ class Engine:
             "start": pts_to_sec(int(t.obs[0][0]), v), "end": pts_to_sec(int(t.obs[-1][0]), v),
             "extend_before_s": t.extend_before_s, "extend_after_s": t.extend_after_s,
             "score": round(scores[len(scores) // 2], 2), "count": len(t.obs),
+            # Place à l'écran (% de l'image) et gêne si le flou est inutile (taille × durée).
+            "area": round(footprint(t, v)[0], 3), "nuisance": round(nuisance(t, v), 3),
         }
         if t.source == "tracker":
             doc["contour"] = bool(t.outline)
@@ -425,6 +440,59 @@ class Engine:
                         value = body[key]
                         setattr(track, key, None if value is None else max(0.0, min(float(value), 600.0)))
             self._after_zone_change()
+
+    def similar(self, clip_id: str, track_id: int) -> list[int]:
+        """Flous automatiques encore actifs « comme celui-ci » (même endroit, même catégorie)."""
+        with self.lock:
+            state, track = self._find_track(clip_id, track_id)
+            return [t.id for t in similar_tracks(state.tracks, track) if not t.disabled]
+
+    def add_ignore_zone(self, body: dict) -> int:
+        """Zone à ne jamais flouter dans un clip : retire les flous automatiques qui s'y tiennent,
+        maintenant et après chaque analyse. Renvoie le nombre de flous retirés."""
+        project = self.require()
+        with self.lock:
+            self._busy_check()
+            clip = project.clip(body["clip"])
+            v = clip.video
+            if "id" in body:
+                # « Ne plus jamais flouter cet endroit » : la place habituelle de ce flou, élargie.
+                _, track = self._find_track(clip.id, int(body["id"]))
+                bx1, by1, bx2, by2 = median_box(track)
+                gx, gy = 0.25 * (bx2 - bx1), 0.25 * (by2 - by1)
+                box = (bx1 - gx, by1 - gy, bx2 + gx, by2 + gy)
+            else:
+                box = body["box"]
+            x1, y1, x2, y2 = (float(x) for x in box)
+            x1, x2 = sorted((max(0.0, min(x1, v.width)), max(0.0, min(x2, v.width))))
+            y1, y2 = sorted((max(0.0, min(y1, v.height)), max(0.0, min(y2, v.height))))
+            if x2 - x1 < 8 or y2 - y1 < 8:
+                raise ApiError("zone trop petite.")
+            project.ignore.setdefault(clip.id, []).append([round(x1), round(y1), round(x2), round(y2)])
+            count = apply_ignore_zones(project, clip.id)
+            self._after_zone_change()
+            return count
+
+    def remove_ignore_zone(self, clip_id: str, index: int) -> int:
+        """Retire une zone à ne jamais flouter et remet les flous qu'elle écartait."""
+        project = self.require()
+        with self.lock:
+            self._busy_check()
+            zones = project.ignore.get(clip_id, [])
+            if not 0 <= index < len(zones):
+                raise ApiError("zone introuvable.", 404)
+            zone = zones.pop(index)
+            if not zones:
+                project.ignore.pop(clip_id, None)
+            count = 0
+            state = project.analysis.get(clip_id)
+            for t in state.tracks if state else []:
+                if t.source == "auto" and t.disabled and in_ignore_zone(t, [zone]) \
+                        and not in_ignore_zone(t, project.ignore.get(clip_id, [])):
+                    t.disabled = False
+                    count += 1
+            self._after_zone_change()
+            return count
 
     def delete_track(self, clip_id: str, track_id: int) -> None:
         with self.lock:
@@ -719,6 +787,9 @@ class Engine:
                 self.history.clear()
                 project.sweep = {"position": 0.0, "done": False}
             complete = analyze_project(project, device=device)
+            if apply_ignore_zones(project):  # les nouvelles détections des zones à ne jamais flouter
+                refresh_review(project)
+                pj.save(project)
             note = " ".join(getattr(project, "notes", []))
             if not complete:
                 return "Analyse interrompue : ce qui est fait est conservé."
@@ -1090,6 +1161,14 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/dataset" and method == "POST":
                 engine.start_dataset()
                 self._json(engine.state())
+            elif route == "/api/similar" and method == "GET":
+                self._json({"ids": engine.similar(query["clip"], int(query["id"]))})
+            elif route == "/api/ignore" and method == "POST":
+                body = self._body()
+                self._edit("zone à ne jamais flouter", lambda: {"ignored": engine.add_ignore_zone(body)})
+            elif route == "/api/ignore" and method == "DELETE":
+                self._edit("zone à ne jamais flouter retirée",
+                           lambda: {"restored": engine.remove_ignore_zone(query["clip"], int(query["index"]))})
             elif route == "/api/undo" and method == "POST":
                 label = engine.step(forward=False)  # avant de lire l'état, qui doit en tenir compte
                 self._json({**engine.state(), "undone": label})

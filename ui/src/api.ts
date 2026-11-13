@@ -33,6 +33,10 @@ export interface ReviewItem extends Range {
   kinds: string[];
   reasons: string[];
   tracks: number[];
+  /** Vrai : quelque chose peut rester visible ici (objet suivi perdu, flou posé sur un autre
+   *  objet) : c'est une alerte à regarder. Faux : flou douteux mais appliqué, donc sans risque ;
+   *  le vérifier est facultatif. */
+  risk: boolean;
   /** Raisons propres à chaque flou du passage (clé : identifiant du flou). */
   reasons_by_track?: Record<string, string[]>;
 }
@@ -57,6 +61,10 @@ export interface Track {
   contour?: boolean;
   score: number;
   count: number;
+  /** Place du flou à l'écran, en % de l'image. */
+  area: number;
+  /** Gêne du flou s'il est inutile : taille (% de l'image) × durée (jusqu'à 5 s). */
+  nuisance: number;
   keyframes?: number[][];
 }
 
@@ -92,6 +100,8 @@ export interface Project {
   preset: Preset;
   /** Relecture complète : position atteinte (secondes du montage) et relecture terminée ou non. */
   sweep: { position: number; done: boolean };
+  /** Zones à ne jamais flouter, par clip : rectangles [x1, y1, x2, y2] en pixels de l'image source. */
+  ignore: Record<string, number[][]>;
   /** Nom de la modification que « Annuler » / « Rétablir » défera ou refera (null : rien). */
   history: { undo: string | null; redo: string | null };
   /** Dernière estimation de durée d'analyse encore valable (null : pas mesurée ou périmée). */

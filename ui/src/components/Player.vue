@@ -8,7 +8,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import type { ZoneTuple } from "../api";
 import Icon from "./Icon.vue";
-import { confidence, confidenceInfo, snapshot } from "../extras";
+import { confidence, confidenceInfo, removeBlur, snapshot } from "../extras";
 import { displayName, panels } from "../blurs";
 import { loop, objectHere, outline, rate, removeZone, resume, review, speeds } from "../review";
 import {
@@ -504,6 +504,11 @@ function clickAt(p: { x: number; y: number }): void {
   if (review.sub === "extra") {
     if (hits.length) void removeZone(s.clip.id, hits[0][7]);
     else notify("Cliquez directement sur un flou entouré dans l'image.");
+    return;
+  }
+  if (state.clickRemoves) {
+    // Relecture : un clic sur un flou le retire aussitôt, la lecture continue.
+    if (hits.length) void removeBlur(s.clip.id, hits[0][7]);
     return;
   }
   if (state.mode === "simple") return; // pas de sélection de flou dans l'assistant
