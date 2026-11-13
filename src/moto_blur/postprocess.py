@@ -601,10 +601,13 @@ def build_review(
     out: list[dict] = []
     for p in passages:
         parts = p.pop("_parts")
+        # Raisons de chaque flou du passage, pour que l'interface dise de quel objet elle parle.
+        p["reasons_by_track"] = {str(track_id): list(reasons) for _s, _e, _k, reasons, track_id in parts}
         if len(parts) <= MAX_OBJECTS_PER_PASSAGE or len(parts) > MAX_SPLIT_OBJECTS:
             out.append(p)
             continue
         for start, end, kind, reasons, track_id in parts:
             out.append({"clip": clip_id, "start_pts": start, "end_pts": end, "kinds": [kind],
-                        "reasons": list(reasons), "tracks": [track_id]})
+                        "reasons": list(reasons), "tracks": [track_id],
+                        "reasons_by_track": {str(track_id): list(reasons)}})
     return sorted(out, key=lambda r: (r["start_pts"], r["end_pts"]))

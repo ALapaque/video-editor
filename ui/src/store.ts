@@ -176,7 +176,7 @@ export const kindLabel: Record<string, string> = {
   face: "visage",
   plate: "plaque",
   dash: "compteur",
-  manual: "zone manuelle",
+  manual: "flou ajouté",
 };
 
 // --- Appels au moteur -------------------------------------------------------

@@ -33,6 +33,8 @@ export interface ReviewItem extends Range {
   kinds: string[];
   reasons: string[];
   tracks: number[];
+  /** Raisons propres à chaque flou du passage (clé : identifiant du flou). */
+  reasons_by_track?: Record<string, string[]>;
 }
 
 export interface Track {

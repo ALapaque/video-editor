@@ -273,6 +273,7 @@ class Engine:
                     "start": pts_to_sec(r["start_pts"], project.clip(r["clip"]).video),
                     "end": pts_to_sec(r["end_pts"], project.clip(r["clip"]).video),
                     "kinds": r["kinds"], "reasons": r["reasons"], "tracks": r["tracks"],
+                    "reasons_by_track": r.get("reasons_by_track", {}),
                 }
                 for r in project.review
             ]
