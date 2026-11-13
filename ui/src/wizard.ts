@@ -16,12 +16,9 @@ export const wiz = reactive({
   output: "", // chemin de la dernière vidéo créée
   profileAsked: "", // projet pour lequel « Reprendre vos réglages habituels ? » a déjà reçu une réponse
   profileSaved: "", // projet dont les réglages viennent d'être enregistrés comme réglages habituels
-  sheetDue: false, // l'analyse vient de se terminer : la planche des flous s'affiche avant la vérification
   format: "source" as ExportPreset, // format choisi pour la vidéo à créer
   extract: "", // chemin du dernier extrait d'essai créé
   dropReady: false, // glisser-déposer déjà installé sur la fenêtre
-  // vérification flou par flou : réponse donnée à chaque flou (« clip:numéro »), pour le projet `path`
-  answers: {} as Record<string, "yes" | "no">,
 });
 
 const VIDEO = /\.(mp4|mov|mkv|m4v|avi|mts|webm)$/i;
