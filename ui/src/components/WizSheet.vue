@@ -5,8 +5,9 @@
 // les petits flous brefs. La planche n'est jamais sur le chemin principal de l'assistant.
 import { computed, reactive, ref } from "vue";
 import type { Track } from "../api";
-import { annoyingBlurs, appliedBlurs, blurName, setTracksDisabled, thumbUrl } from "../extras";
-import { busy, mapRange, project } from "../store";
+import { blurName, setTracksDisabled, thumbUrl } from "../extras";
+import { annoyingItems, sheetItems, type SheetItem } from "../review";
+import { busy, project } from "../store";
 import { clock } from "../wizard";
 import Icon from "./Icon.vue";
 import WizThumb from "./WizThumb.vue";
@@ -14,21 +15,12 @@ import WizThumb from "./WizThumb.vue";
 const emit = defineEmits<{ done: [] }>();
 const PAGE = 60; // au-delà, la planche ne montre d'abord que les flous les plus visibles
 
-interface Item { key: string; clip: string; track: Track; at: number }
+type Item = SheetItem;
 
-/** Flous choisis par `pick` dans chaque vidéo, visibles dans la partie gardée, les plus gênants d'abord. */
-function collect(pick: (tracks: Track[]) => Track[]): Item[] {
-  const out: Item[] = [];
-  for (const [clip, tracks] of Object.entries(project.value?.tracks ?? {})) {
-    for (const track of pick(tracks)) {
-      const part = mapRange({ clip, start: track.start, end: track.end })[0];
-      if (part) out.push({ key: `${clip}:${track.id}`, clip, track, at: part.start });
-    }
-  }
-  return out.sort((a, b) => b.track.nuisance - a.track.nuisance || a.at - b.at);
-}
-const annoying = computed(() => collect(annoyingBlurs));
-const all = computed(() => collect(appliedBlurs));
+// Les deux listes viennent de la couche commune : flous encore présents dans la partie gardée de
+// la vidéo, les plus gênants d'abord.
+const annoying = annoyingItems;
+const all = sheetItems;
 const everything = ref(false); // « Voir tous les flous »
 const items = computed(() => (everything.value ? all.value : annoying.value));
 const limit = ref(PAGE);

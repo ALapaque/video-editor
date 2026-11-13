@@ -124,7 +124,7 @@ l'analyse ne porte que sur la partie gardée.
    cette partie », ou « Ne rien couper ».
 4. **Comment est votre vidéo ?** « Normal » convient presque toujours. « Conditions
    difficiles » (nuit, pluie, contre-jour, plaques lointaines) cherche plus finement : analyse
-   nettement plus longue, davantage de flous à vérifier. « Rapide » divise environ par deux la
+   nettement plus longue, davantage de flous en trop. « Rapide » divise environ par deux la
    durée, mais peut manquer un visage ou une plaque furtifs.
 
    **Analyse.** « Combien de temps ça va prendre ? » mesure la vitesse sur quelques images et
@@ -133,34 +133,46 @@ l'analyse ne porte que sur la partie gardée.
    une longue vidéo) ; le temps restant s'affiche après quelques secondes. Au tout premier
    lancement, les modèles de détection sont téléchargés (environ 65 Mo). Vous pouvez laisser
    l'ordinateur travailler ; à la fin, l'assistant passe seul à la suite.
-5. **Vérification.** D'abord **« Voici tout ce qui sera flouté »** : une vignette par flou, les
-   plus douteux en premier. Touchez ceux qui ne doivent pas l'être (un reflet, une affiche), puis
-   « Retirer les N flous choisis », ou simplement « Continuer ».
+5. **Vérification.** Il n'y a rien à valider : **tout ce que le logiciel a trouvé est flouté**.
+   Il reste à regarder la vidéo une fois, seul moyen de repérer ce que le logiciel n'a jamais
+   vu. Cliquez « Regarder la vidéo ». Elle est lue deux fois plus vite (« Vitesse : Normale /
+   2× » sous la vidéo ; « 5 s » revient cinq secondes en arrière ; la barre d'espace met en
+   pause). La règle du jeu tient en deux lignes :
+   - **Un flou en trop ?** Cliquez dessus sur la vidéo : il disparaît, la lecture continue. Un
+     bandeau « Flou retiré » propose « Annuler » pendant quelques secondes et, si le logiciel
+     se trompe plusieurs fois au même endroit, « Retirer aussi les N flous au même endroit » et
+     « Ne plus jamais flouter cet endroit » (attention : un visage ou une plaque qui s'y
+     tiendrait ne serait plus flouté non plus).
+   - **Quelque chose reste lisible ?** Appuyez sur « Il manque un flou ici » (ou la touche S).
+     La lecture continue : vous réglerez chaque endroit signalé juste après.
 
-   Ensuite, le logiciel vous montre **ses flous douteux un par un** : le flou concerné ressort
-   sur la vidéo (le reste de l'image est assombri), avec sa vignette, son niveau de confiance et
-   la question « Faut-il flouter ceci ? ». « Oui, le flouter », « Non, ne pas le flouter » (« Le
-   remettre » annule) ou « Plus tard ». Dans une scène chargée, la planche du passage s'affiche
-   d'abord, puis seulement les flous les plus douteux. Sous la vidéo, une petite barre et les
-   boutons « Image précédente / suivante » (touches ← →) permettent de regarder de près ; la
-   molette zoome.
+   Si vous vous arrêtez en route (« Retour »), l'assistant propose ensuite « Reprendre à … ».
+   « Passer cette étape » va directement à l'enregistrement, qui vous rappellera que la vidéo
+   n'a pas été regardée.
 
-   Pour un endroit signalé ou un objet suivi, la question reste « Tout ce qui doit être flouté
-   l'est-il ? » :
-   - « Oui, c'est bon » : on passe au suivant.
-   - « Il manque un flou » : entourez sur la vidéo ce qui doit être caché ; le flou **suit**
-     ensuite ce que vous avez entouré, jusqu'au prochain changement de plan.
+   Après la relecture, chaque **endroit signalé** tourne en boucle : « Entourer ce qui manque »,
+   puis entourez sur la vidéo ce qui doit être caché ; le flou **suit** ensuite ce que vous avez
+   entouré, jusqu'au prochain changement de plan. « C'est réglé » passe au suivant. Sous la
+   vidéo, une petite barre et les boutons « Image précédente / suivante » (touches ← →)
+   permettent de se placer sur la bonne image ; la molette zoome.
+
+   S'il y en a, viennent enfin les **alertes** : les rares endroits où quelque chose peut rester
+   visible, par exemple un objet suivi que le logiciel a perdu. La question est « Tout ce qui
+   doit être flouté l'est-il ? » :
+   - « Oui, c'est bon » : on passe à la suite.
+   - « Montrer « compteur » ici » : entourez l'objet ; il est suivi de nouveau sur ce plan.
+   - « Il manque un flou » : entourez ce qui doit être caché ; le flou le suit.
    - « Un flou est en trop » : cliquez-le sur la vidéo ; il est retiré.
-   - « Plus tard » : on y reviendra.
+   - « Plus tard » : l'enregistrement vous le rappellera.
 
-   Ensuite vient la question **« Voulez-vous tout regarder une dernière fois ? »**. Répondez oui
-   si la vidéo doit être publiée : c'est le seul moyen de repérer ce que le logiciel n'a jamais
-   vu. Pendant la lecture, appuyez sur « Signaler un problème ici » (ou la touche S) dès que
-   quelque chose reste lisible ; vous corrigerez chaque endroit signalé juste après. La vitesse
-   peut passer à 2×. Si vous vous arrêtez en route, l'assistant propose ensuite de reprendre là
-   où vous en étiez.
-6. **Enregistrer la vidéo.** Un résumé rappelle la durée, ce qui est flouté et ce qui reste à
-   revoir. Choisissez le format : « Comme l'original » (par défaut), « YouTube », « Réseaux
+   Sur le premier écran de l'étape, « Retirer des flous en trop d'un coup » ouvre une planche
+   facultative : **les flous qui se voient le plus** (gros ou longs), en vignettes. Touchez ceux
+   qui sont en trop (un reflet, une affiche), puis « Retirer les N flous choisis ». « Voir tous
+   les flous » montre aussi les petits.
+6. **Enregistrer la vidéo.** Un résumé rappelle la durée et ce qui est flouté. S'il reste un
+   endroit signalé ou une alerte, le logiciel le dit et demande de cocher « Je crée la vidéo
+   quand même » ; si la vidéo n'a pas été regardée en entier, il le rappelle sans bloquer.
+   Choisissez le format : « Comme l'original » (par défaut), « YouTube », « Réseaux
    sociaux » ou « Fichier léger ». « Essayer d'abord sur 10 secondes » crée un court extrait pour
    contrôler le résultat réel. Cliquez « Créer la vidéo floutée ». À la fin, « Ouvrir le
    dossier » montre le fichier, enregistré à côté de votre vidéo d'origine.

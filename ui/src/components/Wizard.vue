@@ -11,17 +11,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { call, type ExportPreset, type Job, type Preset, type RenderOptions, type ZoneTuple } from "../api";
 import {
-  appliedBlurs, beforeExport, exportPresets, followBlur, formatDuration, installDrop, measureEstimate, neverBlurHere, presetInfo,
+  appliedBlurs, exportPresets, followBlur, formatDuration, installDrop, measureEstimate, neverBlurHere, presetInfo,
   removeSimilar, render, renderExtract, restoreRemoved, saveProfile, saveSweep, setPreset, setTracksDisabled, undo,
 } from "../extras";
 import {
-  addMark, currentEntry, currentIndex, doubtEntries, droppedInPassage, entries, explain, extra, finish, forceZone, leave, loop,
-  markEntries, next, objectHere, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue, startSweep, validate,
-  type Entry,
+  addMark, currentEntry, currentIndex, droppedInPassage, entries, explain, extra, forceZone, leave, loop, markEntries, next, objectHere,
+  previous, relocate, remaining, replay, restoreZone, resume, review, showObject, startQueue, startSweep, validate,
 } from "../review";
 import {
   busy, current, droppedHere, duration, fpsOf, job, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send,
-  setMode, start, state, time, trackById, zonesNow,
+  setMode, start, state, time, trackById, zonesSteady,
 } from "../store";
 import { clock, dayText, droppedFile, wiz, type Screen } from "../wizard";
 import FilePicker from "./FilePicker.vue";
@@ -121,7 +120,7 @@ function derive(): Screen {
   if (needsAnalysis.value) return hasTracks.value ? "analyse" : firstQuestion();
   if (!kinds.value.length && !hasTracks.value) return firstQuestion(); // rien de choisi encore
   // vidéo pas encore regardée, endroits signalés ou alertes en attente : la vérification
-  return !todo.value.swept || todo.value.marks || todo.value.risks ? "verify" : "export";
+  return !remaining.value.swept || remaining.value.marks || remaining.value.risks ? "verify" : "export";
 }
 
 /** Cale l'assistant sur le projet ouvert : nouveau projet, ou état devenu incompatible avec l'écran. */
@@ -205,8 +204,7 @@ function back(): void {
     case "analyse": return show(kinds.value.length ? "type" : "trim");
     case "verify":
       if (inQueue.value && review.sub !== "ask") return resume(); // abandon de la correction en cours
-      if (vphase.value === "marks" && currentIndex.value > 0) return previous();
-      if (vphase.value === "risks" && riskIndex.value > 0) return showRisk(riskEntries.value[riskIndex.value - 1]);
+      if (inQueue.value && currentIndex.value > 0) return previous();
       if (vphase.value !== "intro") { // planche, relecture, premier endroit signalé, première alerte : retour à l'entrée de l'étape
         stopSweep();
         if (review.mode !== "home") leave();
@@ -243,8 +241,7 @@ function reconcile(): void {
     const last = state.lastRemoved;
     if (last && !last.ids.every((id) => trackById(last.clip, id)?.disabled)) state.lastRemoved = null;
     if (inQueue.value) {
-      review.removed = review.removed.filter((r) => trackById(r.clip, r.id)?.disabled);
-      if (vphase.value === "marks" && !currentEntry.value && review.sub === "ask") relocate(); // les alertes se recalent seules
+      review.removed = review.removed.filter((r) => trackById(r.clip, r.id)?.disabled); // un élément disparu se recale seul
     }
   }
 }
@@ -608,17 +605,8 @@ function analyse(): void {
 type Phase = "intro" | "sheet" | "sweep" | "marks" | "risks";
 const vphase = ref<Phase>("intro");
 const entry = currentEntry;
+/** Endroits signalés ou alertes, passés un par un (file commune : `doubtEntries` ne contient que les alertes). */
 const inQueue = computed(() => vphase.value === "marks" || vphase.value === "risks");
-/** Alertes (quelque chose peut rester visible) encore présentes dans la partie gardée de la vidéo. */
-const riskEntries = computed(() => doubtEntries.value.filter((e) => e.item?.risk));
-const riskIndex = computed(() => riskEntries.value.findIndex((e) => e.id === review.current));
-/** Ce qui reste avant d'enregistrer l'esprit tranquille (comme `beforeExport`), sans compter ce
- *  qui a été coupé de la vidéo : on ne rappelle que ce que l'assistant sait montrer. */
-const todo = computed(() => ({
-  swept: beforeExport.value.swept,
-  marks: markEntries.value.length,
-  risks: riskEntries.value.filter((e) => !e.done).length,
-}));
 /** Flous posés par le logiciel : s'il y en a, la planche facultative est proposée. */
 const appliedCount = computed(() => Object.values(p.value?.tracks ?? {}).reduce((n, l) => n + appliedBlurs(l).length, 0));
 /** Pourquoi le logiciel alerte ici : deux phrases au plus, sans jargon. */
@@ -634,7 +622,8 @@ function initVerify(): void {
 }
 
 // --- Relecture : à 2× par défaut ; un clic retire un flou, un bouton signale ce qui manque ------
-// Elle retient où elle s'arrête, et si elle est allée jusqu'au bout.
+// Elle retient où elle s'arrête, et si elle est allée jusqu'au bout. En mode simple, la couche
+// commune laisse à l'assistant le réglage du clic-retrait et de la vitesse : il les remet en quittant.
 const sweepAt = computed(() => p.value?.sweep.position ?? 0);
 const sweepDone = computed(() => p.value?.sweep.done ?? false);
 const canResume = computed(() => !sweepDone.value && sweepAt.value > 1 && sweepAt.value < duration.value - 1);
@@ -646,13 +635,14 @@ function keepSweep(ended = false): void {
   if (!p.value) return;
   void saveSweep(ended ? duration.value : time.value, sweepDone.value || ended);
 }
-/** Quitte la relecture : position retenue, et un clic sur la vidéo ne retire plus rien. */
+/** Quitte la relecture : position retenue, vitesse normale, et un clic sur la vidéo ne retire plus rien. */
 function stopSweep(): void {
   window.clearInterval(sweepTimer);
   window.clearTimeout(removedTimer);
   if (wiz.screen === "verify" && vphase.value === "sweep" && review.mode === "sweep" && state.playing) keepSweep(); // à l'arrêt, la pause l'a déjà retenue
   state.clickRemoves = false;
   state.lastRemoved = null;
+  if (review.speed !== 1) review.speed = 1;
 }
 async function beginSweep(from: "start" | "resume"): Promise<void> {
   if (review.mode !== "home") leave();
@@ -683,14 +673,26 @@ function rewind(): void {
 }
 
 // Bandeau « Flou retiré » (state.lastRemoved, rempli par le lecteur à chaque clic sur un flou) :
-// il s'efface seul après quelques secondes, ou au retrait suivant.
+// il s'efface seul après quelques secondes, ou au retrait suivant. Même règles que le bandeau du
+// mode avancé (RemovedBar), présenté en colonne à côté de la vidéo, et il compte une tache de
+// plusieurs flous réunis pour ce qu'on en voit : un flou.
 const REMOVED_MS = 8000;
 let removedHeld = false; // pointeur ou clavier sur le bandeau : il reste affiché
 const removed = computed(() => (wiz.screen === "verify" && vphase.value === "sweep" ? state.lastRemoved : null));
 /** Flous réunis dans la tache cliquée (voir `wholeBlur`) : à l'écran, c'est un seul flou. */
 const blobSize = ref(1);
 /** Nombre de flous retirés, tels qu'on les voit : la tache cliquée, plus ceux retirés « au même endroit ». */
-const removedCount = computed(() => (removed.value ? Math.max(1, removed.value.ids.length - blobSize.value + 1) : 0));
+const removedCount = computed(() => (removed.value ? Math.max(1, wereBlurs(removed.value.clip, removed.value.ids) - blobSize.value + 1) : 0));
+/** Flous encore en place au même endroit. */
+const similarCount = computed(() => (removed.value ? wereBlurs(removed.value.clip, removed.value.similar) : 0));
+/** Parmi ces flous, combien étaient vraiment appliqués : le moteur range aussi « au même endroit »
+ *  des objets vus mais non floutés, qu'on n'annonce pas comme des flous. */
+function wereBlurs(clip: string, ids: number[]): number {
+  return ids.filter((id) => {
+    const t = trackById(clip, id);
+    return !t || !t.below_min_score || t.forced;
+  }).length;
+}
 /** « Ne plus jamais flouter cet endroit » n'a de sens que si le logiciel s'y trompe plusieurs fois. */
 const neverOffered = computed(() => !!removed.value && (removed.value.similar.length > 0 || removedCount.value > 1));
 function armRemoved(): void {
@@ -709,13 +711,14 @@ watch(() => state.lastRemoved, (last) => {
     void wholeBlur(last);
   }
 });
-// Un flou affiché peut réunir plusieurs flous qui se touchent : à l'écran, une seule tache. Le
-// lecteur n'en retire qu'un par clic ; l'assistant retire les autres dans la foulée, pour que
-// « cliquez dessus, il disparaît » soit vrai. Les flous de l'image sont relevés à l'appui du bouton.
+// Un flou affiché peut réunir plusieurs flous qui se touchent : à l'écran, une seule tache, que le
+// lecteur entoure en entier au survol. Il n'en retire pourtant qu'un par clic ; l'assistant retire
+// les autres dans la foulée, pour que « cliquez dessus, il disparaît » soit vrai. Les flous de
+// l'image sont relevés à l'appui du bouton de la souris.
 let pressed: { clip: string; zones: ZoneTuple[] } | null = null;
 function notePress(): void {
   const s = current.value;
-  pressed = state.clickRemoves && s ? { clip: s.clip.id, zones: zonesNow(s.clip.id, state.frame) ?? [] } : null;
+  pressed = state.clickRemoves && s ? { clip: s.clip.id, zones: zonesSteady(s.clip.id, state.frame) ?? [] } : null;
 }
 async function wholeBlur(last: NonNullable<typeof state.lastRemoved>): Promise<void> {
   const zone = pressed?.clip === last.clip ? pressed.zones.find((z) => (z[9] ?? [z[7]]).includes(last.ids[0])) : undefined;
@@ -726,9 +729,20 @@ async function wholeBlur(last: NonNullable<typeof state.lastRemoved>): Promise<v
   });
   if (!others.length) return;
   await setTracksDisabled(last.clip, others, true);
-  if (state.lastRemoved !== last || others.some((id) => !trackById(last.clip, id)?.disabled)) return; // refusé, ou un autre retrait a suivi
+  if (state.lastRemoved !== last) {
+    // « Annuler » cliqué entre-temps : toute la tache revient ; un autre retrait a suivi : rien de plus à dire
+    if (!trackById(last.clip, last.ids[0])?.disabled) await setTracksDisabled(last.clip, others, false);
+    return;
+  }
+  if (others.some((id) => !trackById(last.clip, id)?.disabled)) return; // refusé : le message est affiché
   blobSize.value = others.length + 1;
   state.lastRemoved = { ...last, ids: [...last.ids, ...others], similar: last.similar.filter((id) => !others.includes(id)) };
+}
+/** « Ne plus jamais flouter cet endroit » : c'est dit, avec ce que cela implique et comment revenir en arrière. */
+async function never(): Promise<void> {
+  await neverBlurHere();
+  if (state.lastRemoved || state.toastKind !== "info") return; // refusé : le message d'erreur est affiché
+  notify("Cet endroit ne sera plus flouté. Attention : un visage ou une plaque qui s'y tiendrait ne serait pas flouté non plus. Pour revenir en arrière : « Annuler la dernière action », en haut.", "info", true);
 }
 // Le lecteur refuse de retirer d'un clic un flou venu de l'utilisateur, et le dit avec les mots
 // du mode avancé (« la liste des flous ») : ici, la même chose avec ceux de l'assistant.
@@ -737,6 +751,7 @@ watch(() => state.toast, (toast) => {
 });
 
 // --- Après la relecture : les endroits signalés, puis les alertes ---------------------------
+// Les deux passent par la file commune de la vérification (une question, le passage en boucle).
 /** Flou ajouté sur l'endroit signalé affiché : le bouton principal devient « C'est réglé ». */
 const added = ref<{ entry: string; clip: string; id: number } | null>(null);
 const addedHere = computed(() => !!added.value && added.value.entry === review.current && !!trackById(added.value.clip, added.value.id));
@@ -744,79 +759,39 @@ const addedHere = computed(() => !!added.value && added.value.entry === review.c
 function afterSweep(): void {
   stopSweep();
   if (review.mode !== "home") leave();
-  if (markEntries.value.length) void beginQueue("marks");
+  if (remaining.value.marks) void beginQueue("marks");
   else afterMarks();
 }
 function afterMarks(): void {
-  if (todo.value.risks) void beginQueue("risks");
+  if (remaining.value.risks) void beginQueue("risks");
   else show("export");
 }
 async function beginQueue(scope: "marks" | "risks"): Promise<void> {
   stopSweep();
   if (review.mode !== "home") leave();
+  state.loopRange = null;
   vphase.value = scope;
-  review.speed = 1;
   added.value = null;
   await nextTick(); // le lecteur doit être à l'écran avant de lancer la boucle
   if (!alive || wiz.screen !== "verify" || vphase.value !== scope) return;
-  if (scope === "marks") startQueue("marks");
-  else showRisk(riskEntries.value.find((e) => !e.done) ?? riskEntries.value[0]);
+  startQueue(scope === "marks" ? "marks" : "doubt");
 }
-/** Affiche une alerte (comme la vérification guidée commune le fait pour un passage) ; sans alerte, c'est fini. */
-function showRisk(target: Entry | undefined): void {
-  if (!target) return finish();
-  state.loopRange = null;
-  review.scope = "doubt";
-  review.mode = "queue";
-  review.current = target.id;
-  review.sub = "ask";
-  review.removed = [];
-  state.tool = "none";
-  state.selectedTrack = null;
-  review.last = { clip: target.clip, at: target.at, end: target.end };
-  replay();
-}
-/** « Oui, c'est bon » : l'alerte est regardée, la suivante s'affiche. */
-async function riskOk(): Promise<void> {
-  const e = entry.value;
-  if (!e?.item || review.sub !== "ask" || busy.value) return;
-  const index = riskIndex.value;
-  if (!e.done && !(await send("PUT", "/api/review", { key: e.id, done: true }))) return;
-  showRisk(riskEntries.value[index + 1]);
-}
-function riskLater(): void {
-  if (review.sub === "ask") showRisk(riskEntries.value[riskIndex.value + 1]);
-}
-// Après une correction, l'alerte affichée peut avoir changé de bornes ou disparu. Si une alerte
-// recouvre encore le même endroit, on y reste ; sinon l'endroit corrigé tourne en boucle, le
-// temps de voir le résultat (« Cet endroit a changé »), puis « Continuer » passe à la suite.
-watch(() => [vphase.value, review.mode, review.current, review.sub, busy.value, riskEntries.value.map((e) => e.id).join()], () => {
-  if (wiz.screen !== "verify" || vphase.value !== "risks" || review.mode !== "queue" || review.sub !== "ask" || busy.value) return;
-  if (riskEntries.value.some((e) => e.id === review.current) || (!review.current && state.loopRange)) return;
+// Après une correction, l'élément affiché peut avoir disparu (une alerte réglée par un nouveau
+// suivi, par exemple). L'endroit corrigé tourne alors en boucle, le temps de voir le résultat
+// (« Cet endroit a changé »), puis « Continuer » passe à l'élément le plus proche, ou à la suite.
+watch(() => [inQueue.value, review.mode, review.current, review.sub, busy.value, !!currentEntry.value], () => {
+  if (wiz.screen !== "verify" || !inQueue.value || review.mode !== "queue" || review.sub !== "ask" || busy.value) return;
+  if (currentEntry.value || state.loopRange) return;
   const last = review.last;
-  const same = last && riskEntries.value.find((e) => e.clip === last.clip && Math.min(e.end, last.end) - Math.max(e.at, last.at) > 0);
-  if (same) {
-    review.current = same.id;
-    review.last = { clip: same.clip, at: same.at, end: same.end };
-    return;
-  }
-  review.current = "";
   if (!last) return settle();
   state.loopRange = { from: Math.max(0, last.at - 0.5), to: Math.min(duration.value, last.end + 0.5) };
   seekTime(state.loopRange.from);
   void player.play();
 });
-/** « Continuer » après « Cet endroit a changé » : l'élément le plus proche, sinon la suite. */
 function settle(): void {
   state.loopRange = null;
-  if (vphase.value === "marks") {
-    relocate();
-    if (currentEntry.value) replay();
-    else if (review.mode === "queue") finish();
-    return;
-  }
-  const last = review.last;
-  showRisk(riskEntries.value.find((e) => !e.done && (!last || e.at >= last.at - 0.01)));
+  relocate(); // s'il ne reste rien, la file est finie
+  if (review.mode === "queue" && currentEntry.value) replay();
 }
 // la file est épuisée : après les signalements, les alertes ; après les alertes, l'enregistrement
 watch(() => review.mode, (mode) => {
@@ -915,9 +890,9 @@ function renderOptions(): Partial<RenderOptions> {
 }
 const exportReady = computed(() => !!p.value && !p.value.problem && !needsAnalysis.value && form.output.trim() !== "");
 /** Endroits signalés pas encore réglés et alertes pas encore regardées : là, quelque chose peut rester lisible. */
-const leftCount = computed(() => todo.value.marks + todo.value.risks);
+const leftCount = computed(() => remaining.value.marks + remaining.value.risks);
 const leftText = computed(() => {
-  const { marks, risks } = todo.value;
+  const { marks, risks } = remaining.value;
   const parts: string[] = [];
   if (marks) parts.push(`Vous avez signalé ${plural(marks, "endroit", "endroits")} sans ${marks > 1 ? "les" : "le"} régler.`);
   if (risks) parts.push(`Le logiciel a peut-être laissé quelque chose visible à ${plural(risks, "endroit", "endroits")}.`);
@@ -950,8 +925,8 @@ function watchAll(): void {
 /** « Regarder ces endroits » : les endroits signalés, puis les alertes. */
 function seeLeft(): void {
   show("verify");
-  if (todo.value.marks) void beginQueue("marks");
-  else if (todo.value.risks) void beginQueue("risks");
+  if (remaining.value.marks) void beginQueue("marks");
+  else if (remaining.value.risks) void beginQueue("risks");
 }
 async function reveal(path: string = wiz.output): Promise<void> {
   revealError.value = "";
@@ -1540,8 +1515,11 @@ onBeforeUnmount(() => {
                 <span class="grow"><strong>{{ removedCount > 1 ? `${removedCount} flous retirés` : "Flou retiré" }}</strong><small v-if="removedCount === 1">{{ removed.name }}</small></span>
                 <button class="small" data-restore :disabled="busy" @click="restoreRemoved()">Annuler</button>
               </p>
-              <button v-if="removed.similar.length" class="small" data-similar :disabled="busy" @click="removeSimilar()">Retirer aussi {{ removed.similar.length > 1 ? `les ${removed.similar.length} flous` : "le flou" }} au même endroit</button>
-              <button v-if="neverOffered" class="small" data-never :disabled="busy" title="Le logiciel ne floutera plus rien à cet endroit de l'image, dans toute la vidéo" @click="neverBlurHere()">Ne plus jamais flouter cet endroit</button>
+              <button
+                v-if="similarCount" class="small" data-similar :disabled="busy"
+                title="D'autres flous du même genre sont au même endroit de l'image, à d'autres moments : c'est sans doute la même erreur qui revient" @click="removeSimilar()"
+              >Retirer aussi {{ similarCount > 1 ? `les ${similarCount} flous` : "l'autre flou" }} au même endroit</button>
+              <button v-if="neverOffered" class="small" data-never :disabled="busy" title="Le logiciel ne floutera plus rien à cet endroit de l'image, dans toute la vidéo" @click="never">Ne plus jamais flouter cet endroit</button>
             </div>
           </template>
 
@@ -1620,15 +1598,15 @@ onBeforeUnmount(() => {
 
             <!-- alerte : quelque chose peut rester visible ; une question pour tout le passage -->
             <template v-else>
-              <p class="wiz-count" data-count="risks"><strong>Alerte {{ riskIndex + 1 }} sur {{ riskEntries.length }}</strong><span class="bar still"><span :style="{ transform: `scaleX(${(riskIndex + 1) / Math.max(1, riskEntries.length)})` }"></span></span><span v-if="entry.done" class="tag ok"><Icon name="check" :size="12" />déjà regardée</span></p>
+              <p class="wiz-count" data-count="risks"><strong>Alerte {{ currentIndex + 1 }} sur {{ entries.length }}</strong><span class="bar still"><span :style="{ transform: `scaleX(${(currentIndex + 1) / Math.max(1, entries.length)})` }"></span></span><span v-if="entry.done" class="tag ok"><Icon name="check" :size="12" />déjà regardée</span></p>
               <h1>Tout ce qui doit être flouté <span class="wiz-keep-together">l'est-il ?</span></h1>
               <p v-for="r in reasons" :key="r" class="wiz-lead">{{ r }}</p>
               <div class="wiz-actions column">
-                <button class="primary big" data-primary :disabled="busy" @click="riskOk"><Icon name="check" :size="18" />Oui, c'est bon</button>
+                <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />Oui, c'est bon</button>
                 <button v-if="objectHere" class="big" data-object :disabled="busy" @click="showObject"><Icon name="target" :size="18" />Montrer « {{ objectHere }} » ici</button>
                 <button class="big" data-missing :disabled="busy" @click="missing">Il manque un flou</button>
                 <button class="big" data-extra :disabled="busy" @click="extra">Un flou est en trop</button>
-                <button class="big quiet" data-later :disabled="busy" @click="riskLater">Plus tard<Icon name="chevronRight" :size="18" /></button>
+                <button class="big quiet" data-later :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>
               </div>
               <ul v-if="review.removed.length" class="wiz-list">
                 <li v-for="r in review.removed" :key="`${r.clip}:${r.id}`">
@@ -1660,18 +1638,18 @@ onBeforeUnmount(() => {
             <ul class="wiz-summary">
               <li><Icon name="clock" :size="18" /><span>Durée : <strong>{{ human(duration) }}</strong></span></li>
               <li><Icon name="lock" :size="18" /><span>Flouté : <strong>{{ blurred }}</strong></span></li>
-              <li v-if="todo.swept && !leftCount" data-watched><Icon name="check" :size="18" /><span>Vous avez regardé <strong>toute la vidéo</strong></span></li>
+              <li v-if="remaining.swept && !leftCount" data-watched><Icon name="check" :size="18" /><span>Vous avez regardé <strong>toute la vidéo</strong></span></li>
             </ul>
             <p v-if="needsAnalysis" class="wiz-note shown warn"><Icon name="alert" />La vidéo a changé depuis l'analyse : il faut l'analyser à nouveau avant de l'enregistrer.</p>
             <p v-else-if="p.problem" class="wiz-error">{{ p.problem }}</p>
             <div v-else-if="leftCount" class="unchecked wiz-unchecked" data-left>
               <p>
-                <Icon name="alert" /><span><strong>{{ leftText }}</strong> Quelque chose peut rester lisible dans la vidéo.</span>
+                <Icon name="alert" /><span><strong>{{ leftText }}</strong>{{ remaining.risks ? "" : " Quelque chose peut rester lisible dans la vidéo." }}</span>
                 <button class="small" data-see-left @click="seeLeft">{{ leftCount > 1 ? "Les regarder" : "Le regarder" }}</button>
               </p>
               <label class="check"><input v-model="confirmed" type="checkbox" data-confirm /> Je crée la vidéo quand même</label>
             </div>
-            <p v-if="!needsAnalysis && !p.problem && !todo.swept" class="wiz-note shown wiz-unwatched" data-unwatched>
+            <p v-if="!needsAnalysis && !p.problem && !remaining.swept" class="wiz-note shown wiz-unwatched" data-unwatched>
               <Icon name="info" /><span>Vous n'avez pas regardé la vidéo en entier. C'est le seul moyen de repérer ce que le logiciel n'a jamais vu.</span>
               <button class="small" @click="watchAll">La regarder</button>
             </p>
