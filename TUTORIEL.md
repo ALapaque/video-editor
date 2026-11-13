@@ -137,9 +137,16 @@ l'analyse ne porte que sur la partie gardée.
    plus douteux en premier. Touchez ceux qui ne doivent pas l'être (un reflet, une affiche), puis
    « Retirer les N flous choisis », ou simplement « Continuer ».
 
-   Ensuite, le logiciel vous montre un par un les endroits où il a hésité, en boucle,
-   flou affiché, avec une seule question : « Tout ce qui doit être flouté l'est-il ? » (ou, pour
-   un objet seul, « Faut-il flouter ceci ? »).
+   Ensuite, le logiciel vous montre **ses flous douteux un par un** : le flou concerné ressort
+   sur la vidéo (le reste de l'image est assombri), avec sa vignette, son niveau de confiance et
+   la question « Faut-il flouter ceci ? ». « Oui, le flouter », « Non, ne pas le flouter » (« Le
+   remettre » annule) ou « Plus tard ». Dans une scène chargée, la planche du passage s'affiche
+   d'abord, puis seulement les flous les plus douteux. Sous la vidéo, une petite barre et les
+   boutons « Image précédente / suivante » (touches ← →) permettent de regarder de près ; la
+   molette zoome.
+
+   Pour un endroit signalé ou un objet suivi, la question reste « Tout ce qui doit être flouté
+   l'est-il ? » :
    - « Oui, c'est bon » : on passe au suivant.
    - « Il manque un flou » : entourez sur la vidéo ce qui doit être caché ; le flou **suit**
      ensuite ce que vous avez entouré, jusqu'au prochain changement de plan.
@@ -213,7 +220,10 @@ tester vite.
 | Aller à un instant | clic ou glisser dans la timeline | Début, Fin |
 | Changer la vitesse de l'aperçu | menu « 1× » à côté de « Lecture » : de 0,25× à 2× (sans effet sur l'export) | |
 | Annuler / rétablir la dernière modification | flèches en haut à droite | Ctrl+Z / Ctrl+Y (Cmd+Z / Maj+Cmd+Z sur Mac) |
-| Enregistrer l'image affichée en pleine résolution | appareil photo au bout de la barre du lecteur (image floutée ; nette si « Image exacte » est sur « source nette ») | |
+| Enregistrer l'image affichée en pleine résolution | appareil photo dans la barre « Lecture » (image floutée ; nette si « Qualité » est sur « image exacte, sans flou ») | |
+| Voir le flou / voir les contours des flous | bouton « Voir les contours » / « Voir le flou » | V |
+| Zoomer sur la vidéo (petite plaque lointaine) | molette sur la vidéo (ou pincement sur le pavé tactile) ; glisser pour se déplacer ; « Image entière » pour revenir | + et −, 0 pour revenir |
+| Voir tous les raccourcis | bouton « ? » en haut | ? |
 | Régler le volume de l'aperçu | curseur à côté du haut-parleur (50 % au départ) ; un clic sur le haut-parleur coupe ou rétablit le son | |
 
 Sous la vidéo, vous lisez l'instant dans le montage, le nom du clip, le numéro d'image et
@@ -228,9 +238,9 @@ ni le projet ni la vidéo exportée (pour couper le son d'un passage à l'export
 | Supprimer un passage au milieu | « Couper ici » au début et à la fin, cliquez le passage, « Supprimer le passage » (ou touche Suppr) |
 | Récupérer ce qui a été coupé | glissez le bord du passage voisin vers l'extérieur |
 | Ajouter un autre clip | « Ajouter un clip… » ; il se place à la fin |
-| Changer l'ordre | faites glisser le passage par sa poignée, à gauche de son nom ; ou cliquez-le, puis « ◀ Déplacer » ou « Déplacer ▶ » |
-| Couper le son sur un passage | tête de lecture au début, « Muet : début » (ou M) ; tête à la fin, « Muet : fin » |
-| Retirer un passage muet | panneau « Zones », en bas, « Retirer » |
+| Changer l'ordre | faites glisser le passage par sa poignée, à gauche de son nom ; ou cliquez-le, puis « Déplacer à gauche » ou « Déplacer à droite » |
+| Couper le son sur un passage | tête de lecture au début, « Couper le son : début » (ou M) ; tête à la fin, « Couper le son : fin » |
+| Retirer un passage muet | onglet « Flous », en bas, « Retirer » |
 
 Chaque passage montre quelques images du clip et, dessous, le niveau du son.
 
@@ -274,7 +284,7 @@ sous la timeline (en rose pour le compteur).
 | Réponse | Effet |
 |---|---|
 | « Oui, c'est bon » (touche Entrée) | le passage est validé, le suivant s'affiche |
-| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image, puis choisissez « Suivre ce que j'ai entouré » (le flou suit l'objet jusqu'au changement de plan) ou « Zone fixe » (le rectangle couvre tout le passage). La boucle reprend pour que vous contrôliez. Si le logiciel a écarté des détections à cet endroit (score trop faible), il propose de les afficher : « Flouter quand même » suffit alors |
+| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image, puis choisissez « Suivre ce que j'ai entouré » (le flou suit l'objet jusqu'au changement de plan) ou « Flou fixe » (le rectangle couvre tout le passage). La boucle reprend pour que vous contrôliez. Si le logiciel a vu à cet endroit des objets trop peu sûrs pour les flouter, il propose de les afficher : « Flouter quand même » suffit alors |
 | « Un flou est en trop » | la lecture s'arrête ; cliquez le flou à retirer dans l'image. « Rétablir » l'annule |
 | « Plus tard » | passe au suivant sans valider ; le passage reste « à revoir » |
 | « Précédent » | revient au passage d'avant |
@@ -301,27 +311,30 @@ redemandé : c'est voulu.
 
 #### Voir une image de près, exporter
 
-Pour voir une image réelle en pleine résolution, mettez en pause et choisissez « Image exacte :
-rendu final flouté ». C'est exactement ce que produira l'export pour cette image. « Source
-nette » montre l'original, utile pour chercher une plaque que le logiciel aurait manquée.
+Pour voir une image réelle en pleine résolution, mettez en pause et choisissez « Qualité :
+image exacte, floutée ». C'est exactement ce que produira l'export pour cette image. « Image
+exacte, sans flou » montre l'original, utile pour chercher une plaque que le logiciel aurait
+manquée. Zoomez à la molette pour regarder de près.
 
 L'étape « 4 Export » résume la vérification (par exemple « 12 passages validés, 0 à revoir,
 0 signalement »). S'il reste des passages à revoir ou des signalements, le logiciel le dit et
 vous demande de cocher « J'exporte quand même, sans avoir tout vérifié » avant d'exporter.
 
-#### Travail libre sur les zones
+#### Travail libre sur les flous
 
-L'onglet **« Zones »** liste les zones présentes sur l'image affichée. Cliquez une zone dans
-la liste ou directement dans l'image pour la sélectionner.
+L'onglet **« Flous »** liste les flous présents sur l'image affichée, avec une vignette et un
+niveau de confiance (sûr, à vérifier, douteux), du plus douteux au plus sûr ; les boutons
+« Visages », « Plaques », « Objets » filtrent la liste. Cliquez un flou dans la liste ou
+directement dans l'image pour le sélectionner. La légende sous la vidéo explique les couleurs.
 
 | Vous voulez | Faites |
 |---|---|
-| Ajouter un flou qui suit un objet | « + Zone manuelle », tracez un rectangle, « Suivre ce que j'ai entouré » |
-| Ajouter un flou fixe là où rien n'a été détecté | « + Zone manuelle », tracez un rectangle, « Zone fixe ». Il dure 2 s ; placez la tête où il doit commencer puis « Début = cette image », idem pour la fin |
-| Faire suivre un objet à une zone manuelle | avancez dans la vidéo, « Déplacer ici… », retracez le rectangle : la zone glisse progressivement d'une position à l'autre |
-| Retirer un faux flou (reflet, panneau) | sélectionnez la zone, « Ne pas flouter ». « Rétablir le flou » annule |
-| Faire durer un flou plus longtemps | sélectionnez la zone, boutons + de « Avant » ou « Après » |
-| Supprimer une zone manuelle | « Supprimer » |
+| Ajouter un flou qui suit un objet | « Ajouter un flou », tracez un rectangle, « Suivre ce que j'ai entouré » |
+| Ajouter un flou fixe là où rien n'a été détecté | « Ajouter un flou », tracez un rectangle, « Flou fixe ». Il dure 2 s ; placez la tête où il doit commencer puis « Début = cette image », idem pour la fin |
+| Déplacer un flou fixe ajouté | avancez dans la vidéo, « Déplacer ici… », retracez le rectangle : le flou glisse progressivement d'une position à l'autre |
+| Retirer un faux flou (reflet, panneau) | sélectionnez le flou, « Ne pas flouter ». « Rétablir le flou » annule |
+| Faire durer un flou plus longtemps | sélectionnez le flou, boutons + de « Avant » ou « Après » |
+| Supprimer un flou ajouté | « Supprimer » |
 
 ### Compteur, téléphone et autres objets
 
@@ -329,13 +342,13 @@ Le logiciel ne détecte seul que les visages et les plaques. Tout autre objet à
 téléphone, GPS…) se désigne à la main, une fois par clip ; chaque objet porte un nom.
 
 1. Placez-vous sur une image où l'objet est bien visible.
-2. Onglet « Zones », bouton « Suivre un objet… », tracez un rectangle autour de l'objet (pour le
+2. Onglet « Flous », bouton « Suivre un objet… », tracez un rectangle autour de l'objet (pour le
    compteur, l'affichage de la vitesse peut suffire).
 3. Donnez son nom : « Compteur », « Téléphone », « GPS », ou un autre nom tapé dans le champ.
 4. Choisissez :
    - **Suivre l'objet** s'il bouge dans l'image (cas d'une vidéo recadrée depuis le 360). Il est
      suivi image par image, vers l'avant et l'arrière.
-   - **Zone fixe** si la caméra est fixée à la moto et que l'objet ne bouge pas dans l'image.
+   - **Flou fixe** si la caméra est fixée à la moto et que l'objet ne bouge pas dans l'image.
 5. À chaque changement de plan, le suivi s'arrête : il ne glisse plus sur un autre objet (un
    rétroviseur, par exemple). Le logiciel cherche ensuite l'objet dans le nouveau plan et, s'il le
    retrouve avec une forte ressemblance, reprend le suivi. Deux cas sont signalés à la
@@ -355,7 +368,7 @@ n'est pas fiable, la forme habituelle est gardée. Un contour serré protège mo
 large : vérifiez le résultat. « Revenir à la forme simple » l'annule.
 
 Reprendre un nom déjà utilisé dans le clip remplace les zones de cet objet (le dialogue le dit) ;
-un autre nom ajoute un objet. Le bloc « Objets suivis », en bas de l'onglet « Zones », liste les
+un autre nom ajoute un objet. Le bloc « Objets suivis », en bas de l'onglet « Flous », liste les
 objets du clip affiché ; « Supprimer » retire toutes les zones d'un objet, après confirmation.
 
 ### Réglages
@@ -372,18 +385,19 @@ en cherchant vos objets automatiquement.
 
 | Réglage | Effet |
 |---|---|
-| Marge autour des zones | 0,30 = la zone dépasse de 30 % de chaque côté. Augmentez si un bord de plaque dépasse |
-| Prolongation avant / après | durée de flou ajoutée avant l'apparition et après la disparition d'un objet |
+| Marge autour des flous | en pourcentage : le flou dépasse de l'objet de chaque côté. Augmentez si un bord de plaque dépasse |
+| Garder le flou avant et après | en secondes : durée de flou ajoutée avant l'apparition et après la disparition d'un objet |
 | Type de flou | mosaïque lissée, ou aplat de couleur (le plus sûr) |
 | Forme | ellipse pour les visages, rectangle arrondi pour les plaques par défaut |
 | Stabiliser les flous | coché par défaut : le flou ne tremble plus et ne change plus de taille à chaque image, sans jamais découvrir l'objet |
-| Score minimal des visages, des plaques | une détection n'est floutée que si elle atteint ce minimum (0,40 pour les visages, 0,25 pour les plaques au départ). Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué. Le changement s'applique tout de suite, sans réanalyse ; le nombre de détections écartées s'affiche sous le curseur |
+| Moins de faux flous ↔ Moins de risques | un seul curseur à cinq crans, qui règle le score minimal des visages et des plaques. Vers la droite, le logiciel floute davantage dans le doute. Le changement s'applique tout de suite, sans réanalyse |
+| Réglages experts (repliés) | les curseurs détaillés ci-dessous, et toute la partie « Détection » (modèles, tuiles, seuils) |
+| Score minimal des visages, des plaques | un objet n'est flouté que si elle atteint ce minimum (0,40 pour les visages, 0,25 pour les plaques au départ). Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué. Le changement s'applique tout de suite, sans réanalyse ; le nombre de détections écartées s'affiche sous le curseur |
 | Images sûres exigées | le score minimal doit être atteint sur ce nombre d'images (3 au départ), ou une seule fois avec un score très net. Les fausses détections, qui clignotent sur une ou deux images, sont ainsi écartées |
 
-Les détections écartées par le score minimal ne sont pas floutées. Pour les voir, ouvrez
-« Détections écartées » dans l'onglet « Zones » : elles sont entourées en gris sur l'image, et
-« Flouter quand même » en rétablit une (elle porte alors l'étiquette « forcée » ; « Ne plus
-forcer » annule).
+Les objets trop peu sûrs ne sont pas floutés. Pour les voir, ouvrez « Non floutés (trop peu
+sûrs) » dans l'onglet « Flous » : ils sont entourés en gris sur l'image, et « Flouter quand
+même » en rétablit un (« Ne plus flouter quand même » annule).
 
 ### Export
 

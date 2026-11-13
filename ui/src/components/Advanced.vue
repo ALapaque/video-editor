@@ -513,11 +513,12 @@ onBeforeUnmount(() => {
    « Montage », la légende et la timeline se rangent dans la colonne à sa droite. */
 .left.portrait {
   display: grid; grid-template-columns: var(--stage-w, 40%) minmax(0, 1fr);
-  grid-template-rows: repeat(6, auto) minmax(0, 1fr) auto; gap: 10px 16px;
+  grid-template-rows: repeat(7, auto) minmax(0, 1fr); gap: 10px 16px;
 }
 .left.portrait > .player { display: contents; }
 .left.portrait .stage { grid-column: 1; grid-row: 1 / 9; }
-.left.portrait > .timeline { grid-column: 2; grid-row: 8; }
+/* La timeline suit directement les barres ; la place restante, s'il y en a, est en bas. */
+.left.portrait > .timeline { grid-column: 2; grid-row: 7; }
 .left.portrait > :not(.player), .left.portrait .transport, .left.portrait .legend { grid-column: 2; min-width: 0; }
 .left.portrait .timecode { flex: 1 0 150px; }
 .left.portrait .legend { grid-column: 2; min-width: 0; }
