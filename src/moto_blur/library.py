@@ -246,11 +246,17 @@ def apply_profile(project: pj.Project, progress: Progress | None = None) -> list
             if template is None:
                 notes.append(f"« {name} » : image de référence introuvable dans le profil.")
                 continue
-            found = find_object(project, clip, template, progress)
+            # Chaque étape a son propre avancement (recherche, puis suivi image par image) :
+            # un compteur commun atteindrait 100 % bien avant la fin.
+            search = Progress(f"Recherche de « {name} »", PROFILE_SAMPLES, 0, unit="essais")
+            found = find_object(project, clip, template, search)
             if found is None:
                 notes.append(f"« {name} » : non retrouvé dans {Path(clip.path).name}. Désignez-le à la main.")
                 continue
-            pts, box, similarity = found
-            tracks = dash.track_from_click(project, clip, pts, box, "both", progress, name, "all")
-            notes.append(f"« {name} » : retrouvé (ressemblance {similarity:.2f}). " + dash.describe(name, tracks, clip))
+            pts, box, _similarity = found
+            span = dash.dash_span(project, clip)
+            frames = round((span[1] - span[0]) * v.tb * v.fps_fraction) if span else 1
+            follow = Progress(f"Suivi : {name}", frames, float(v.fps_fraction))
+            tracks = dash.track_from_click(project, clip, pts, box, "both", follow, name, "all")
+            notes.append(f"« {name} » : retrouvé. " + dash.describe(name, tracks, clip))
     return notes

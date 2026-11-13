@@ -102,8 +102,15 @@ Six étapes s'affichent en haut de la fenêtre. Sur chaque écran : une question
 l'analyse ne porte que sur la partie gardée.
 
 1. **Quelle vidéo voulez-vous flouter ?** Cliquez « Choisir une vidéo… » et cliquez votre
-   vidéo. Le logiciel prépare un aperçu (une seule fois par vidéo). Votre vidéo d'origine n'est
-   jamais modifiée. Si vous avez déjà travaillé sur cette vidéo, vous reprenez où vous en étiez.
+   vidéo (dans l'application installée, vous pouvez aussi la faire glisser sur la fenêtre). Le
+   logiciel prépare un aperçu (une seule fois par vidéo). Votre vidéo d'origine n'est jamais
+   modifiée. Si vous avez déjà travaillé sur cette vidéo, vous reprenez où vous en étiez ; vos
+   projets récents sont listés sous le bouton. « Libérer de la place » supprime les fichiers
+   d'aperçu des anciens projets (ils se refabriquent si vous les rouvrez).
+
+   Si vous avez enregistré vos **réglages habituels** (voir la fin), l'assistant propose de les
+   reprendre pour une nouvelle vidéo : il cherche alors lui-même vos objets (compteur…) et les
+   suit. Vérifiez quand même qu'il a trouvé le bon objet.
 2. **Que faut-il flouter ?** Cochez « Les visages », « Les plaques d'immatriculation » et/ou
    « Un objet précis » (compteur, téléphone, GPS…), puis « Continuer ».
    Si vous avez coché « Un objet précis » : avec le curseur sous la vidéo, choisissez un moment
@@ -115,25 +122,47 @@ l'analyse ne porte que sur la partie gardée.
 3. **Voulez-vous couper le début ou la fin ?** Faites glisser les deux poignées orange sous la
    vidéo ; ce qui est grisé sera retiré. « Lire l'extrait » montre ce qui reste. Puis « Garder
    cette partie », ou « Ne rien couper ».
-4. **Analyse.** Cliquez « Lancer l'analyse ». Le logiciel cherche les visages et les plaques
+4. **Comment est votre vidéo ?** « Normal » convient presque toujours. « Conditions
+   difficiles » (nuit, pluie, contre-jour, plaques lointaines) cherche plus finement : analyse
+   nettement plus longue, davantage de flous à vérifier. « Rapide » divise environ par deux la
+   durée, mais peut manquer un visage ou une plaque furtifs.
+
+   **Analyse.** « Combien de temps ça va prendre ? » mesure la vitesse sur quelques images et
+   annonce la durée. Cliquez « Lancer l'analyse ». Le logiciel cherche les visages et les plaques
    image par image. La durée dépend de l'ordinateur (de quelques minutes à plus d'une heure pour
    une longue vidéo) ; le temps restant s'affiche après quelques secondes. Au tout premier
    lancement, les modèles de détection sont téléchargés (environ 65 Mo). Vous pouvez laisser
    l'ordinateur travailler ; à la fin, l'assistant passe seul à la suite.
-5. **Vérification.** Le logiciel vous montre un par un les endroits où il a hésité, en boucle,
-   flou affiché, avec une seule question : « Tout ce qui doit être flouté l'est-il ? ».
+5. **Vérification.** D'abord **« Voici tout ce qui sera flouté »** : une vignette par flou, les
+   plus douteux en premier. Touchez ceux qui ne doivent pas l'être (un reflet, une affiche), puis
+   « Retirer les N flous choisis », ou simplement « Continuer ».
+
+   Ensuite, le logiciel vous montre un par un les endroits où il a hésité, en boucle,
+   flou affiché, avec une seule question : « Tout ce qui doit être flouté l'est-il ? » (ou, pour
+   un objet seul, « Faut-il flouter ceci ? »).
    - « Oui, c'est bon » : on passe au suivant.
-   - « Il manque un flou » : entourez sur la vidéo ce qui doit être caché.
+   - « Il manque un flou » : entourez sur la vidéo ce qui doit être caché ; le flou **suit**
+     ensuite ce que vous avez entouré, jusqu'au prochain changement de plan.
    - « Un flou est en trop » : cliquez-le sur la vidéo ; il est retiré.
    - « Plus tard » : on y reviendra.
 
    Ensuite vient la question **« Voulez-vous tout regarder une dernière fois ? »**. Répondez oui
    si la vidéo doit être publiée : c'est le seul moyen de repérer ce que le logiciel n'a jamais
    vu. Pendant la lecture, appuyez sur « Signaler un problème ici » (ou la touche S) dès que
-   quelque chose reste lisible ; vous corrigerez chaque endroit signalé juste après.
+   quelque chose reste lisible ; vous corrigerez chaque endroit signalé juste après. La vitesse
+   peut passer à 2×. Si vous vous arrêtez en route, l'assistant propose ensuite de reprendre là
+   où vous en étiez.
 6. **Enregistrer la vidéo.** Un résumé rappelle la durée, ce qui est flouté et ce qui reste à
-   revoir. Cliquez « Créer la vidéo floutée ». À la fin, « Ouvrir le dossier » montre le fichier,
-   enregistré à côté de votre vidéo d'origine.
+   revoir. Choisissez le format : « Comme l'original » (par défaut), « YouTube », « Réseaux
+   sociaux » ou « Fichier léger ». « Essayer d'abord sur 10 secondes » crée un court extrait pour
+   contrôler le résultat réel. Cliquez « Créer la vidéo floutée ». À la fin, « Ouvrir le
+   dossier » montre le fichier, enregistré à côté de votre vidéo d'origine.
+
+   Sur le dernier écran, « Enregistrer ces réglages pour mes prochaines vidéos » mémorise ce qu'il
+   faut flouter, le type de vidéo, vos réglages de flou et l'aspect de vos objets.
+
+« Annuler la dernière action », en haut de l'écran, défait la dernière modification (flou
+retiré, flou ajouté, coupe…).
 
 Le mode simple ne coupe que le début et la fin d'une seule vidéo. Pour couper au milieu,
 assembler plusieurs vidéos, couper le son d'un passage ou changer les réglages, passez en mode
@@ -182,7 +211,9 @@ tester vite.
 | Image précédente / suivante | `◀|` et `|▶` | ← et → |
 | Reculer / avancer d'une seconde | | Maj + ← et Maj + → |
 | Aller à un instant | clic ou glisser dans la timeline | Début, Fin |
-| Ralentir l'aperçu | menu « 1× » à côté de « Lecture » : 0,5× ou 0,25× (sans effet sur l'export) | |
+| Changer la vitesse de l'aperçu | menu « 1× » à côté de « Lecture » : de 0,25× à 2× (sans effet sur l'export) | |
+| Annuler / rétablir la dernière modification | flèches en haut à droite | Ctrl+Z / Ctrl+Y (Cmd+Z / Maj+Cmd+Z sur Mac) |
+| Enregistrer l'image affichée en pleine résolution | appareil photo au bout de la barre du lecteur (image floutée ; nette si « Image exacte » est sur « source nette ») | |
 | Régler le volume de l'aperçu | curseur à côté du haut-parleur (50 % au départ) ; un clic sur le haut-parleur coupe ou rétablit le son | |
 
 Sous la vidéo, vous lisez l'instant dans le montage, le nom du clip, le numéro d'image et
@@ -197,11 +228,13 @@ ni le projet ni la vidéo exportée (pour couper le son d'un passage à l'export
 | Supprimer un passage au milieu | « Couper ici » au début et à la fin, cliquez le passage, « Supprimer le passage » (ou touche Suppr) |
 | Récupérer ce qui a été coupé | glissez le bord du passage voisin vers l'extérieur |
 | Ajouter un autre clip | « Ajouter un clip… » ; il se place à la fin |
-| Changer l'ordre | cliquez un passage, puis « ◀ Déplacer » ou « Déplacer ▶ » |
+| Changer l'ordre | faites glisser le passage par sa poignée, à gauche de son nom ; ou cliquez-le, puis « ◀ Déplacer » ou « Déplacer ▶ » |
 | Couper le son sur un passage | tête de lecture au début, « Muet : début » (ou M) ; tête à la fin, « Muet : fin » |
 | Retirer un passage muet | panneau « Zones », en bas, « Retirer » |
 
-Chaque modification est enregistrée aussitôt dans le fichier projet. Si vous rallongez un
+Chaque passage montre quelques images du clip et, dessous, le niveau du son.
+
+Chaque modification est enregistrée aussitôt dans le fichier projet ; Ctrl+Z l'annule. Si vous rallongez un
 passage après une analyse, le guide propose de nouveau « Analyser » : seule la partie ajoutée
 sera analysée.
 
@@ -220,6 +253,13 @@ logiciel et reprendre plus tard.
 **Important :** le logiciel ne signale que ce qu'il a détecté. Un visage ou une plaque qu'il
 n'a jamais vu n'apparaît dans aucune liste. Pour ne rien laisser passer, faites les deux temps.
 
+#### Planche des flous
+
+« Planche des flous » montre une vignette par flou, les plus douteux en premier. Cliquez ceux qui
+ne doivent pas être floutés (Maj + clic pour une série), puis « Retirer les N flous cochés ». L'œil
+d'une vignette montre le flou dans la vidéo. C'est le moyen le plus rapide de nettoyer une scène
+de foule ; Ctrl+Z remet tout d'un coup.
+
 #### 1. Passages douteux
 
 Ce sont les endroits où le logiciel a hésité : objet très petit, vu très brièvement, perdu un
@@ -234,7 +274,7 @@ sous la timeline (en rose pour le compteur).
 | Réponse | Effet |
 |---|---|
 | « Oui, c'est bon » (touche Entrée) | le passage est validé, le suivant s'affiche |
-| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image. Il couvre tout le passage, puis la boucle reprend pour que vous contrôliez. Si le logiciel a écarté des détections à cet endroit (score trop faible), il propose de les afficher : « Flouter quand même » suffit alors |
+| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image, puis choisissez « Suivre ce que j'ai entouré » (le flou suit l'objet jusqu'au changement de plan) ou « Zone fixe » (le rectangle couvre tout le passage). La boucle reprend pour que vous contrôliez. Si le logiciel a écarté des détections à cet endroit (score trop faible), il propose de les afficher : « Flouter quand même » suffit alors |
 | « Un flou est en trop » | la lecture s'arrête ; cliquez le flou à retirer dans l'image. « Rétablir » l'annule |
 | « Plus tard » | passe au suivant sans valider ; le passage reste « à revoir » |
 | « Précédent » | revient au passage d'avant |
@@ -251,7 +291,8 @@ redemandé : c'est voulu.
 #### 2. Relecture complète
 
 1. Cliquez « Relecture complète ». Tout le montage est lu, flou affiché (ralentissez avec
-   « Vitesse » si la scène est chargée).
+   « Vitesse » si la scène est chargée). Si une relecture a été interrompue, « Reprendre à … »
+   repart de là.
 2. Dès qu'un visage, une plaque ou le compteur reste lisible, cliquez « Signaler ici » ou
    appuyez sur **S**. La lecture ne s'arrête pas ; un repère rouge apparaît sur la timeline.
 3. À la fin (ou après « Arrêter la relecture »), cliquez « Traiter les signalements ». Chaque
@@ -275,7 +316,8 @@ la liste ou directement dans l'image pour la sélectionner.
 
 | Vous voulez | Faites |
 |---|---|
-| Ajouter un flou là où rien n'a été détecté | « + Zone manuelle », tracez un rectangle. Il dure 2 s ; placez la tête où il doit commencer puis « Début = cette image », idem pour la fin |
+| Ajouter un flou qui suit un objet | « + Zone manuelle », tracez un rectangle, « Suivre ce que j'ai entouré » |
+| Ajouter un flou fixe là où rien n'a été détecté | « + Zone manuelle », tracez un rectangle, « Zone fixe ». Il dure 2 s ; placez la tête où il doit commencer puis « Début = cette image », idem pour la fin |
 | Faire suivre un objet à une zone manuelle | avancez dans la vidéo, « Déplacer ici… », retracez le rectangle : la zone glisse progressivement d'une position à l'autre |
 | Retirer un faux flou (reflet, panneau) | sélectionnez la zone, « Ne pas flouter ». « Rétablir le flou » annule |
 | Faire durer un flou plus longtemps | sélectionnez la zone, boutons + de « Avant » ou « Après » |
@@ -305,6 +347,13 @@ téléphone, GPS…) se désigne à la main, une fois par clip ; chaque objet po
    seulement, jusqu'au changement de plan suivant ; le reste est conservé. Pour tout
    recommencer, supprimez d'abord l'objet dans « Objets suivis ».
 
+**Contour précis.** Sur un objet suivi, « Contour précis » calcule la silhouette exacte de
+l'objet : le flou l'épouse au lieu d'un rectangle. Au premier usage, un modèle de 155 Mo est
+téléchargé ; le calcul prend du temps (de l'ordre d'une seconde par quart de seconde de vidéo
+suivie sur un processeur ; vitesse sur votre carte graphique non mesurée). Là où le contour
+n'est pas fiable, la forme habituelle est gardée. Un contour serré protège moins qu'un rectangle
+large : vérifiez le résultat. « Revenir à la forme simple » l'annule.
+
 Reprendre un nom déjà utilisé dans le clip remplace les zones de cet objet (le dialogue le dit) ;
 un autre nom ajoute un objet. Le bloc « Objets suivis », en bas de l'onglet « Zones », liste les
 objets du clip affiché ; « Supprimer » retire toutes les zones d'un objet, après confirmation.
@@ -312,7 +361,14 @@ objets du clip affiché ; « Supprimer » retire toutes les zones d'un objet, ap
 ### Réglages
 
 Onglet « Réglages ». La partie « Flou » s'applique au prochain export sans rien réanalyser.
-La partie « Détection » refait toute l'analyse.
+La partie « Détection » refait toute l'analyse ; le plus simple est d'y choisir un préréglage
+(« Normal », « Conditions difficiles », « Rapide », décrits dans le mode simple plus haut).
+« Personnalisé » s'affiche si vous avez modifié un réglage de détection à la main. Avant de
+lancer l'analyse, « Estimer la durée » annonce le temps qu'elle prendra.
+
+**Profil « ma moto ».** « Enregistrer ce projet comme profil » mémorise vos réglages et l'aspect
+de vos objets suivis ; « Appliquer mon profil à ce projet » les reprend sur une nouvelle vidéo,
+en cherchant vos objets automatiquement.
 
 | Réglage | Effet |
 |---|---|
@@ -320,6 +376,7 @@ La partie « Détection » refait toute l'analyse.
 | Prolongation avant / après | durée de flou ajoutée avant l'apparition et après la disparition d'un objet |
 | Type de flou | mosaïque lissée, ou aplat de couleur (le plus sûr) |
 | Forme | ellipse pour les visages, rectangle arrondi pour les plaques par défaut |
+| Stabiliser les flous | coché par défaut : le flou ne tremble plus et ne change plus de taille à chaque image, sans jamais découvrir l'objet |
 | Score minimal des visages, des plaques | une détection n'est floutée que si elle atteint ce minimum (0,40 pour les visages, 0,25 pour les plaques au départ). Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué. Le changement s'applique tout de suite, sans réanalyse ; le nombre de détections écartées s'affiche sous le curseur |
 | Images sûres exigées | le score minimal doit être atteint sur ce nombre d'images (3 au départ), ou une seule fois avec un score très net. Les fausses détections, qui clignotent sur une ou deux images, sont ainsi écartées |
 
@@ -330,14 +387,26 @@ forcer » annule).
 
 ### Export
 
-À l'étape « 4 Export », « Exporter… » propose le nom du fichier, la qualité (80 par défaut), le codec (celui de la
-source par défaut) et l'encodeur. Cochez « Vidéo de contrôle » pour obtenir une vidéo où les
+À l'étape « 4 Export », « Exporter… » propose le nom du fichier et le format : « Comme
+l'original » (par défaut), « YouTube », « Réseaux sociaux » (1920 pixels au plus) ou « Fichier
+léger » (1280 pixels). « Réglages détaillés » donne la qualité, le codec et l'encodeur.
+« Essayer sur un extrait de 10 s » exporte seulement les 10 secondes autour de la tête de
+lecture (fichier `…_extrait.mp4`), pour contrôler le résultat réel avant le rendu complet. Si
+vous n'avez pas fait la relecture complète, le dialogue le rappelle. Cochez « Vidéo de contrôle » pour obtenir une vidéo où les
 cadres et les scores sont dessinés à la place du flou : pratique pour repérer ce qui a été
 manqué.
 
+### Images d'entraînement (plaques)
+
+Réglages › Détection › « Exporter des images d'entraînement (plaques) » écrit, à côté du projet,
+des images tirées des plaques que vous avez vérifiées. Elles servent à entraîner un modèle de
+plaques sur vos propres vidéos : marche à suivre dans `docs/ENTRAINEMENT.md`. Ces images
+montrent des plaques non floutées : ne les publiez pas.
+
 ## 6. Si l'analyse est trop lente
 
-Dans l'ordre, du moins risqué au plus risqué (onglet « Réglages », partie « Détection ») :
+Le plus simple : le préréglage « Rapide ». Sinon, dans l'ordre, du moins risqué au plus risqué
+(onglet « Réglages », partie « Détection ») :
 
 1. Modèles plus légers : `yolo11n-face` et `yolo-v9-t-640`.
 2. Tuiles plus grandes : par exemple 1920 pour une vidéo 4K (moins de zones à analyser par

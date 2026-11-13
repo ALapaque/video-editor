@@ -32,6 +32,7 @@ from .analyze import (
     apply_preset,
     estimate,
     frames_to_analyze,
+    matching_preset,
     needed_intervals,
     refresh_review,
 )
@@ -480,6 +481,7 @@ class Engine:
                 if body["preset"] not in PRESETS:
                     raise ApiError("préréglage inconnu.")
                 apply_preset(project, body["preset"])
+            manual = "preset" not in body and any(k != "kinds" for k in body.get("analysis", {}))
             for block, target in (("analysis", project.analysis_settings), ("blur", project.blur_settings)):
                 for key, value in body.get(block, {}).items():
                     if not hasattr(target, key):
@@ -495,6 +497,8 @@ class Engine:
                     elif isinstance(current, float):
                         value = float(value)
                     setattr(target, key, value)
+            if manual:
+                project.preset = matching_preset(project)  # « perso » si plus aucun ne correspond
             refresh_review(project)  # le score minimal change les passages à vérifier
             self.touch()
 
@@ -780,7 +784,7 @@ class Engine:
             pj.save(project)
             seconds = float((track.obs[-1][0] - track.obs[0][0]) * v.tb)
             job.created = track.id
-            return f"Flou ajouté et suivi pendant {seconds:.1f} s."
+            return f"Flou ajouté et suivi pendant {seconds:.1f} s.".replace(".", ",", 1)
 
         self.start("follow", "Suivi du flou ajouté", work, undo="flou ajouté")
 
@@ -839,7 +843,8 @@ class Engine:
             if not result["frames"]:
                 return "Rien à analyser."
             minutes = result["seconds"] / 60
-            return f"Analyse estimée à environ {max(1, round(minutes))} min ({result['fps']:.1f} images par seconde)."
+            speed = f"{result['fps']:.1f}".replace(".", ",")
+            return f"Analyse estimée à environ {max(1, round(minutes))} min ({speed} images par seconde)."
 
         self.start("estimate", "Mesure de la vitesse d'analyse", work)
 
@@ -847,8 +852,7 @@ class Engine:
         project = self.require()
 
         def work(job: Job) -> str:
-            p = progress.Progress("Recherche des objets du profil", library.PROFILE_SAMPLES * max(1, len(project.clips)), 0, unit="étapes")
-            notes = library.apply_profile(project, p)
+            notes = library.apply_profile(project)
             self.history.clear()  # les réglages d'analyse ont pu changer
             refresh_review(project)
             pj.save(project)
@@ -938,8 +942,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        for k, v in (extra or {}).items():
+        extra = dict(extra or {})
+        self.send_header("Cache-Control", extra.pop("Cache-Control", "no-store"))
+        for k, v in extra.items():
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
@@ -948,11 +953,19 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, data, status: int = 200) -> None:
         self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
-    def _body(self) -> dict:
+    def _read_body(self) -> None:
+        """Lit le corps de la requête dès son arrivée, que la route s'en serve ou non.
+
+        Sur une connexion gardée ouverte, un corps laissé non lu serait pris pour le début de la
+        requête suivante (« {}GET … » : réponse 501, et l'interface croit le moteur injoignable)."""
         length = int(self.headers.get("Content-Length") or 0)
-        if not length:
+        self._raw = self.rfile.read(length) if length > 0 else b""
+
+    def _body(self) -> dict:
+        raw = getattr(self, "_raw", b"")
+        if not raw.strip():
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        return json.loads(raw.decode("utf-8"))
 
     def _local_only(self) -> None:
         """Refuse les requêtes émises par une autre page web que l'interface elle-même."""
@@ -1020,6 +1033,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
         route = url.path
+        self._read_body()
         try:
             self._local_only()
             if route == "/api/state" and method == "GET":
@@ -1089,11 +1103,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(engine.state())
             elif route == "/api/thumb" and method == "GET":
                 data = engine.thumbnail(query["clip"], int(query["id"]), int(query.get("w", 220)))
-                self._send(200, data, "image/jpeg")
+                self._send(200, data, "image/jpeg", {"Cache-Control": "private, max-age=3600"})
             elif route == "/api/filmstrip" and method == "GET":
                 project = engine.require()
                 data = media.filmstrip(project, project.clip(query["clip"]), int(query.get("count", 40)), int(query.get("h", 54)))
-                self._send(200, data, "image/jpeg")
+                self._send(200, data, "image/jpeg", {"Cache-Control": "private, max-age=3600"})
             elif route == "/api/waveform" and method == "GET":
                 project = engine.require()
                 self._json({"peaks": media.waveform(project, project.clip(query["clip"]), int(query.get("points", 1500)))})

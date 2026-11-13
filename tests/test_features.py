@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import av
@@ -282,7 +283,7 @@ def api(tmp_path):
             time.sleep(0.05)
         raise AssertionError("traitement trop long")
 
-    call.engine, call.project, call.wait = engine, project, wait
+    call.engine, call.project, call.wait, call.base = engine, project, wait, base
     yield call
     server.shutdown()
     server.server_close()
@@ -587,3 +588,32 @@ def test_personal_model_is_listed_and_loaded(tmp_path, monkeypatch):
     assert models.batchable(spec, target) == (spec, target)
     with pytest.raises(ValueError, match="mes-plaques"):
         models.get_spec("absent", "plate")
+
+
+def test_unread_request_body_does_not_break_the_next_request(api):
+    """Une route qui ignore le corps envoyé ne doit pas corrompre la requête suivante."""
+    import http.client
+
+    host = urllib.parse.urlparse(api.base).netloc
+    conn = http.client.HTTPConnection(host)
+    conn.request("POST", "/api/cancel", body=b"{}", headers={"Content-Type": "application/json"})
+    first = conn.getresponse()
+    first.read()
+    conn.request("GET", "/api/state")
+    second = conn.getresponse()
+    assert first.status == 200 and second.status == 200
+    assert "project" in json.loads(second.read())
+    conn.close()
+
+
+def test_hand_made_detection_settings_show_as_custom(api):
+    state = api("PUT", "/api/settings", {"analysis": {"conf_new": 0.15}})
+    assert state["project"]["preset"] == "perso"
+    state = api("PUT", "/api/settings", {"analysis": {"conf_new": 0.20}})
+    assert state["project"]["preset"] == "normal"  # retour aux valeurs du préréglage
+    api("PUT", "/api/settings", {"preset": "rapide"})
+    state = api("PUT", "/api/settings", {"analysis": {"kinds": ["face", "plate"]}})
+    assert state["project"]["preset"] == "rapide"  # les catégories ne changent pas le préréglage
+    state = api("PUT", "/api/settings", {"blur": {"margin": 0.4}})
+    assert state["project"]["preset"] == "rapide"
+    assert api("GET", "/api/filmstrip?clip=c1&count=4&h=20", raw=True)[:2] == b"\xff\xd8"

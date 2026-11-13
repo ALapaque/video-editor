@@ -85,7 +85,8 @@ export interface Project {
   mismatch: boolean;
   /** Choix d'alignement : "" (pas encore choisi), "first" ou "largest". */
   conform: string;
-  /** Préréglage d'analyse : "normal", "difficile" (conditions difficiles) ou "rapide". */
+  /** Préréglage d'analyse : "normal", "difficile" (conditions difficiles), "rapide", ou "perso"
+   *  quand les réglages de détection ont été modifiés à la main. */
   preset: Preset;
   /** Relecture complète : position atteinte (secondes du montage) et relecture terminée ou non. */
   sweep: { position: number; done: boolean };
@@ -95,7 +96,8 @@ export interface Project {
   estimate: Estimate | null;
 }
 
-export type Preset = "normal" | "difficile" | "rapide";
+/** "perso" : réglages de détection modifiés à la main, qui ne correspondent à aucun préréglage. */
+export type Preset = "normal" | "difficile" | "rapide" | "perso";
 
 export interface Estimate {
   frames: number; // images restant à analyser

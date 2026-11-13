@@ -2,7 +2,7 @@
 // flou ajouté qui suit, relecture mémorisée, capture, vignettes, récents, ménage, profil.
 // Couche commune aux deux modes : les composants l'importent, sans la dupliquer.
 
-import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State } from "./api";
+import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track } from "./api";
 import { busy, notify, project, refresh, send, start, state } from "./store";
 
 // --- Annuler / rétablir -------------------------------------------------------
@@ -41,15 +41,23 @@ export const presetInfo: Record<Preset, { label: string; text: string; warning: 
   normal: { label: "Normal", text: "Le bon équilibre pour la plupart des vidéos.", warning: "" },
   difficile: {
     label: "Conditions difficiles",
-    text: "Nuit, pluie, contre-jour, plaques sales ou lointaines : la détection est plus sensible.",
+    text: "Nuit, pluie, contre-jour, plaques sales ou lointaines : la détection est plus sensible.",
     warning: "Analyse nettement plus longue, et davantage de flous à vérifier.",
   },
   rapide: {
     label: "Rapide",
-    text: "Pour une vidéo simple ou un premier essai : analyse environ deux fois plus courte.",
-    warning: "Moins sûr : un visage ou une plaque petits ou furtifs peuvent être manqués. Relisez la vidéo avant de la publier.",
+    text: "Pour une vidéo simple ou un premier essai : analyse environ deux fois plus courte.",
+    warning: "Moins sûr : un visage ou une plaque petits ou furtifs peuvent être manqués. Relisez la vidéo avant de la publier.",
+  },
+  perso: {
+    label: "Personnalisé",
+    text: "Réglages de détection modifiés à la main.",
+    warning: "",
   },
 };
+
+/** Préréglages que l'on peut choisir (« Personnalisé » ne fait que constater des réglages modifiés). */
+export const choosablePresets: Preset[] = ["normal", "difficile", "rapide"];
 
 /** Change le préréglage d'analyse. Ce qui était déjà analysé devra l'être à nouveau. */
 export async function setPreset(preset: Preset): Promise<void> {
@@ -114,7 +122,7 @@ export function filmstripUrl(clip: string, count = 40, height = 54): string {
 const waves = new Map<string, Promise<number[]>>();
 /** Niveau sonore du clip : `points` valeurs entre 0 et 1, réparties sur toute sa durée (vide : pas de son). */
 export function waveform(clip: string, points = 1500): Promise<number[]> {
-  const key = `${clip}:${points}`;
+  const key = `${project.value?.path}:${clip}:${points}`; // « c1 » désigne un autre fichier dans un autre projet
   let wave = waves.get(key);
   if (!wave) {
     wave = call<{ peaks: number[] }>("GET", `/api/waveform?clip=${encodeURIComponent(clip)}&points=${points}`)
@@ -143,9 +151,9 @@ export async function snapshot(clip: string, frame: number, blur = true): Promis
 
 export const exportPresets: { id: ExportPreset; label: string; text: string }[] = [
   { id: "source", label: "Comme l'original", text: "Même taille et même format que vos vidéos. Le choix par défaut." },
-  { id: "youtube", label: "YouTube", text: "Taille d'origine, qualité maximale : YouTube recompresse de toute façon." },
-  { id: "social", label: "Réseaux sociaux", text: "1920 pixels au plus, H.264 : accepté partout, fichier raisonnable." },
-  { id: "leger", label: "Fichier léger", text: "1280 pixels au plus : pour envoyer par messagerie." },
+  { id: "youtube", label: "YouTube", text: "Taille d'origine, qualité maximale : YouTube recompresse de toute façon." },
+  { id: "social", label: "Réseaux sociaux", text: "1920 pixels au plus, H.264 : accepté partout, fichier raisonnable." },
+  { id: "leger", label: "Fichier léger", text: "1280 pixels au plus : pour envoyer par messagerie." },
 ];
 
 export async function render(options: RenderOptions): Promise<void> {
@@ -199,7 +207,7 @@ export async function saveProfile(): Promise<void> {
   try {
     await call("POST", "/api/profile/save");
     await refresh();
-    notify("Profil enregistré : il pourra être appliqué à vos prochaines vidéos.");
+    notify("Réglages enregistrés\u00a0: ils pourront être repris pour vos prochaines vidéos.");
   } catch (error) {
     notify((error as Error).message, "error");
   }
@@ -224,4 +232,39 @@ export function installDrop(open: (paths: string[]) => void): void {
       notify("Dans le navigateur, un fichier déposé ne donne pas son emplacement : utilisez « Ouvrir ». Le glisser-déposer fonctionne dans l'application installée.", "info", true);
     }
   });
+}
+
+// --- Vocabulaire commun : un « flou » et son niveau de confiance ------------------------------
+// L'interface parle de « flou » partout (jamais de « zone », « détection » ou « piste ») et
+// remplace les scores chiffrés par trois niveaux. Règle unique, utilisée par les deux modes.
+
+export type Confidence = "sur" | "verifier" | "douteux" | "ecarte" | "main";
+
+export const confidenceInfo: Record<Confidence, { label: string; help: string }> = {
+  sur: { label: "sûr", help: "Le logiciel est sûr de ce qu'il a trouvé." },
+  verifier: { label: "à vérifier", help: "Le logiciel hésite un peu : jetez un œil." },
+  douteux: { label: "douteux", help: "Le logiciel hésite beaucoup : c'est peut-être une erreur." },
+  ecarte: { label: "non flouté", help: "Trop peu sûr pour être flouté. Vous pouvez le flouter quand même." },
+  main: { label: "ajouté par vous", help: "Flou que vous avez ajouté ou objet que vous avez désigné." },
+};
+
+/** Niveau de confiance d'un flou, d'après son score habituel (médian) sur toute sa durée. */
+export function confidence(track: Track): Confidence {
+  if (track.source !== "auto") return "main";
+  if (track.below_min_score && !track.forced) return "ecarte";
+  if (track.score >= 0.6) return "sur";
+  if (track.score >= 0.4) return "verifier";
+  return "douteux";
+}
+
+/** Nom d'un flou en clair, avec une majuscule : « Visage », « Plaque », « Compteur »… */
+export function blurName(track: Track): string {
+  const name = track.source === "manual" && track.kind === "manual" ? "Flou ajouté" : track.name;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** « de 0:12 à 0:15 » (temps du clip, sans décimales). */
+export function blurSpan(track: Track): string {
+  const t = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, "0")}`;
+  return t(track.start) === t(track.end) ? `à ${t(track.start)}` : `de ${t(track.start)} à ${t(track.end)}`;
 }
