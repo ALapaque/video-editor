@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Timeline unique : passages gardés bout à bout (bande d'images et niveau sonore), passages
-// muets, passages douteux, tête de lecture.
+// muets, alertes (les passages douteux sans risque n'ont plus de repère : rien à valider), tête de lecture.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { currentEntry, explain, guided, loop, markEntries } from "../review";
 import {
@@ -33,6 +33,9 @@ const ticks = computed(() => {
   for (let t = 0; t <= duration.value + 1e-6; t += step) out.push(t);
   return { step, list: out };
 });
+
+/** Repères : seulement les alertes, là où quelque chose peut rester visible. */
+const alerts = computed(() => visibleReview.value.filter((r) => r.item.risk));
 
 const mutes = computed(() =>
   (project.value?.mutes ?? []).flatMap((m, index) => mapRange(m).map((part) => ({ ...part, index }))),
@@ -230,9 +233,9 @@ onBeforeUnmount(() => observer.disconnect());
       </div>
       <div class="markers">
         <div
-          v-for="r in visibleReview" :key="r.key + r.at" class="marker" :class="[r.item.kinds[0], { done: r.item.done, current: currentEntry?.id === r.key }]"
+          v-for="r in alerts" :key="r.key + r.at" class="marker alert" :class="[r.item.kinds[0], { done: r.item.done, current: currentEntry?.id === r.key }]"
           :style="{ left: `${r.at * pxPerSecond}px`, width: `${Math.max((r.end - r.at) * pxPerSecond, 4)}px` }"
-          :title="`${r.item.done ? 'Passage validé' : 'Passage à vérifier'} : ${explain(r.item.reasons).map((x) => x.text).join(' ')}`"
+          :title="`${r.item.done ? 'Alerte regardée' : 'Alerte à regarder'} : ${explain(r.item.reasons).map((x) => x.text).join(' ')}`"
           @pointerdown.stop="seekTime(Math.max(0, r.at - 0.4))"
         ></div>
       </div>
@@ -250,3 +253,9 @@ onBeforeUnmount(() => observer.disconnect());
     </div>
   </div>
 </template>
+
+<style>
+/* === nouveau flux : seules les alertes ont un repère, bien visible === */
+.marker.alert { top: 1px; height: 10px; border-radius: 5px; opacity: 1; min-width: 10px; }
+.marker.alert.done { opacity: .32; }
+</style>

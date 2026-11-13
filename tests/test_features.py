@@ -683,3 +683,102 @@ def test_ignore_zone_similar_and_risk_over_the_api(api):
     api("PUT", "/api/settings", {"blur": {"plate_min_score": 0.1}})
     review = api("GET", "/api/state")["project"]["review"]
     assert review and all(r["risk"] is False for r in review)
+    # un objet douteux pas encore revu de plus près : une analyse (rapide) est proposée
+    assert api("GET", "/api/state")["project"]["clips"][0]["needs_analysis"] is True
+    api.project.analysis["c1"].confirmed = True
+    assert api("GET", "/api/state")["project"]["clips"][0]["needs_analysis"] is False
+
+
+# --- Contre-vérification des objets douteux ---------------------------------------------------
+
+
+class FakeExaminer:
+    """Faux détecteur pour la contre-vérification : « retrouve » un objet si la vue contient du blanc."""
+
+    class spec:  # noqa: N801 - imite l'attribut du vrai détecteur
+        input_size = 320
+
+    def __init__(self):
+        self.views = 0
+
+    def examine(self, views):
+        out = []
+        for view in views:
+            self.views += 1
+            ys, xs = np.where(view.min(axis=2) > 235)
+            if len(xs):
+                out.append(np.array([[xs.min(), ys.min(), xs.max() + 1, ys.max() + 1, 0.8]], dtype=np.float32))
+            else:
+                out.append(np.zeros((0, 5), dtype=np.float32))
+        return out
+
+
+def test_doubtful_object_not_found_again_is_not_blurred(tmp_path):
+    from moto_blur import confirm
+    from moto_blur.postprocess import below_min_score, is_blurred
+
+    project = make_project(tmp_path, make_video(tmp_path / "v.mp4", frames=60))
+    analyze_project(project, detect_fn=FakeDetector(score=0.32))  # le carré blanc, vu sans assurance
+    clip = project.clips[0]
+    state = project.analysis["c1"]
+    (real,) = state.tracks
+    f = clip.video.frame_pts
+    # une fausse détection douteuse sur le fond texturé (un « arbre »), et un objet sûr au même endroit
+    tree = pj.Track(50, "plate", [[round(k * f), 200, 120, 240, 150, 0.30] for k in range(20)])
+    sure = pj.Track(51, "plate", [[round(k * f), 200, 120, 240, 150, 0.85] for k in range(20)])
+    dropped = pj.Track(52, "plate", [[round(k * f), 100, 20, 130, 40, 0.10] for k in range(20)])
+    state.tracks += [tree, sure, dropped]
+    assert {t.id for t in confirm.pending(project, clip)} == {real.id, 50}  # ni l'objet sûr, ni l'écarté
+    assert confirm.due(project, clip)
+    examiner = FakeExaminer()
+    result = confirm.confirm_tracks(project, clip, {"plate": examiner})
+    assert result == {"examined": 2, "unconfirmed": 1} and examiner.views == 2 * 3 * 2
+    assert real.confirm >= 0.5 and tree.confirm == 0.0 and sure.confirm is None and dropped.confirm is None
+    blur = project.blur_settings
+    assert is_blurred(real, blur) and is_blurred(sure, blur)
+    assert below_min_score(tree, blur) and not is_blurred(tree, blur)
+    assert confirm.pending(project, clip) == []
+    # il reste rattrapable : « flouter quand même », ou réglage coupé
+    tree.forced = True
+    assert is_blurred(tree, blur)
+    tree.forced = False
+    assert is_blurred(tree, pj.BlurSettings(confirm=False))
+    # le résultat est gardé dans le projet
+    pj.save(project)
+    again = {t.id: t.confirm for t in pj.load(project.path).analysis["c1"].tracks}
+    assert again[50] == 0.0 and again[51] is None and again[real.id] == real.confirm
+    # une catégorie qu'on n'analyse plus n'est pas revue ; réglage coupé : rien à faire
+    fresh = pj.Track(60, "plate", [[round(k * f), 10, 10, 50, 40, 0.30] for k in range(20)])
+    state.tracks.append(fresh)
+    assert [t.id for t in confirm.pending(project, clip)] == [60]
+    project.analysis_settings.kinds = ["face"]
+    assert confirm.pending(project, clip) == []
+    project.analysis_settings.kinds = ["face", "plate"]
+    project.blur_settings.confirm = False
+    assert confirm.pending(project, clip) == [] and not confirm.due(project, clip)
+
+
+def test_examine_reuses_the_loaded_model_whatever_its_batch_size():
+    from moto_blur.detect import Detector
+    from moto_blur.models import batchable, ensure_model, get_spec
+
+    spec = get_spec("yolo-v9-t-640", "plate")
+    try:
+        spec, path = batchable(spec, ensure_model(spec))
+    except (urllib.error.URLError, OSError) as exc:
+        pytest.skip(f"modèle indisponible : {exc}")
+    # Seuil très bas : la plaque dessinée est à peine reconnue ; ce qu'on contrôle ici, c'est que
+    # chaque vue reçoit bien son propre résultat, quelle que soit la taille du lot.
+    detector = Detector(spec, path, (1280, 720), 0.02, device="cpu")
+    assert detector.batch > 1
+    import cv2
+
+    plate = np.random.default_rng(1).integers(60, 120, (640, 640, 3)).astype(np.uint8)
+    cv2.rectangle(plate, (140, 220), (460, 420), (30, 30, 120), -1)  # une « voiture » et sa plaque
+    cv2.rectangle(plate, (200, 320), (400, 368), (255, 255, 255), -1)
+    cv2.rectangle(plate, (200, 320), (400, 368), (0, 0, 0), 2)
+    cv2.putText(plate, "AB-123-CD", (208, 356), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3)
+    empty = np.full((640, 640, 3), 90, dtype=np.uint8)
+    results = detector.examine([plate, empty, plate])  # 3 vues, lot de taille différente
+    assert len(results) == 3 and len(results[1]) == 0
+    assert len(results[0]) >= 1 and np.allclose(results[0], results[2], atol=1e-3)

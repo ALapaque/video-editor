@@ -4,7 +4,7 @@
 
 import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track } from "./api";
 import { computed } from "vue";
-import { busy, notify, project, refresh, send, start, state, trackById } from "./store";
+import { busy, mapRange, notify, project, refresh, send, start, state, trackById } from "./store";
 
 // --- Annuler / rétablir -------------------------------------------------------
 
@@ -43,7 +43,7 @@ export const presetInfo: Record<Preset, { label: string; text: string; warning: 
   difficile: {
     label: "Conditions difficiles",
     text: "Nuit, pluie, contre-jour, plaques sales ou lointaines : la détection est plus sensible.",
-    warning: "Analyse nettement plus longue, et davantage de flous à vérifier.",
+    warning: "Analyse nettement plus longue, et davantage de flous en trop.",
   },
   rapide: {
     label: "Rapide",
@@ -117,7 +117,8 @@ export async function saveSweep(position: number, done: boolean): Promise<void> 
 
 /** Bande de `count` vignettes du clip, côte à côte dans une seule image (hauteur `height`). */
 export function filmstripUrl(clip: string, count = 40, height = 54): string {
-  return `/api/filmstrip?clip=${encodeURIComponent(clip)}&count=${count}&h=${height}`;
+  // le projet fait partie de l'adresse : « c1 » d'un autre projet ne doit pas ressortir du cache
+  return `/api/filmstrip?clip=${encodeURIComponent(clip)}&count=${count}&h=${height}&p=${encodeURIComponent(project.value?.path ?? "")}`;
 }
 
 const waves = new Map<string, Promise<number[]>>();
@@ -299,7 +300,10 @@ export function almostBlurs(tracks: Track[]): Track[] {
 }
 
 /** Alertes : passages où quelque chose peut rester visible, pas encore regardés. */
-export const pendingRisks = computed(() => (project.value?.review ?? []).filter((r) => r.risk && !r.done));
+export const pendingRisks = computed(() =>
+  // seulement dans ce qui est gardé au montage : une alerte dans un passage coupé n'a pas à être regardée
+  (project.value?.review ?? []).filter((r) => r.risk && !r.done && mapRange(r).length > 0),
+);
 
 /** Ce qui reste avant d'exporter l'esprit tranquille. Rien d'autre n'est demandé. */
 export const beforeExport = computed(() => ({

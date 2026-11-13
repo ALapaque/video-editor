@@ -24,7 +24,7 @@ from pathlib import Path
 import av
 import cv2
 
-from . import contour, dash, library, media, progress, training
+from . import confirm, contour, dash, library, media, progress, training
 from . import project as pj
 from .analyze import (
     PRESETS,
@@ -45,6 +45,7 @@ from .postprocess import (
     below_min_score,
     footprint,
     in_ignore_zone,
+    is_blurred,
     median_box,
     nuisance,
     similar_tracks,
@@ -268,6 +269,7 @@ class Engine:
                         "proxy": proxy_path(project, clip).exists(),
                         "missing": not project.clip_path(clip).exists(),
                         "needs_analysis": bool(needed_intervals(project, clip))
+                        or confirm.due(project, clip)
                         or bool(dash.missing_span(project, clip)),
                     }
                 )
@@ -445,7 +447,9 @@ class Engine:
         """Flous automatiques encore actifs « comme celui-ci » (même endroit, même catégorie)."""
         with self.lock:
             state, track = self._find_track(clip_id, track_id)
-            return [t.id for t in similar_tracks(state.tracks, track) if not t.disabled]
+            # Seulement des flous réellement appliqués : un objet non flouté n'a rien à retirer.
+            blur = self.require().blur_settings
+            return [t.id for t in similar_tracks(state.tracks, track) if is_blurred(t, blur)]
 
     def add_ignore_zone(self, body: dict) -> int:
         """Zone à ne jamais flouter dans un clip : retire les flous automatiques qui s'y tiennent,

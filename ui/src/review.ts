@@ -1,18 +1,23 @@
-// Vérification guidée : on passe les passages douteux un par un, en boucle, avec une seule
-// question (« Tout ce qui doit être flouté l'est-il ? »), puis on relit tout le montage en posant
-// des signalements. Les validations et les signalements sont enregistrés dans le fichier projet
-// par le moteur ; ce module ne garde que l'état de la séance en cours.
+// Vérification : plus rien à valider. Tout ce qui est détecté est flouté ; un flou douteux qui
+// reste en place ne fait courir aucun risque. Il reste :
+//  - la relecture (seule étape qui montre ce qui n'a jamais été détecté), en accéléré : un clic
+//    retire un flou en trop sans arrêter la lecture, la touche S pose un signalement ;
+//  - les alertes (`risk`) et les signalements, peu nombreux, passés un par un, en boucle, avec une
+//    seule question (« Tout ce qui doit être flouté l'est-il ? ») ;
+//  - la planche : flous gênants à retirer par lot, objets non floutés à flouter quand même.
+// Les réponses et les signalements sont enregistrés dans le fichier projet par le moteur ; ce
+// module ne garde que l'état de la séance en cours.
 
 import { computed, reactive, watch } from "vue";
 import type { Mark, ReviewItem, Track } from "./api";
-import { blurSpan, saveSweep } from "./extras";
+import { almostBlurs, annoyingBlurs, appliedBlurs, beforeExport, blurSpan, saveSweep } from "./extras";
 import { displayName } from "./blurs";
 import {
   current, duration, formatTime, mapRange, patchTrack, player, project, seekTime, send,
   state, time, trackById,
 } from "./store";
 
-/** Un élément de la file : passage douteux ou signalement de relecture, placé dans le montage. */
+/** Un élément de la file : alerte ou signalement de relecture, placé dans le montage. */
 export interface Entry {
   id: string;
   type: "doubt" | "mark";
@@ -26,7 +31,7 @@ export interface Entry {
 
 export const review = reactive({
   mode: "home" as "home" | "queue" | "sweep" | "end",
-  scope: "doubt" as "doubt" | "marks", // file parcourue : passages douteux ou signalements
+  scope: "doubt" as "doubt" | "marks", // file parcourue : alertes ou signalements
   current: "", // identifiant de l'élément affiché
   sub: "ask" as "ask" | "missing" | "extra" | "object",
   speed: 1, // vitesse de l'aperçu pendant la vérification (sans effet sur l'export)
@@ -36,15 +41,24 @@ export const review = reactive({
   last: null as { clip: string; at: number; end: number } | null, // dernière position connue de l'élément affiché
   sheet: false, // planche des flous ouverte (mode avancé)
   sheetFilter: null as { clip: string; ids: number[] } | null, // planche limitée aux flous d'un passage
+  // ce que montre la planche : les flous gênants, tous les flous, ou les objets vus mais non floutés
+  sheetMode: "annoying" as SheetMode,
+  sweepSpeed: 2, // vitesse de la relecture (2× par défaut), gardée d'une relecture à l'autre
+  savedSpeed: 0, // vitesse d'avant la relecture, à remettre en la quittant (0 : rien à remettre)
 });
+
+export type SheetMode = "annoying" | "all" | "almost";
 
 /** Vitesses de l'aperçu proposées, en vérification comme en lecture normale. */
 export const speeds = [0.25, 0.5, 1, 1.5, 2].map((value) => ({ value, label: `${String(value).replace(".", ",")}×` }));
 
-// Seuls les passages encore présents dans le montage sont proposés (un passage coupé ne sort pas).
+// Alertes : les passages où quelque chose peut rester visible (`risk`). Les autres passages
+// « douteux » sont floutés de toute façon : ils ne sont plus proposés ni comptés nulle part.
+// Seules les alertes encore présentes dans le montage sortent (un passage coupé ne sort pas).
 export const doubtEntries = computed<Entry[]>(() => {
   const out: Entry[] = [];
   for (const item of project.value?.review ?? []) {
+    if (!item.risk) continue;
     const parts = mapRange(item);
     if (!parts.length) continue;
     out.push({
@@ -71,6 +85,27 @@ export const doubtDone = computed(() => doubtEntries.value.filter((e) => e.done)
 export const doubtLeft = computed(() => doubtEntries.value.length - doubtDone.value);
 export const pending = computed(() => doubtLeft.value + markEntries.value.length);
 export const guided = computed(() => review.mode === "queue" || review.mode === "sweep");
+/** Ce qui reste avant d'exporter l'esprit tranquille : comme `beforeExport`, mais limité à ce qui
+ *  est encore dans le montage (une alerte ou un signalement d'un passage coupé ne compte pas). */
+export const remaining = computed(() => ({
+  swept: beforeExport.value.swept,
+  risks: doubtLeft.value,
+  marks: markEntries.value.length,
+}));
+export const allClear = computed(() => remaining.value.swept && !remaining.value.risks && !remaining.value.marks);
+
+function count(n: number, one: string, many: string): string {
+  return `${n} ${n > 1 ? many : one}`;
+}
+/** Ce qui reste à faire, en clair, une chose par élément (vide : tout est fait). */
+export function remainingList(): string[] {
+  const r = remaining.value;
+  const out: string[] = [];
+  if (!r.swept) out.push("relecture non faite");
+  if (r.risks) out.push(count(r.risks, "alerte à regarder", "alertes à regarder"));
+  if (r.marks) out.push(count(r.marks, "signalement à traiter", "signalements à traiter"));
+  return out;
+}
 export const rate = computed(() => review.speed);
 
 /** Passage lu en boucle autour de l'élément affiché, en secondes du montage. */
@@ -117,13 +152,12 @@ export function explain(reasons: string[]): { text: string; raw: string }[] {
   return out;
 }
 
+/** Bilan en une phrase : « Relecture faite » ou ce qui reste (« relecture non faite, 2 alertes à regarder »). */
 export function summary(): string {
-  const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
-  return [
-    plural(doubtDone.value, "passage validé", "passages validés"),
-    `${doubtLeft.value} à revoir`,
-    plural(markEntries.value.length, "signalement", "signalements"),
-  ].join(", ");
+  const left = remainingList();
+  if (!left.length) return "Relecture faite";
+  const text = left.join(", ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 // --- Lecture pendant la vérification ----------------------------------------
@@ -162,7 +196,7 @@ export function finish(): void {
   state.tool = "none";
 }
 
-/** Ouvre la file des passages douteux ou des signalements, au premier élément non réglé. */
+/** Ouvre la file des alertes ou des signalements, au premier élément non réglé. */
 export function startQueue(scope: "doubt" | "marks"): void {
   endSweep();
   review.scope = scope;
@@ -190,7 +224,7 @@ export function previous(): void {
   if (currentIndex.value > 0) showAt(currentIndex.value - 1);
 }
 
-/** « Oui, c'est bon » : valide le passage douteux, ou retire le signalement réglé, puis passe au suivant. */
+/** « Oui, c'est bon » : l'alerte est regardée, ou le signalement réglé est retiré, puis on passe au suivant. */
 export async function validate(): Promise<void> {
   const e = currentEntry.value;
   if (!e || review.sub !== "ask") return;
@@ -304,7 +338,7 @@ export async function restoreZone(zone: { clip: string; id: number }): Promise<v
 
 // --- Planche des flous ----------------------------------------------------------
 
-/** Un flou automatique actif du montage, et l'instant du montage où aller le voir. */
+/** Un flou automatique du montage, et l'instant du montage où aller le voir. */
 export interface SheetItem {
   key: string;
   clip: string;
@@ -312,24 +346,34 @@ export interface SheetItem {
   at: number;
 }
 
-/** Tous les flous automatiques actifs (ni retirés, ni écartés par le score) encore présents dans
- *  le montage, les plus douteux d'abord : meilleur score le plus bas. */
-export const sheetItems = computed<SheetItem[]>(() => {
+/** Flous choisis par `pick` dans chaque clip, pour ceux qui sont encore présents dans le montage. */
+function inMontage(pick: (tracks: Track[]) => Track[]): SheetItem[] {
   const out: SheetItem[] = [];
   for (const [clip, tracks] of Object.entries(project.value?.tracks ?? {})) {
-    for (const track of tracks) {
-      if (track.source !== "auto" || track.disabled || track.below_min_score) continue;
+    for (const track of pick(tracks)) {
       const part = mapRange({ clip, start: track.start, end: track.end })[0];
       if (part) out.push({ key: `${clip}:${track.id}`, clip, track, at: (part.start + part.end) / 2 });
     }
   }
-  return out.sort((a, b) => a.track.best_score - b.track.best_score || a.track.score - b.track.score || a.at - b.at);
-});
+  return out;
+}
+const byNuisance = (a: SheetItem, b: SheetItem) => (b.track.nuisance ?? 0) - (a.track.nuisance ?? 0) || a.at - b.at;
 
-/** Ouvre la planche des flous : tous les flous, ou seulement ceux d'un passage chargé. */
-export function openSheet(filter?: { clip: string; ids: number[] }): void {
+/** Tous les flous posés par le logiciel (ni retirés, ni écartés), les plus gênants d'abord. */
+export const sheetItems = computed<SheetItem[]>(() => inMontage(appliedBlurs).sort(byNuisance));
+/** Les flous qui se voient (gros ou longs), les plus gênants d'abord. */
+export const annoyingItems = computed<SheetItem[]>(() => inMontage(annoyingBlurs).sort(byNuisance));
+/** Objets vus mais non floutés car trop peu sûrs, les plus probables d'abord. */
+export const almostItems = computed<SheetItem[]>(() =>
+  inMontage(almostBlurs).sort((a, b) => b.track.best_score - a.track.best_score || a.at - b.at),
+);
+
+/** Ouvre la planche : les flous gênants (par défaut), tous les flous, les objets non floutés, ou
+ *  seulement les flous d'un passage chargé. */
+export function openSheet(filter?: { clip: string; ids: number[] }, mode: SheetMode = filter ? "all" : "annoying"): void {
   player.pause();
   review.sheetFilter = filter ?? null;
+  review.sheetMode = mode;
   review.sheet = true;
 }
 
@@ -392,10 +436,21 @@ function rememberSweep(): void {
   void inOrder(() => saveSweep(now.position, now.done));
 }
 
-/** À appeler avant de quitter la relecture complète : la position atteinte est mémorisée. */
+/** À appeler avant de quitter la relecture : la position atteinte est mémorisée, le clic ne retire
+ *  plus de flou et la vitesse d'avant est remise. */
 function endSweep(): void {
-  if (review.mode === "sweep") rememberSweep();
+  if (review.mode !== "sweep") return;
+  rememberSweep();
+  if (state.mode === "simple") return; // l'assistant règle lui-même le clic et la vitesse de sa relecture
+  state.clickRemoves = false;
+  state.lastRemoved = null;
+  if (review.savedSpeed) review.speed = review.savedSpeed;
+  review.savedSpeed = 0;
 }
+// la vitesse choisie pendant la relecture est gardée pour la prochaine
+watch(() => review.speed, (value) => {
+  if (review.mode === "sweep" && state.mode !== "simple") review.sweepSpeed = value;
+});
 
 let sweepTimer = 0;
 watch(() => review.mode === "sweep", (on) => {
@@ -430,7 +485,14 @@ export function resumeSweep(): void {
 export function startSweep(fromStart = false): void {
   sweepPath = project.value?.path ?? "";
   sweepSaved = { position: -1, done: false };
+  if (state.mode !== "simple") {
+    // relecture : en accéléré, et un clic sur un flou en trop le retire sans arrêter la lecture
+    if (review.mode !== "sweep") review.savedSpeed = review.speed;
+    state.clickRemoves = true;
+    state.selectedTrack = null;
+  }
   review.mode = "sweep";
+  if (state.mode !== "simple") review.speed = review.sweepSpeed;
   review.current = "";
   review.sub = "ask";
   state.tab = "review";
@@ -453,7 +515,7 @@ export async function addMark(): Promise<void> {
   flashTimer = window.setTimeout(() => (review.flash = ""), 1600);
 }
 
-/** Quitte la vérification guidée : retour à l'écran de choix, aperçu remis comme avant. */
+/** Quitte la relecture ou la file en cours : retour à l'écran de choix, aperçu remis comme avant. */
 export function leave(): void {
   endSweep();
   player.pause();

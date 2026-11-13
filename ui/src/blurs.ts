@@ -4,9 +4,40 @@
 import { reactive } from "vue";
 import type { ReviewItem, Track } from "./api";
 import { blurName, blurSpan, confidence, confidenceInfo, type Confidence } from "./extras";
+import { notify, state } from "./store";
 
 /** Dialogues propres au mode avancé dont le clavier ne doit pas atteindre le lecteur. */
-export const panels = reactive({ shortcuts: false });
+export const panels = reactive({
+  shortcuts: false,
+  // outil « Ne jamais flouter ici » : le prochain rectangle tracé devient une zone à ne jamais flouter
+  ignoring: false,
+  // zone à ne jamais flouter à faire ressortir sur la vidéo (rang dans `project.ignore[clip]`), sinon null
+  ignoreHover: null as number | null,
+});
+
+const IGNORE_WARNED = "moto-blur:zone-avertie";
+/** Avertissement donné une fois, à la première zone à ne jamais flouter créée depuis la relecture :
+ *  il complète le message qui vient d'annoncer la zone, et reste affiché jusqu'au clic. */
+export function warnIgnoreOnce(): void {
+  try {
+    if (localStorage.getItem(IGNORE_WARNED)) return;
+    localStorage.setItem(IGNORE_WARNED, "1");
+  } catch {
+    /* stockage indisponible : l'avertissement est simplement redonné */
+  }
+  const said = state.toastKind === "info" && state.toast ? `${state.toast} ` : "";
+  notify(`${said}Attention : un visage ou une plaque qui se tiendrait à cet endroit ne serait pas flouté non plus. La zone se retire dans l'onglet « Flous ».`, "info", true);
+}
+
+/** Où se trouve un rectangle dans l'image, en clair : « en bas à droite de l'image ». */
+export function placeOf(box: number[], width: number, height: number): string {
+  const cx = (box[0] + box[2]) / 2 / Math.max(1, width);
+  const cy = (box[1] + box[3]) / 2 / Math.max(1, height);
+  const v = cy < 1 / 3 ? "en haut" : cy > 2 / 3 ? "en bas" : "";
+  const h = cx < 1 / 3 ? "à gauche" : cx > 2 / 3 ? "à droite" : "";
+  if (!v && !h) return "au centre de l'image";
+  return `${[v, h].filter(Boolean).join(" ")} de l'image`;
+}
 
 /** Nom en clair : « Visage », « Plaque », « Compteur », « Flou ajouté »… (jamais « zone manuelle »). */
 export function displayName(track: Track): string {
