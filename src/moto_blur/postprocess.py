@@ -51,11 +51,14 @@ def below_min_score(track: Track, settings: BlurSettings) -> bool:
     """Vrai si une piste détectée n'est pas assez sûre pour être floutée.
 
     Elle doit atteindre le score minimal de sa catégorie sur au moins `min_hits` images, ou
-    une fois avec un score très net. Les fausses détections, qui clignotent sur une ou deux
+    une fois avec un score très net ; et, si elle est douteuse, avoir été retrouvée par la
+    contre-vérification (voir `confirm.py`). Les fausses détections, qui clignotent sur une ou deux
     images, sont ainsi écartées sans toucher aux vrais objets, vus sur la durée.
     """
     if track.source != "auto" or track.forced or not track.obs:
         return False
+    if settings.confirm and track.confirm is not None and track.confirm < settings.confirm_min:
+        return True  # objet douteux que le détecteur n'a pas retrouvé en le revoyant de plus près
     minimum = settings.min_score_for(track.kind)
     scores = [o[5] for o in track.obs]
     if max(scores) >= minimum + STRONG_MARGIN:

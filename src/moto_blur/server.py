@@ -24,7 +24,7 @@ from pathlib import Path
 import av
 import cv2
 
-from . import contour, dash, library, media, progress, training
+from . import confirm, contour, dash, library, media, progress, training
 from . import project as pj
 from .analyze import (
     PRESETS,
@@ -268,6 +268,7 @@ class Engine:
                         "proxy": proxy_path(project, clip).exists(),
                         "missing": not project.clip_path(clip).exists(),
                         "needs_analysis": bool(needed_intervals(project, clip))
+                        or confirm.due(project, clip)
                         or bool(dash.missing_span(project, clip)),
                     }
                 )
