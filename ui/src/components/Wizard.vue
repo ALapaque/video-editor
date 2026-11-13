@@ -9,17 +9,17 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { call, type ExportPreset, type Job, type Preset, type RenderOptions, type Track } from "../api";
 import {
-  exportPresets, followBlur, formatDuration, installDrop, measureEstimate, presetInfo, render, renderExtract, saveProfile,
-  saveSweep, setPreset, setTracksDisabled, thumbUrl, undo,
+  blurName, confidence, confidenceInfo, exportPresets, followBlur, formatDuration, installDrop, measureEstimate, presetInfo, render,
+  renderExtract, saveProfile, saveSweep, setPreset, setTracksDisabled, thumbUrl, undo,
 } from "../extras";
 import {
   addMark, currentEntry, currentIndex, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone,
-  leave, markEntries, next, objectHere, pending, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue, startSweep,
-  validate,
+  leave, loop, markEntries, next, objectHere, pending, previous, relocate, replay, restoreZone, resume, review, showObject, startQueue,
+  startSweep, validate, type Entry,
 } from "../review";
 import {
-  busy, current, droppedHere, duration, fpsOf, job, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send, setMode,
-  start, state, time, trackById,
+  busy, current, droppedHere, duration, fpsOf, job, mapRange, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send,
+  setMode, start, state, time, trackById,
 } from "../store";
 import { clock, dayText, droppedFile, wiz, type Screen } from "../wizard";
 import FilePicker from "./FilePicker.vue";
@@ -31,6 +31,7 @@ import StorageDialog from "./StorageDialog.vue";
 import TrimBar from "./TrimBar.vue";
 import WizProgress from "./WizProgress.vue";
 import WizSheet from "./WizSheet.vue";
+import WizSpan from "./WizSpan.vue";
 import WizThumb from "./WizThumb.vue";
 import WizTime from "./WizTime.vue";
 
@@ -136,6 +137,7 @@ function sync(): void {
     wiz.extract = "";
     wiz.sheetDue = false;
     wiz.format = "source";
+    wiz.answers = {};
     const target = derive();
     show(target);
     if (target !== "what" && target !== "profile") notify("Ce projet existait déjà : vous reprenez là où vous en étiez.");
@@ -166,6 +168,9 @@ function quit(): void {
   revealError.value = "";
   queued.value = false;
   refused.value = null;
+  judge.value = null; // la vérification flou par flou s'arrête (les réponses données sont gardées)
+  asked.value = "";
+  state.focus = null;
 }
 
 function enter(): void {
@@ -203,6 +208,8 @@ function back(): void {
     case "verify":
       if (vphase.value === "sheet" && sheetFrom.value === "intro") { vphase.value = "intro"; return; }
       if (vphase.value === "queue" && review.sub !== "ask") return resume();
+      if (vphase.value === "queue" && judge.value) return judgeBack();
+      if (vphase.value === "queue" && asked.value && asked.value === review.current && currentEntry.value) return startJudge(currentEntry.value, true);
       if (vphase.value === "queue" && currentIndex.value > 0) return previous();
       if (vphase.value === "sweep") { stopSweep(); leave(); vphase.value = "ask"; return; }
       if (vphase.value !== "intro" && vphase.value !== "sheet" && (doubtEntries.value.length || markEntries.value.length)) { leave(); vphase.value = "intro"; return; }
@@ -233,7 +240,14 @@ function reconcile(): void {
   if (wiz.screen === "verify" && vphase.value === "queue") {
     review.removed = review.removed.filter((r) => trackById(r.clip, r.id)?.disabled);
     refused.value = null;
-    if (!currentEntry.value && review.sub === "ask") relocate();
+    // un « Non » annulé : le flou est remis, sa réponse est oubliée
+    for (const [key, answer] of Object.entries(wiz.answers)) {
+      const [clip, id] = key.split(":");
+      if (answer === "no" && !trackById(clip, +id)?.disabled) delete wiz.answers[key];
+    }
+    const j = judge.value;
+    if (j?.stage === "one" && !blurTrack.value) void showBlur(j.pos); // le flou montré n'existe plus
+    else if (!j && !currentEntry.value && review.sub === "ask") relocate();
   }
 }
 watch(() => state.data, (data) => {
@@ -632,13 +646,6 @@ function beginVerify(): void {
   else vphase.value = "ask";
 }
 
-// Un seul objet à juger : sa vignette, et « Non » le retire lui seul.
-const single = computed<{ clip: string; track: Track } | null>(() => {
-  const e = entry.value;
-  if (!e?.item || e.item.tracks.length !== 1) return null;
-  const track = trackById(e.clip, e.item.tracks[0]);
-  return track && track.source === "auto" && !track.disabled ? { clip: e.clip, track } : null;
-});
 const thumbs = new Map<string, string>(); // l'adresse d'une vignette change à chaque modification : on garde la première
 function thumb(clip: string, id: number): string {
   const key = `${clip}:${id}`;
@@ -646,7 +653,6 @@ function thumb(clip: string, id: number): string {
   if (!url) thumbs.set(key, (url = thumbUrl(clip, id, 320)));
   return url;
 }
-const refused = ref<{ clip: string; id: number; shownOn: string } | null>(null); // dernier « Non » : peut être remis tout de suite
 /** Affiche l'élément de rang `index` de la file (comme le fait la vérification guidée). */
 function showEntry(index: number): void {
   const target = entries.value[index];
@@ -659,26 +665,326 @@ function showEntry(index: number): void {
   review.last = { clip: target.clip, at: target.at, end: target.end };
   replay();
 }
-/** « Non, ne pas le flouter » : ce flou seul est retiré, puis on passe à l'endroit suivant. */
-async function refuse(): Promise<void> {
-  const s = single.value;
-  const e = entry.value;
-  if (!s || !e || review.sub !== "ask" || busy.value) return;
-  const index = currentIndex.value;
-  await setTracksDisabled(s.clip, [s.track.id], true);
-  if (!trackById(s.clip, s.track.id)?.disabled) return; // refusé : le message est affiché
-  const still = entries.value.findIndex((x) => x.id === e.id); // sans son flou, l'endroit n'est en général plus à vérifier
-  showEntry(still >= 0 ? still + 1 : index);
-  refused.value = { clip: s.clip, id: s.track.id, shownOn: review.current };
+// --- Vérification flou par flou -------------------------------------------------------------
+// Dans un passage douteux, chaque flou posé par le logiciel est jugé seul (« Faut-il flouter
+// ceci ? »), le plus douteux d'abord : sa vignette, son nom, son niveau de confiance, et sur la
+// vidéo il ressort (state.focus). Au-delà de BIG flous, la planche du passage d'abord, puis
+// seulement les plus douteux, de près. Le passage est validé quand tous ses flous ont une réponse.
+// Pendant ce temps, la vérification guidée commune est au repos : la boucle de lecture est
+// l'extrait où le flou montré est visible (state.loopRange), pas le passage entier.
+const BIG = 15; // au-delà, la planche du passage d'abord
+const CLOSER = 10; // après la planche : les plus douteux, montrés de près, au plus
+interface Judge {
+  clip: string;
+  key: string; // passage d'origine (sa clé change si le moteur le recalcule)
+  at: number; // début du passage dans le montage
+  src: { start: number; end: number }; // passage, en temps source
+  from: number; // bornes de la barre de position (passage et sa marge), en secondes du montage
+  to: number;
+  ids: number[]; // flous du passage à juger, les plus douteux d'abord
+  todo: number[]; // ceux montrés un par un
+  pos: number; // rang du flou montré dans `todo`
+  stage: "sheet" | "one";
+  passage: number; // « Passage 1 sur 2 »
+  passages: number;
+  revisit: boolean; // passage déjà validé, revu à la demande
+  object: boolean; // le passage concerne aussi un objet suivi : sa question vient après les flous
+}
+const judge = ref<Judge | null>(null);
+const skipped = reactive(new Set<string>()); // « Plus tard » pendant ce passage
+const asked = ref(""); // passage dont la question d'ensemble est posée après ses flous
+const refused = ref<{ clip: string; id: number; shownOn: string } | null>(null); // dernier « Non » : peut être remis tout de suite
+
+function answerKey(clip: string, id: number): string {
+  return `${clip}:${id}`;
+}
+/** Flous automatiques actifs d'un passage, les plus douteux d'abord. */
+function judgeable(e: Entry): number[] {
+  if (!e.item) return [];
+  return e.item.tracks
+    .map((id) => trackById(e.clip, id))
+    .filter((t): t is Track => !!t && t.source === "auto" && !t.disabled && (!t.below_min_score || t.forced))
+    .sort((a, b) => a.score - b.score || a.best_score - b.best_score || a.start - b.start)
+    .map((t) => t.id);
+}
+/** Ouvre la vérification flou par flou du passage `e` (`again` : tous ses flous, en partant du dernier). */
+function startJudge(e: Entry, again = false): void {
+  const ids = judgeable(e);
+  const revisit = again || e.done;
+  const pool = revisit ? ids : ids.filter((id) => !wiz.answers[answerKey(e.clip, id)]);
+  const passage = Math.max(0, doubtEntries.value.findIndex((x) => x.id === e.id));
+  const object = !!objectHere.value && currentEntry.value?.id === e.id;
+  leave(); // la boucle du passage entier s'arrête
+  state.preview = "blur";
+  skipped.clear();
+  asked.value = "";
+  const big = pool.length > BIG && !again;
+  judge.value = {
+    clip: e.clip, key: e.id, at: e.at, src: { start: e.item?.start ?? 0, end: e.item?.end ?? 0 },
+    from: Math.max(0, e.at - 0.5), to: Math.min(duration.value, e.end + 0.5),
+    ids: pool, todo: big ? [] : pool, pos: 0, stage: big ? "sheet" : "one",
+    passage, passages: doubtEntries.value.length, revisit, object,
+  };
+  if (!pool.length) return void finishJudge(); // tous ses flous ont déjà une réponse
+  if (big) {
+    player.pause();
+    state.loopRange = null;
+  } else void showBlur(again ? pool.length - 1 : 0);
+}
+/** Planche du passage refermée : ce qui a été retiré est « Non », le reste « Oui », sauf les plus
+ *  douteux, montrés ensuite de près. */
+function afterJudgeSheet(): void {
+  const j = judge.value;
+  if (!j) return;
+  const left = j.ids.filter((id) => trackById(j.clip, id) && !trackById(j.clip, id)?.disabled);
+  const closer = left.filter((id) => confidence(trackById(j.clip, id) as Track) === "douteux").slice(0, CLOSER);
+  for (const id of j.ids) {
+    if (closer.includes(id) || !trackById(j.clip, id)) continue;
+    wiz.answers[answerKey(j.clip, id)] = trackById(j.clip, id)?.disabled ? "no" : "yes";
+  }
+  j.todo = closer;
+  if (!closer.length) return void finishJudge();
+  void showBlur(0);
+}
+/** Combien de flous seront montrés de près après la planche du passage. */
+const closerCount = computed(() => {
+  const j = judge.value;
+  if (!j) return 0;
+  return Math.min(CLOSER, j.ids.filter((id) => {
+    const t = trackById(j.clip, id);
+    return t && !t.disabled && confidence(t) === "douteux";
+  }).length);
+});
+const blurTrack = computed<Track | null>(() => {
+  const j = judge.value;
+  return j?.stage === "one" ? (trackById(j.clip, j.todo[j.pos]) ?? null) : null;
+});
+const blurLevel = computed(() => (blurTrack.value ? confidence(blurTrack.value) : "sur"));
+const blurAnswer = computed(() => (blurTrack.value && judge.value ? wiz.answers[answerKey(judge.value.clip, blurTrack.value.id)] : undefined));
+/** Ce que le logiciel pense avoir trouvé, et pourquoi il demande : deux phrases au plus. */
+const blurReasons = computed(() => {
+  const t = blurTrack.value;
+  if (!t) return [];
+  const what = t.kind === "face" ? "un visage" : t.kind === "plate" ? "une plaque" : `« ${capital(t.name)} »`;
+  const how: Record<string, string> = {
+    douteux: ", mais il hésite beaucoup : c'est peut-être une erreur.",
+    verifier: ", mais il hésite un peu.",
+    sur: ", et il en est sûr.",
+    ecarte: ". Il en était trop peu sûr, mais ce flou a été gardé quand même.",
+  };
+  const out = [`Le logiciel pense que c'est ${what}${how[blurLevel.value] ?? "."}`];
+  if (t.count <= 3 || t.end - t.start < 0.4) out.push("Il n'apparaît qu'un instant : regardez juste avant et juste après.");
+  return out;
+});
+/** Extrait lu en boucle : le moment où le flou montré est visible, avec une marge, dans le passage. */
+const blurLoop = computed(() => {
+  const j = judge.value;
+  const t = blurTrack.value;
+  if (!j || !t) return null;
+  const parts = mapRange({ clip: j.clip, start: t.start, end: t.end });
+  const part = parts.find((x) => x.end >= j.from && x.start <= j.to) ?? parts[0];
+  if (!part) return { from: j.from, to: j.to };
+  let from = Math.max(j.from, part.start - 0.5);
+  let to = Math.min(j.to, part.end + 0.5, from + 8); // un flou qui dure : ses huit premières secondes
+
+  if (to - from < 1.6) { // un flou très bref : au moins 1,6 s autour de lui
+    const middle = (from + to) / 2;
+    from = Math.max(j.from, middle - 0.8);
+    to = Math.min(j.to, from + 1.6);
+    from = Math.max(j.from, to - 1.6);
+  }
+  return { from, to };
+});
+async function replayBlur(): Promise<void> {
+  const range = blurLoop.value;
+  if (!range) return;
+  state.loopRange = range;
+  seekTime(range.from);
+  await nextTick(); // après la planche, le lecteur revient à l'écran
+  if (judge.value?.stage === "one" && wiz.screen === "verify") void player.play();
+}
+/** Montre le flou de rang `pos` (le suivant qui existe encore) ; au-delà du dernier, le passage est terminé. */
+async function showBlur(pos: number): Promise<void> {
+  const j = judge.value;
+  if (!j) return;
+  while (pos < j.todo.length && !trackById(j.clip, j.todo[pos])) pos++;
+  if (pos >= j.todo.length) return finishJudge();
+  j.pos = pos;
+  j.stage = "one";
+  review.sub = "ask";
+  state.tool = "none";
+  await replayBlur();
+}
+/** Où en est la question : sert à placer « Le flou précédent est retiré » au bon endroit. */
+function marker(): string {
+  const t = blurTrack.value;
+  return t && judge.value ? `b:${judge.value.clip}:${t.id}` : `e:${review.current}`;
+}
+async function answerYes(): Promise<void> {
+  const j = judge.value;
+  const t = blurTrack.value;
+  if (!j || !t || review.sub !== "ask" || busy.value) return;
+  if (t.disabled) { // « Non » donné avant, puis revu : le flou est remis
+    await setTracksDisabled(j.clip, [t.id], false);
+    if (trackById(j.clip, t.id)?.disabled) return; // refusé : le message est affiché
+  }
+  wiz.answers[answerKey(j.clip, t.id)] = "yes";
+  skipped.delete(answerKey(j.clip, t.id));
+  refused.value = null;
+  await showBlur(j.pos + 1);
+}
+/** « Non, ne pas le flouter » : ce flou seul est retiré (action annulable), puis le flou suivant. */
+async function answerNo(): Promise<void> {
+  const j = judge.value;
+  const t = blurTrack.value;
+  if (!j || !t || review.sub !== "ask" || busy.value) return;
+  if (!t.disabled) {
+    await setTracksDisabled(j.clip, [t.id], true);
+    if (!trackById(j.clip, t.id)?.disabled) return; // refusé : le message est affiché
+  }
+  wiz.answers[answerKey(j.clip, t.id)] = "no";
+  skipped.delete(answerKey(j.clip, t.id));
+  await showBlur(j.pos + 1);
+  refused.value = { clip: j.clip, id: t.id, shownOn: marker() };
+}
+function later(): void {
+  const j = judge.value;
+  const t = blurTrack.value;
+  if (!j || !t || review.sub !== "ask") return;
+  skipped.add(answerKey(j.clip, t.id));
+  refused.value = null;
+  void showBlur(j.pos + 1);
 }
 async function unrefuse(): Promise<void> {
   const r = refused.value;
   if (!r) return;
   refused.value = null;
   await setTracksDisabled(r.clip, [r.id], false);
-  const back = entries.value.findIndex((x) => x.item?.tracks.length === 1 && x.item.tracks[0] === r.id && x.clip === r.clip);
-  if (back >= 0 && review.mode === "queue") showEntry(back);
+  if (trackById(r.clip, r.id)?.disabled) return;
+  delete wiz.answers[answerKey(r.clip, r.id)];
+  const j = judge.value;
+  const back = j && j.clip === r.clip ? j.todo.indexOf(r.id) : -1;
+  if (back >= 0) await showBlur(back);
 }
+/** Retour pendant la vérification flou par flou : le flou précédent, puis la planche, puis l'introduction. */
+function judgeBack(): void {
+  const j = judge.value;
+  if (!j) return;
+  refused.value = null;
+  if (j.stage === "one" && j.pos > 0) return void showBlur(j.pos - 1);
+  if (j.stage === "one" && j.ids.length > BIG) {
+    j.stage = "sheet";
+    player.pause();
+    state.loopRange = null;
+    return;
+  }
+  judge.value = null;
+  state.loopRange = null;
+  vphase.value = "intro";
+}
+/** Passage recalculé par le moteur après un retrait : celui qui recouvre le mieux le même endroit. */
+function samePassage(j: Judge): Entry | undefined {
+  const list = doubtEntries.value;
+  const exact = list.find((e) => e.id === j.key);
+  if (exact) return exact;
+  let best: Entry | undefined;
+  let score = 0.5;
+  for (const e of list) {
+    if (e.clip !== j.clip || !e.item) continue;
+    const inter = Math.min(e.item.end, j.src.end) - Math.max(e.item.start, j.src.start);
+    const union = Math.max(e.item.end, j.src.end) - Math.min(e.item.start, j.src.start);
+    if (union > 0 && inter / union >= score) {
+      best = e;
+      score = inter / union;
+    }
+  }
+  return best;
+}
+/** Fin des flous d'un passage : validé si tous ont une réponse, puis le passage suivant. */
+async function finishJudge(): Promise<void> {
+  const j = judge.value;
+  if (!j) return;
+  judge.value = null;
+  state.loopRange = null;
+  player.pause();
+  const answered = j.ids.every((id) => !trackById(j.clip, id) || !!wiz.answers[answerKey(j.clip, id)]);
+  let same = samePassage(j);
+  if (answered && same && j.object) { // reste la question sur l'objet suivi, pour le passage entier
+    asked.value = same.id;
+    review.scope = "doubt";
+    review.mode = "queue";
+    return showEntry(doubtEntries.value.indexOf(same));
+  }
+  if (answered && same && !same.done) {
+    if (!(await send("PUT", "/api/review", { key: same.id, done: true }))) return;
+    same = samePassage(j);
+  }
+  if (!alive || wiz.screen !== "verify" || vphase.value !== "queue") return;
+  const list = doubtEntries.value;
+  const after = same ? list.slice(list.indexOf(same) + 1) : list.filter((e) => e.at > j.at);
+  const following = after.find((e) => j.revisit || !e.done);
+  if (!following) {
+    vphase.value = "ask"; // comme à la fin de la file des passages douteux
+    return;
+  }
+  review.scope = "doubt";
+  review.mode = "queue";
+  showEntry(list.indexOf(following));
+}
+// la file des passages douteux arrive sur un passage : ses flous sont jugés un par un
+watch(() => [review.mode, review.current, review.sub, vphase.value, wiz.screen], () => {
+  if (wiz.screen !== "verify" || vphase.value !== "queue" || judge.value || review.mode !== "queue" || review.scope !== "doubt" || review.sub !== "ask") return;
+  const e = currentEntry.value;
+  if (!e || e.type !== "doubt" || e.id === asked.value) return;
+  if (judgeable(e).length) startJudge(e);
+});
+// retour à la question après une correction (« Il manque un flou », Échap…) : le flou montré repart en boucle
+watch(() => review.sub, (sub, before) => {
+  if (sub === "ask" && before !== "ask" && judge.value?.stage === "one" && wiz.screen === "verify") void replayBlur();
+});
+/** Flou mis en évidence sur la vidéo : celui qu'on juge, tant que la question est affichée. */
+const focusWanted = computed(() => {
+  const j = judge.value;
+  const t = blurTrack.value;
+  return wiz.screen === "verify" && vphase.value === "queue" && j && t && review.sub === "ask" ? { clip: j.clip, ids: [t.id] } : null;
+});
+watch(focusWanted, (f) => {
+  if (JSON.stringify(f) !== JSON.stringify(state.focus)) state.focus = f;
+});
+
+// --- Se déplacer dans le passage -----------------------------------------------------------
+/** Bornes de la barre de position : le passage vérifié (flou par flou, ou la question d'ensemble). */
+const navSpan = computed(() => {
+  if (wiz.screen !== "verify" || vphase.value !== "queue") return null;
+  const j = judge.value;
+  if (j) return j.stage === "one" ? { from: j.from, to: j.to } : null;
+  return review.mode === "queue" ? loop.value : null;
+});
+function scrubPassage(value: number): void {
+  player.pause();
+  const j = judge.value;
+  if (j) state.loopRange = { from: j.from, to: j.to }; // en lecture, tout le passage ; « Revoir depuis le début » revient au flou
+  seekTime(value);
+}
+/** Image précédente ou suivante, sans sortir du passage. */
+function stepFrame(frames: number): void {
+  const span = navSpan.value;
+  const s = current.value;
+  if (!span || !s) return;
+  player.pause();
+  seekTime(Math.min(span.to - 0.5 / s.fps, Math.max(span.from, time.value + frames / s.fps)));
+}
+function replayHere(): void {
+  if (judge.value) void replayBlur();
+  else replay();
+}
+/** Détections écartées près du passage montré (proposées dans « Il manque un flou »). */
+const droppedNear = computed(() => {
+  const j = judge.value;
+  if (!j) return droppedInPassage.value;
+  return (p.value?.tracks[j.clip] ?? []).filter((t) => t.below_min_score && !t.disabled && t.end >= j.src.start - 0.5 && t.start <= j.src.end + 0.5).length;
+});
+const navClip = computed(() => judge.value?.clip ?? currentEntry.value?.clip ?? "");
 
 // « Il manque un flou » : ce qu'on entoure est suivi par le flou, dans le passage du montage affiché.
 const following = ref(false);
@@ -905,6 +1211,12 @@ function onKey(event: KeyboardEvent): void {
     main.click();
   } else if ((event.key === "s" || event.key === "S") && !typing && review.mode === "sweep" && !event.ctrlKey && !event.metaKey) {
     void addMark();
+  } else if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA" && navSpan.value && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    // dans le passage vérifié : image par image (Maj : une seconde), sans en sortir ; le lecteur ne s'en occupe pas
+    event.preventDefault();
+    event.stopPropagation();
+    const fps = current.value?.fps ?? 30;
+    stepFrame((event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? Math.round(fps) : 1));
   }
 }
 // Après un clic à la souris, le bouton ne garde pas le focus : Entrée déclenche toujours le bouton
@@ -913,14 +1225,54 @@ function releaseFocus(event: MouseEvent): void {
   if (event.detail > 0 && document.activeElement instanceof HTMLButtonElement) document.activeElement.blur();
 }
 
+/** Planche d'un passage chargé, avant ses flous un par un. */
+const judgeSheet = computed(() => vphase.value === "queue" && judge.value?.stage === "sheet");
 const withVideo = computed(() => {
   if (!p.value || !previewReady.value) return false;
   if (wiz.screen === "object") return true;
   if (wiz.screen === "trim") return !advancedMontage.value;
-  return wiz.screen === "verify" && (vphase.value === "queue" || vphase.value === "sweep");
+  return wiz.screen === "verify" && ((vphase.value === "queue" && !judgeSheet.value) || vphase.value === "sweep");
 });
-/** La planche des flous occupe toute la largeur. */
-const sheetShown = computed(() => state.loaded && !!p.value && !lost.value.length && previewReady.value && wiz.screen === "verify" && vphase.value === "sheet");
+/** La planche des flous (de toute la vidéo, ou d'un passage chargé) occupe toute la largeur. */
+const sheetShown = computed(() => state.loaded && !!p.value && !lost.value.length && previewReady.value && wiz.screen === "verify" && (vphase.value === "sheet" || judgeSheet.value));
+
+// --- Mise en page des écrans avec la vidéo -------------------------------------------------
+// La vidéo prend toute la hauteur disponible (vidéo verticale comprise), ses commandes juste
+// dessous, les questions à côté ; l'ensemble est centré. Recalculé au redimensionnement seulement.
+const MIN_STAGE = 440; // largeur minimale sous la vidéo : les commandes y tiennent sur deux lignes
+const STAGE_GAP = 12; // espace entre la vidéo et ses commandes (.wiz-stage)
+const mainEl = ref<HTMLElement>();
+const underEl = ref<HTMLElement>();
+const panelEl = ref<HTMLElement>();
+const fitBox = ref<{ stage: number; height: number } | null>(null);
+function layout(): void {
+  const main = mainEl.value;
+  const under = underEl.value;
+  const panel = panelEl.value;
+  const clip = current.value?.clip ?? trimClip.value;
+  if (!withVideo.value || !main || !under || !panel || !clip?.width || !clip.height) {
+    fitBox.value = null;
+    return;
+  }
+  const css = getComputedStyle(main);
+  const width = main.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight) - panel.offsetWidth - (parseFloat(css.columnGap) || 0);
+  const height = main.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom) - under.offsetHeight - STAGE_GAP;
+  if (width <= 0 || height <= 0) return;
+  const ratio = clip.width / clip.height;
+  const video = Math.max(1, Math.min(width, height * ratio)); // largeur de l'image
+  const next = { stage: Math.floor(Math.min(width, Math.max(video, MIN_STAGE))), height: Math.floor(video / ratio) };
+  const was = fitBox.value;
+  if (!was || Math.abs(was.stage - next.stage) > 1 || Math.abs(was.height - next.height) > 1) fitBox.value = next;
+}
+const stageStyle = computed(() => (fitBox.value ? { flex: "none", width: `${fitBox.value.stage}px` } : undefined));
+const playerStyle = computed(() => (fitBox.value ? { flex: "none", height: `${fitBox.value.height}px` } : undefined));
+const resizer = new ResizeObserver(() => layout());
+watch([mainEl, underEl, panelEl], (now, before) => {
+  for (const el of before ?? []) if (el) resizer.unobserve(el);
+  for (const el of now) if (el) resizer.observe(el);
+  void nextTick(layout);
+});
+watch([withVideo, () => current.value?.clip.width, () => current.value?.clip.height, () => wiz.screen, vphase], () => void nextTick(layout));
 const savedPreview = state.preview;
 watch([() => p.value?.path, previewReady], sync);
 onMounted(() => {
@@ -930,6 +1282,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey, true);
+  resizer.disconnect();
   quit();
   alive = false;
   dropTarget = null;
@@ -938,7 +1291,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="wiz" @click="releaseFocus">
+  <!-- data-focus : le flou mis en évidence sur la vidéo (state.focus), lisible par les essais automatiques -->
+  <div ref="root" class="wiz" :data-focus="state.focus ? `${state.focus.clip}:${state.focus.ids.join(',')}` : undefined" @click="releaseFocus">
     <header class="wiz-top">
       <span class="brand"><Logo /><strong>moto-blur</strong></span>
       <ol class="wsteps" aria-label="Étapes">
@@ -965,13 +1319,13 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
 
-    <main class="wiz-main" :class="{ 'with-video': withVideo }">
-      <button v-if="canBack" class="wiz-back quiet" data-back title="Revenir à l'écran précédent (Échap)" @click="back"><Icon name="arrowLeft" />Retour</button>
+    <main ref="mainEl" class="wiz-main" :class="{ 'with-video': withVideo }">
+      <button v-if="canBack && !withVideo" class="wiz-back quiet" data-back title="Revenir à l'écran précédent (Échap)" @click="back"><Icon name="arrowLeft" />Retour</button>
 
       <!-- Vidéo et commandes : seulement sur les écrans qui en ont besoin -->
-      <div v-if="withVideo" class="wiz-stage">
-        <Player simple />
-        <div class="wiz-under">
+      <div v-if="withVideo" class="wiz-stage" :style="stageStyle">
+        <Player simple :style="playerStyle" />
+        <div ref="underEl" class="wiz-under">
           <template v-if="wiz.screen === 'trim' && trimClip">
             <TrimBar
               v-model:start="trim.a" v-model:end="trim.b" :total="trimClip.duration" :step="1 / fpsOf(trimClip)"
@@ -993,21 +1347,37 @@ onBeforeUnmount(() => {
               <WizTime kind="slider" @seek="scrub" />
             </div>
           </template>
-          <template v-else-if="wiz.screen === 'verify'">
-            <div class="wiz-controls">
-              <button class="wiz-play" @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>
-              <button v-if="vphase === 'queue'" @click="replay"><Icon name="refresh" />Revoir depuis le début</button>
-              <WizTime v-if="vphase === 'sweep'" kind="bar" />
+          <template v-else-if="wiz.screen === 'verify' && vphase === 'queue'">
+            <!-- se déplacer dans le passage vérifié : discret, ce n'est pas l'action principale -->
+            <div class="wiz-controls wiz-nav">
+              <WizSpan v-if="navSpan" :from="navSpan.from" :to="navSpan.to" :lit="blurLoop" @seek="scrubPassage" />
               <span v-else class="spacer"></span>
               <span class="wiz-speed" role="group" aria-label="Vitesse de lecture">
                 <span class="dim">Vitesse</span>
-                <span v-if="vphase === 'sweep'" class="joined">
-                  <button :class="{ on: review.speed !== 2 }" :aria-pressed="review.speed !== 2" data-speed="1" @click="review.speed = 1">Normale</button>
-                  <button :class="{ on: review.speed === 2 }" :aria-pressed="review.speed === 2" data-speed="2" title="Deux fois plus vite, pour une longue vidéo" @click="review.speed = 2">2×</button>
-                </span>
-                <span v-else class="joined">
+                <span class="joined">
                   <button :class="{ on: review.speed === 1 }" :aria-pressed="review.speed === 1" @click="review.speed = 1">Normal</button>
                   <button :class="{ on: review.speed !== 1 }" :aria-pressed="review.speed !== 1" @click="review.speed = 0.5">Ralenti</button>
+                </span>
+              </span>
+            </div>
+            <div class="wiz-controls">
+              <button class="wiz-play" @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>
+              <span class="joined wiz-frames" role="group" aria-label="Image par image">
+                <button class="icon-btn" data-frame="-1" title="Image précédente (touche ←)" aria-label="Image précédente" :disabled="!navSpan" @click="stepFrame(-1)"><Icon name="stepBack" /></button>
+                <button class="icon-btn" data-frame="1" title="Image suivante (touche →)" aria-label="Image suivante" :disabled="!navSpan" @click="stepFrame(1)"><Icon name="stepForward" /></button>
+              </span>
+              <button data-replay @click="replayHere"><Icon name="refresh" />Revoir depuis le début</button>
+            </div>
+          </template>
+          <template v-else-if="wiz.screen === 'verify'">
+            <div class="wiz-controls">
+              <button class="wiz-play" @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>
+              <WizTime kind="bar" />
+              <span class="wiz-speed" role="group" aria-label="Vitesse de lecture">
+                <span class="dim">Vitesse</span>
+                <span class="joined">
+                  <button :class="{ on: review.speed !== 2 }" :aria-pressed="review.speed !== 2" data-speed="1" @click="review.speed = 1">Normale</button>
+                  <button :class="{ on: review.speed === 2 }" :aria-pressed="review.speed === 2" data-speed="2" title="Deux fois plus vite, pour une longue vidéo" @click="review.speed = 2">2×</button>
                 </span>
               </span>
             </div>
@@ -1015,7 +1385,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <section class="wiz-panel" :class="[`s-${wiz.screen}`, { sheet: sheetShown }]">
+      <section ref="panelEl" class="wiz-panel" :class="[`s-${wiz.screen}`, { sheet: sheetShown }]">
+        <!-- à côté de la vidéo, « Retour » est en tête des questions : aucune bande vide au-dessus de l'image -->
+        <button v-if="canBack && withVideo" class="wiz-back quiet in-panel" data-back title="Revenir à l'écran précédent (Échap)" @click="back"><Icon name="arrowLeft" />Retour</button>
         <!-- 1. Vidéo -->
         <template v-if="!state.loaded">
           <span class="spinner large"></span>
@@ -1275,7 +1647,7 @@ onBeforeUnmount(() => {
           <template v-else-if="vphase === 'intro'">
             <span class="wiz-icon"><Icon name="eye" :size="34" /></span>
             <h1>Vérifions le floutage ensemble</h1>
-            <p v-if="doubtLeft" class="wiz-lead">Le logiciel a hésité à <strong>{{ plural(doubtLeft, "endroit", "endroits") }}</strong>. Il va vous {{ doubtLeft > 1 ? "les montrer un par un" : "le montrer" }} : dites-lui si tout est bien flouté.</p>
+            <p v-if="doubtLeft" class="wiz-lead">Le logiciel a hésité à <strong>{{ plural(doubtLeft, "endroit", "endroits") }}</strong>. Il va vous montrer ses flous un par un : dites-lui s'il faut flouter chacun.</p>
             <p v-else-if="markEntries.length" class="wiz-lead">Vous avez signalé <strong>{{ plural(markEntries.length, "endroit", "endroits") }}</strong> pendant la relecture. Réglons-les un par un.</p>
             <p v-else class="wiz-lead">Vous avez vérifié {{ doubtEntries.length > 1 ? `les ${doubtEntries.length} endroits` : "l'endroit" }} où le logiciel hésitait.</p>
             <div class="wiz-actions">
@@ -1291,26 +1663,31 @@ onBeforeUnmount(() => {
               <p class="wiz-lead">Il s'arrêtera seul à la fin de ce passage ou au prochain changement de plan.</p>
               <WizProgress ref="progress" phase="Vous verrez le résultat juste après." />
             </template>
-            <template v-else-if="!entry">
+            <!-- passage chargé : d'abord la planche de ses flous -->
+            <WizSheet
+              v-else-if="judge && judge.stage === 'sheet'" :key="`sheet-${judge.key}`" :only="{ clip: judge.clip, ids: judge.ids }"
+              :where="judge.passages > 1 ? `Passage ${judge.passage + 1} sur ${judge.passages}` : ''" :closer="closerCount" @done="afterJudgeSheet"
+            />
+            <template v-else-if="!entry && !judge">
               <h1>Cet endroit a changé</h1>
               <p class="wiz-lead">Votre correction l'a modifié.</p>
               <div class="wiz-actions"><button class="primary big" data-primary @click="relocate">Continuer</button></div>
             </template>
             <template v-else-if="review.sub === 'missing'">
               <h1>Entourez ce qui doit être flouté</h1>
-              <p class="wiz-lead">Sur la vidéo : cliquez, glissez, relâchez. Le flou suivra ce que vous avez entouré.</p>
-              <div v-if="droppedInPassage" class="wiz-dropped">
+              <p class="wiz-lead">Sur la vidéo : cliquez, glissez, relâchez. Le flou suivra ce que vous avez entouré.</p>
+              <div v-if="droppedNear" class="wiz-dropped">
                 <template v-if="!state.showDropped">
-                  <p>Le logiciel avait repéré {{ plural(droppedInPassage, "élément", "éléments") }} ici sans {{ droppedInPassage > 1 ? "les" : "le" }} flouter, par prudence.</p>
-                  <button @click="state.showDropped = true"><Icon name="eye" />{{ droppedInPassage > 1 ? "Les montrer" : "Le montrer" }}</button>
+                  <p>Le logiciel avait repéré {{ plural(droppedNear, "élément", "éléments") }} ici sans {{ droppedNear > 1 ? "les" : "le" }} flouter, par prudence.</p>
+                  <button @click="state.showDropped = true"><Icon name="eye" />{{ droppedNear > 1 ? "Les montrer" : "Le montrer" }}</button>
                 </template>
                 <template v-else>
-                  <p>{{ droppedInPassage > 1 ? "Ils sont entourés" : "Il est entouré" }} en gris sur la vidéo, avec un numéro. Si l'un d'eux est ce qui manque, floutez-le :</p>
+                  <p>{{ droppedNear > 1 ? "Ils sont entourés" : "Il est entouré" }} en gris sur la vidéo, avec un numéro. Si l'un d'eux est ce qui manque, floutez-le :</p>
                   <p v-if="!droppedHere.length" class="dim">Rien sur cette image. Avancez avec la touche → du clavier.</p>
                   <ul class="wiz-list">
                     <li v-for="tr in droppedHere.slice(0, 4)" :key="tr.id">
                       <span class="grow">{{ capital(tr.name) }} n° {{ tr.id }}</span>
-                      <button class="small" :disabled="busy" @click="forceZone(entry.clip, tr.id)">Flouter</button>
+                      <button class="small" :disabled="busy" @click="forceZone(navClip, tr.id)">Flouter</button>
                     </li>
                   </ul>
                 </template>
@@ -1319,44 +1696,60 @@ onBeforeUnmount(() => {
             </template>
             <template v-else-if="review.sub === 'object'">
               <h1>Entourez « {{ objectHere }} »</h1>
-              <p class="wiz-lead">Sur la vidéo : cliquez, glissez, relâchez autour de « {{ objectHere }} ». Le logiciel le suivra de nouveau à partir d'ici, jusqu'au prochain changement de plan.</p>
+              <p class="wiz-lead">Sur la vidéo : cliquez, glissez, relâchez autour de « {{ objectHere }} ». Le logiciel le suivra de nouveau à partir d'ici, jusqu'au prochain changement de plan.</p>
               <div class="wiz-actions"><button class="big" data-cancel-sub @click="resume">Annuler</button></div>
             </template>
             <template v-else-if="review.sub === 'extra'">
               <h1>Cliquez sur le flou en trop</h1>
-              <p class="wiz-lead">Sur la vidéo, les flous sont entourés. Celui que vous cliquez sera retiré ; vous pourrez le rétablir juste après.</p>
+              <p class="wiz-lead">Sur la vidéo, les flous sont entourés. Celui que vous cliquez sera retiré ; vous pourrez le rétablir juste après.</p>
               <div class="wiz-actions"><button class="big" data-cancel-sub @click="resume">Annuler</button></div>
             </template>
-            <template v-else>
+
+            <!-- un flou à la fois : « Faut-il flouter ceci ? » -->
+            <template v-else-if="judge && blurTrack">
+              <p class="wiz-count" data-blur-count>
+                <strong>{{ judge.pos + 1 }} sur {{ judge.todo.length }}</strong>
+                <span class="bar still"><span :style="{ transform: `scaleX(${(judge.pos + 1) / Math.max(1, judge.todo.length)})` }"></span></span>
+                <span v-if="blurAnswer" class="tag ok"><Icon name="check" :size="12" />{{ blurAnswer === "yes" ? "répondu : oui" : "répondu : non" }}</span>
+              </p>
+              <p v-if="judge.passages > 1" class="wiz-where">Passage {{ judge.passage + 1 }} sur {{ judge.passages }}</p>
+              <div class="wiz-blur">
+                <WizThumb :key="`${judge.clip}:${blurTrack.id}`" :src="thumb(judge.clip, blurTrack.id)" :alt="`${blurName(blurTrack)}, à l'image où le logiciel le voit le mieux`" eager />
+                <span class="wiz-blur-text">
+                  <strong class="wiz-blur-name">{{ blurName(blurTrack) }}</strong>
+                  <span class="wiz-level" :class="`c-${blurLevel}`" :title="nb(confidenceInfo[blurLevel].help)">{{ confidenceInfo[blurLevel].label }}</span>
+                </span>
+              </div>
+              <h1>Faut-il flouter ceci ?</h1>
+              <p v-for="r in blurReasons" :key="r" class="wiz-lead">{{ r }}</p>
+              <div class="wiz-actions column">
+                <button class="primary big" data-primary data-yes :disabled="busy" @click="answerYes"><Icon name="check" :size="18" />Oui, le flouter</button>
+                <button class="big" data-refuse :disabled="busy" @click="answerNo"><Icon name="close" :size="18" />Non, ne pas le flouter</button>
+                <button class="big quiet" data-later :disabled="busy" @click="later">Plus tard<Icon name="chevronRight" :size="18" /></button>
+              </div>
+              <button class="wiz-link" data-missing :disabled="busy" @click="missing"><Icon name="plus" />Il manque un flou ici</button>
+              <ul v-if="refused && refused.shownOn === marker()" class="wiz-list">
+                <li>
+                  <span class="grow">Le flou précédent est retiré</span>
+                  <button class="small" data-unrefuse :disabled="busy" @click="unrefuse">Le remettre</button>
+                </li>
+              </ul>
+            </template>
+
+            <!-- signalement, objet suivi : une question pour tout le passage -->
+            <template v-else-if="entry">
               <p class="wiz-count"><strong>{{ currentIndex + 1 }} sur {{ entries.length }}</strong><span class="bar still"><span :style="{ transform: `scaleX(${(currentIndex + 1) / Math.max(1, entries.length)})` }"></span></span><span v-if="entry.done" class="tag ok"><Icon name="check" :size="12" />déjà validé</span></p>
-              <!-- un seul objet : sa vignette, et la question porte sur lui -->
-              <template v-if="single">
-                <div class="wiz-single">
-                  <WizThumb :key="single.track.id" :src="thumb(single.clip, single.track.id)" :alt="single.track.kind === 'plate' ? 'La plaque concernée' : 'Le visage concerné'" eager />
-                  <h1>Faut-il flouter ceci ?</h1>
-                </div>
-                <p class="wiz-lead">{{ single.track.kind === "plate" ? "Le logiciel pense que c'est une plaque" : "Le logiciel pense que c'est un visage" }}. Sur la vidéo, son flou est entouré.</p>
-                <p v-if="reasons.length" class="wiz-lead">{{ reasons[0] }}</p>
-                <div class="wiz-actions column">
-                  <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />Oui, le flouter</button>
-                  <button class="big" data-refuse :disabled="busy" @click="refuse"><Icon name="close" :size="18" />Non, ne pas le flouter</button>
-                  <button class="big" :disabled="busy" @click="missing">Il manque un flou</button>
-                  <button class="big quiet" :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>
-                </div>
-              </template>
-              <template v-else>
-                <h1>Tout ce qui doit être flouté l'est-il ?</h1>
-                <p v-for="r in reasons" :key="r" class="wiz-lead">{{ r }}</p>
-                <div class="wiz-actions column">
-                  <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />{{ entry.type === "doubt" ? "Oui, c'est bon" : "C'est réglé" }}</button>
-                  <button v-if="objectHere" class="big" :disabled="busy" @click="showObject"><Icon name="target" :size="18" />Montrer « {{ objectHere }} » ici</button>
-                  <button class="big" :disabled="busy" @click="missing">Il manque un flou</button>
-                  <button class="big" :disabled="busy" @click="extra">Un flou est en trop</button>
-                  <button class="big quiet" :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>
-                </div>
-              </template>
-              <ul v-if="review.removed.length || (refused && refused.shownOn === review.current)" class="wiz-list">
-                <li v-if="refused && refused.shownOn === review.current">
+              <h1>Tout ce qui doit être flouté l'est-il ?</h1>
+              <p v-for="r in reasons" :key="r" class="wiz-lead">{{ r }}</p>
+              <div class="wiz-actions column">
+                <button class="primary big" data-primary :disabled="busy" @click="validate"><Icon name="check" :size="18" />{{ entry.type === "doubt" ? "Oui, c'est bon" : "C'est réglé" }}</button>
+                <button v-if="objectHere" class="big" :disabled="busy" @click="showObject"><Icon name="target" :size="18" />Montrer « {{ objectHere }} » ici</button>
+                <button class="big" :disabled="busy" @click="missing">Il manque un flou</button>
+                <button class="big" :disabled="busy" @click="extra">Un flou est en trop</button>
+                <button class="big quiet" :disabled="busy" @click="next">Plus tard<Icon name="chevronRight" :size="18" /></button>
+              </div>
+              <ul v-if="review.removed.length || (refused && refused.shownOn === marker())" class="wiz-list">
+                <li v-if="refused && refused.shownOn === marker()">
                   <span class="grow">Le flou précédent est retiré</span>
                   <button class="small" data-unrefuse :disabled="busy" @click="unrefuse">Le remettre</button>
                 </li>
@@ -1546,10 +1939,29 @@ onBeforeUnmount(() => {
 .wiz-panel.sheet .wiz-lead { max-width: none; }
 .wiz-panel.sheet .wiz-actions { margin-top: 0; }
 
-/* un seul objet à juger */
-.wiz-single { display: flex; align-items: center; gap: 14px; align-self: stretch; }
-.wiz-single .wiz-thumb { flex: none; width: 148px; border: 1px solid var(--line-strong); }
-.wiz-single h1 { flex: 1; min-width: 0; }
+/* écrans avec la vidéo : pas de bande vide au-dessus de l'image ; « Retour » en tête des questions.
+   La largeur de la vidéo et sa hauteur sont calculées (layout) : vidéo verticale aussi haute que possible. */
+.wiz .wiz-main.with-video { justify-content: center; padding: 16px 28px 20px; }
+.wiz .wiz-main.with-video .wiz-panel { align-self: stretch; }
+.wiz .wiz-stage .stage { align-items: center; }
+.wiz-back.in-panel { position: sticky; top: 0; left: auto; z-index: 2; flex: none; margin: 0 0 2px; background: var(--bg); }
+.wiz .wiz-under { gap: 10px; }
+.wiz .wiz-under .wiz-controls { flex-wrap: wrap; row-gap: 8px; }
+.wiz-nav { min-height: 26px; }
+.wiz-frames .icon-btn { width: 40px; height: 40px; padding: 0; justify-content: center; }
+.wiz-frames .icon-btn .icon { color: var(--dim); }
+
+/* un flou à la fois : vignette, nom, niveau de confiance */
+.wiz-where { margin-top: -8px; color: var(--faint); font-size: 14px; }
+.wiz-blur { display: flex; align-items: center; gap: 14px; align-self: stretch; }
+.wiz-blur .wiz-thumb { flex: none; width: 148px; border: 1px solid var(--line-strong); }
+.wiz-blur-text { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.wiz-blur-name { font-size: 20px; font-weight: 650; line-height: 1.2; overflow-wrap: anywhere; }
+.wiz-level { display: inline-flex; align-items: center; padding: 2px 10px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 12px; color: var(--dim); font-size: 13.5px; font-weight: 600; }
+.wiz-level.c-douteux { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-hi); }
+.wiz-level.c-verifier { color: var(--text); }
+.wiz-level.c-sur { border-color: rgba(74, 222, 128, .45); color: var(--face); }
+.wiz-panel .wiz-link[data-missing] { margin-top: 0; }
 
 /* enregistrement : format, extrait d'essai, relecture oubliée */
 .wiz-format { align-self: stretch; display: flex; flex-direction: column; gap: 7px; }
@@ -1578,8 +1990,13 @@ onBeforeUnmount(() => {
 .wiz-drop p strong { color: var(--text); }
 .wiz-drop button { height: 34px; padding: 0 14px; }
 
+@media (max-width: 1280px), (max-height: 800px) {
+  .wiz .wiz-main.with-video { padding: 12px 20px 14px; }
+  .wiz-blur .wiz-thumb { width: 124px; }
+  .wiz-blur-name { font-size: 18px; }
+}
 @media (max-width: 1100px) {
   .wiz-undo-label { display: none; }
-  .wiz-single .wiz-thumb { width: 120px; }
+  .wiz-blur .wiz-thumb { width: 110px; }
 }
 </style>

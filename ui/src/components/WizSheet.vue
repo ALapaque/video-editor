@@ -2,14 +2,24 @@
 // Planche des flous (mode simple) : tout ce que le logiciel va flouter de lui-même, en vignettes,
 // les moins sûrs d'abord. On touche ce qui ne doit PAS être flouté, puis on le retire d'un coup.
 // Rien n'est obligatoire : « Continuer » passe à la suite sans rien changer.
+// Avec `only`, la planche se limite aux flous d'un passage chargé (vérification flou par flou) :
+// tous sont montrés d'un coup, sans « Afficher les suivants ».
 import { computed, reactive, ref } from "vue";
 import type { Track } from "../api";
-import { setTracksDisabled, thumbUrl } from "../extras";
+import { blurName, confidence, confidenceInfo, setTracksDisabled, thumbUrl } from "../extras";
 import { busy, mapRange, project } from "../store";
 import { clock } from "../wizard";
 import Icon from "./Icon.vue";
 import WizThumb from "./WizThumb.vue";
 
+const props = defineProps<{
+  /** Flous d'un passage (dans l'ordre voulu) ; sans cela, tous les flous automatiques de la vidéo. */
+  only?: { clip: string; ids: number[] };
+  /** Passage : « Passage 1 sur 2 ». */
+  where?: string;
+  /** Combien seront montrés de près ensuite (passage seulement). */
+  closer?: number;
+}>();
 const emit = defineEmits<{ done: [] }>();
 const PAGE = 60; // au-delà, la planche ne montre d'abord que les flous les moins sûrs
 
@@ -18,6 +28,16 @@ interface Item { key: string; clip: string; track: Track; at: number }
 /** Flous automatiques actifs, visibles dans la partie gardée de la vidéo, les plus douteux d'abord. */
 const items = computed<Item[]>(() => {
   const out: Item[] = [];
+  if (props.only) {
+    const { clip, ids } = props.only;
+    for (const id of ids) {
+      const track = project.value?.tracks[clip]?.find((t) => t.id === id);
+      if (!track || track.disabled) continue;
+      const part = mapRange({ clip, start: track.start, end: track.end })[0];
+      out.push({ key: `${clip}:${id}`, clip, track, at: part?.start ?? 0 });
+    }
+    return out; // déjà dans l'ordre voulu (les plus douteux d'abord)
+  }
   for (const [clip, tracks] of Object.entries(project.value?.tracks ?? {})) {
     for (const track of tracks) {
       if (track.source !== "auto" || track.disabled || track.below_min_score) continue;
@@ -27,7 +47,7 @@ const items = computed<Item[]>(() => {
   }
   return out.sort((a, b) => a.track.score - b.track.score || a.track.best_score - b.track.best_score || a.at - b.at);
 });
-const limit = ref(PAGE);
+const limit = ref(props.only ? Infinity : PAGE);
 const shown = computed(() => items.value.slice(0, limit.value));
 const rest = computed(() => items.value.length - shown.value.length);
 
@@ -46,7 +66,10 @@ function url(item: Item): string {
   return u;
 }
 function label(item: Item): string {
-  return item.track.kind === "plate" ? "Plaque" : item.track.kind === "face" ? "Visage" : item.track.name;
+  return blurName(item.track);
+}
+function level(item: Item): string {
+  return confidenceInfo[confidence(item.track)].label;
 }
 function toggle(item: Item): void {
   if (picked.has(item.key)) picked.delete(item.key);
@@ -78,22 +101,33 @@ async function putBack(): Promise<void> {
 </script>
 
 <template>
-  <h1>Voici tout ce qui sera flouté</h1>
-  <p v-if="items.length" class="wiz-lead">
-    Touchez ce qui ne doit <strong>pas</strong> l'être : un panneau, une affiche, une erreur du logiciel…
-    <template v-if="items.length > PAGE">Il y a {{ items.length }} flous : les moins sûrs sont montrés en premier.</template>
-  </p>
-  <p v-else class="wiz-lead">Le logiciel ne floute rien de lui-même dans cette vidéo.</p>
+  <template v-if="only">
+    <p v-if="where" class="wiz-count"><strong>{{ where }}</strong></p>
+    <h1>Les {{ items.length }} flous de ce passage</h1>
+    <p class="wiz-lead">
+      Ils sont trop nombreux pour être vus un par un. Touchez ce qui ne doit <strong>pas</strong> être flouté.
+      <template v-if="closer">Ensuite, je vous montrerai de près {{ closer > 1 ? `les ${closer} plus douteux` : "le plus douteux" }}.</template>
+    </p>
+  </template>
+  <template v-else>
+    <h1>Voici tout ce qui sera flouté</h1>
+    <p v-if="items.length" class="wiz-lead">
+      Touchez ce qui ne doit <strong>pas</strong> l'être : un panneau, une affiche, une erreur du logiciel…
+      <template v-if="items.length > PAGE">Il y a {{ items.length }} flous : les moins sûrs sont montrés en premier.</template>
+    </p>
+    <p v-else class="wiz-lead">Le logiciel ne floute rien de lui-même dans cette vidéo.</p>
+  </template>
 
   <div v-if="items.length" class="sheet-scroll">
     <ul class="sheet-grid" aria-label="Flous automatiques">
       <li v-for="item in shown" :key="item.key">
         <button
           class="sheet-item" :class="{ picked: picked.has(item.key) }" :aria-pressed="picked.has(item.key)" :disabled="working"
-          :aria-label="`${label(item)} à ${clock(item.at)}${picked.has(item.key) ? ', choisi pour ne pas être flouté' : ''}`" @click="toggle(item)"
+          :aria-label="`${label(item)} à ${clock(item.at)}, ${level(item)}${picked.has(item.key) ? ', choisi pour ne pas être flouté' : ''}`" @click="toggle(item)"
         >
           <WizThumb :src="url(item)" alt="" />
           <span class="sheet-caption"><span>{{ label(item) }}</span><span class="mono">{{ clock(item.at) }}</span></span>
+          <span class="sheet-level" :class="`c-${confidence(item.track)}`">{{ level(item) }}</span>
           <span v-if="picked.has(item.key)" class="sheet-mark"><Icon name="close" :size="22" />Ne pas flouter</span>
         </button>
       </li>
@@ -122,6 +156,8 @@ async function putBack(): Promise<void> {
 .sheet-item { position: relative; width: 100%; height: auto; flex-direction: column; align-items: stretch; gap: 5px; padding: 5px 5px 6px; background: var(--surface); border-radius: var(--r-md); font-size: 13px; font-weight: 500; white-space: normal; }
 .sheet-caption { display: flex; justify-content: space-between; gap: 6px; padding: 0 3px; color: var(--dim); }
 .sheet-caption .mono { color: var(--faint); }
+.sheet-level { align-self: flex-start; margin: -2px 3px 0; color: var(--faint); font-size: 12px; font-weight: 500; }
+.sheet-level.c-douteux { color: var(--accent-hi); }
 .sheet-item.picked { background: var(--danger-soft); border-color: var(--danger); }
 .sheet-item.picked .wiz-thumb img { filter: grayscale(1) brightness(.45); }
 .sheet-item.picked .sheet-caption { color: var(--text); }
