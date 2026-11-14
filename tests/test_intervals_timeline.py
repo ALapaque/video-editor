@@ -4,9 +4,9 @@ from fractions import Fraction
 
 import pytest
 
-from moto_blur import intervals as iv
-from moto_blur import project as pj
-from moto_blur.timeline import (
+from flouto import intervals as iv
+from flouto import project as pj
+from flouto.timeline import (
     format_time,
     kept_intervals,
     mute_intervals,

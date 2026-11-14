@@ -20,7 +20,7 @@ import Icon from "./Icon.vue";
 const emit = defineEmits<{ close: [] }>();
 const p = project.value!;
 if (kept.path !== p.path) {
-  const base = p.name.replace(/\.motoblur\.json$/, "").replace(/\.json$/, "");
+  const base = p.name.replace(/\.(flouto|motoblur)\.json$/, "").replace(/\.json$/, "");
   Object.assign(kept, { path: p.path, output: `${base}_floute.mp4`, preset: "source", custom: false, quality: 80, codec: "source", encoder: "auto", debug: false, details: false });
 }
 const form = kept;

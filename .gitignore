@@ -7,6 +7,7 @@ models/
 *.mov
 *.mkv
 *.motoblur.json
+*.flouto.json
 *.report.txt
 # Python
 __pycache__/

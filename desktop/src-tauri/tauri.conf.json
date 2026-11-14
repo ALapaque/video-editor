@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "moto-blur",
+  "productName": "Flouto",
   "version": "0.1.0",
   "identifier": "be.motoblur.app",
   "build": {
@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "moto-blur",
+        "title": "Flouto",
         "width": 1500,
         "height": 950,
         "minWidth": 1100,
@@ -23,14 +23,39 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "resources": {
-      "../engine-dist/moto-blur-engine/": "engine/"
+      "../engine-dist/flouto-engine/": "engine/"
     },
     "licenseFile": "../../LICENSE",
-    "macOS": { "signingIdentity": "-", "minimumSystemVersion": "12.0" },
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "12.0"
+    },
     "shortDescription": "Floutage automatique et montage simple pour vidéos moto",
-    "category": "Video"
+    "category": "Video",
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1MkQ1NkNEQkEwNkE3NDAKUldSQXB3YTZ6Vll0RlJBUVZhR1hEbTNHSHM0OUdveDBWTGtSME5JU0VtenN0bW1ETkhYNmxlZGsK",
+      "endpoints": [
+        "https://github.com/ALapaque/video-editor/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

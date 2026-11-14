@@ -401,7 +401,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <header class="top">
-      <span class="brand"><Logo /><strong>moto-blur</strong></span>
+      <span class="brand"><Logo /><strong>Flouto</strong></span>
       <span v-if="project" class="project" :title="project.path">{{ project.name }}</span>
       <nav v-if="project" class="steps" aria-label="Étapes">
         <button
@@ -522,7 +522,7 @@ onBeforeUnmount(() => {
 
     <main v-else-if="state.loaded" class="welcome">
       <WelcomeArt />
-      <h1>moto-blur</h1>
+      <h1>Flouto</h1>
       <p class="lead">Floutage automatique des visages, des plaques et du compteur, avec un montage simple. Tout reste sur cette machine.</p>
       <button class="primary large" :disabled="busy" @click="picker = 'open'"><Icon name="folder" />Ouvrir une vidéo ou un projet…</button>
       <!-- sans projet ouvert, pas de ligne de guide : la file en cours se montre ici -->

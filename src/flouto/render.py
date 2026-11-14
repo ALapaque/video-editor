@@ -71,13 +71,13 @@ def check_ready(project: pj.Project, segments: list[ResolvedSegment], output: Pa
         if needed_intervals(project, clip):
             raise RenderError(
                 f"le clip {clip.id} contient des passages gardés qui n'ont pas été analysés. "
-                "Lancez d'abord « moto-blur analyze » sur ce projet : sans cela, ces passages "
+                "Lancez d'abord « flouto analyze » sur ce projet : sans cela, ces passages "
                 "sortiraient sans flou."
             )
         if missing_span(project, clip):
             raise RenderError(
                 f"le suivi d'un objet (compteur, téléphone…) ne couvre pas tous les passages gardés du clip {clip.id}. "
-                "Lancez « moto-blur analyze » sur ce projet pour le prolonger."
+                "Lancez « flouto analyze » sur ce projet pour le prolonger."
             )
     if formats_differ(used) and project.conform not in ("first", "largest"):
         lines = [

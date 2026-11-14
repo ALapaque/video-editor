@@ -65,7 +65,7 @@ def _load(spec, size, s: pj.AnalysisSettings, device: str, worked_before: bool) 
         if detector.fell_back:
             raise RuntimeError(
                 "la carte graphique ne répond plus (le chargement du modèle a échoué alors "
-                "qu'il avait réussi auparavant). Fermez moto-blur et relancez-le. Pour analyser "
+                "qu'il avait réussi auparavant). Fermez Flouto et relancez-le. Pour analyser "
                 "malgré tout sur le processeur, beaucoup plus lentement : option --device cpu."
             )
     return detector

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    moto_blur_desktop_lib::run()
+    flouto_desktop_lib::run()
 }

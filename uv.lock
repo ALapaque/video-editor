@@ -51,6 +51,41 @@ wheels = [
 ]
 
 [[package]]
+name = "flouto"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "av" },
+    { name = "numpy" },
+    { name = "onnx" },
+    { name = "onnxruntime", marker = "sys_platform != 'win32'" },
+    { name = "onnxruntime-directml", marker = "sys_platform == 'win32'" },
+    { name = "opencv-python-headless" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "av", specifier = ">=19,<20" },
+    { name = "numpy", specifier = ">=2" },
+    { name = "onnx", specifier = ">=1.16" },
+    { name = "onnxruntime", marker = "sys_platform != 'win32'", specifier = ">=1.24" },
+    { name = "onnxruntime-directml", marker = "sys_platform == 'win32'", specifier = "==1.24.4" },
+    { name = "opencv-python-headless", specifier = ">=4.10" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.8" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -98,41 +133,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/59/8f/3298e3f334832bc28dd144af6b99cdc93502a8687e71922ea68b0a319929/ml_dtypes-0.6.0-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e2d6149f3a57f405bcad5fb41e03218b8373936253f23e1ca84c0108abbc3392", size = 430823, upload-time = "2026-08-13T14:14:36.44Z" },
     { url = "https://files.pythonhosted.org/packages/93/d2/f2dbf118f42ce4c325a139c9236737f436b7f8e00cd18701c99ef2405e6f/ml_dtypes-0.6.0-cp315-cp315t-win_amd64.whl", hash = "sha256:ce7563e0b1a4482cbc1b4a6272145e54e4489e54fe7428f94908c3d87103abfa", size = 465119, upload-time = "2026-08-13T14:14:37.776Z" },
     { url = "https://files.pythonhosted.org/packages/5a/ff/bda40387b5c5c64254595f4d81a12351770856acc5de4e6d43606a31f161/ml_dtypes-0.6.0-cp315-cp315t-win_arm64.whl", hash = "sha256:f6cb525101b6b903779188c1e9e9490c343b455ab822883e02cf01e5547338d2", size = 572666, upload-time = "2026-08-13T14:14:38.993Z" },
-]
-
-[[package]]
-name = "moto-blur"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "av" },
-    { name = "numpy" },
-    { name = "onnx" },
-    { name = "onnxruntime", marker = "sys_platform != 'win32'" },
-    { name = "onnxruntime-directml", marker = "sys_platform == 'win32'" },
-    { name = "opencv-python-headless" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", specifier = ">=19,<20" },
-    { name = "numpy", specifier = ">=2" },
-    { name = "onnx", specifier = ">=1.16" },
-    { name = "onnxruntime", marker = "sys_platform != 'win32'", specifier = ">=1.24" },
-    { name = "onnxruntime-directml", marker = "sys_platform == 'win32'", specifier = "==1.24.4" },
-    { name = "opencv-python-headless", specifier = ">=4.10" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = ">=0.8" },
 ]
 
 [[package]]
