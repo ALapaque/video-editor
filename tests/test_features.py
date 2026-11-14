@@ -1031,3 +1031,30 @@ def test_followed_blur_can_only_be_shortened(tmp_path, tracker_available):
     engine.step(forward=False)  # « Annuler » rend au flou toute sa durée
     restored = project.analysis["c1"].tracks[0]
     assert (restored.obs[0][0], restored.obs[-1][0]) == before
+
+
+# --- Qualité de l'aperçu -----------------------------------------------------------------------
+
+
+def test_preview_sizes_follow_the_short_side_and_fine_preview_on_demand(api, tmp_path):
+    from moto_blur.proxy import build_proxy, fine_is_useful, proxy_path, proxy_size
+
+    wide = pj.VideoInfo("hevc", 3840, 2160, "yuv420p10le", "30", "1/15360", 0, 512 * 300, 300, 8_000_000)
+    tall = pj.VideoInfo("hevc", 1440, 2560, "yuv420p10le", "30", "1/15360", 0, 512 * 300, 300, 8_000_000)
+    assert proxy_size(wide) == (960, 540) and proxy_size(wide, fine=True) == (1920, 1080)
+    # vidéo verticale : 540 pixels de LARGE (et non 304), 1080 en aperçu net
+    assert proxy_size(tall) == (540, 960) and proxy_size(tall, fine=True) == (1080, 1920)
+    assert fine_is_useful(tall) and not fine_is_useful(api.project.clips[0].video)  # 320 x 180 : inutile
+    # l'aperçu rapide d'une vidéo horizontale garde son nom (pas de fabrication à refaire)
+    clip = api.project.clips[0]
+    assert proxy_path(api.project, clip).name == f"{clip.id}-{clip.fingerprint}.mp4"
+    assert proxy_path(api.project, clip, fine=True).name.endswith("-1080.mp4")
+    assert proxy_path(api.project, pj.Clip("c9", "v.mp4", "abc", tall)).name == "c9-abc-v540.mp4"
+    state = api("GET", "/api/state")["project"]["clips"][0]
+    assert state["proxy_fine"] is False and state["fine_useful"] is False
+    build_proxy(api.project, clip)
+    build_proxy(api.project, clip, fine=True)
+    assert api("GET", "/api/state")["project"]["clips"][0]["proxy_fine"] is True
+    light = api("GET", f"/media/{clip.id}", raw=True)
+    fine = api("GET", f"/media/{clip.id}?q=fine", raw=True)
+    assert light[4:8] == b"ftyp" and fine[4:8] == b"ftyp" and len(fine) != len(light)  # crf différent
