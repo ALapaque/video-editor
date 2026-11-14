@@ -526,16 +526,21 @@ secret**, créez le secret `TAURI_SIGNING_PRIVATE_KEY` avec le contenu de la cl�
 signature des mises à jour. **Gardez une copie de cette clé** : sans elle, les applications
 déjà installées ne pourront plus se mettre à jour (il faudrait les réinstaller à la main).
 
-Ensuite, pour chaque version, depuis `main` :
+Ensuite, **rien à faire** : chaque fusion dans `main` qui modifie l'application, le moteur ou
+l'interface publie automatiquement une nouvelle version (v0.2.0, puis v0.2.1, v0.2.2…).
+GitHub fabrique l'installeur Windows et l'image Mac (une quinzaine de minutes) ; la version
+n'apparaît sur la page des versions, et n'est proposée aux applications installées, que si
+les deux ont réussi. Une fusion qui ne touche que la documentation ne publie rien.
+
+Pour passer à un autre numéro (v0.3.0, v1.0.0…), poussez vous-même l'étiquette voulue depuis
+`main` ; les versions automatiques suivantes repartiront de là :
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
-GitHub fabrique l'installeur Windows et l'image Mac (une quinzaine de minutes), puis publie
-la version sur la page des versions avec le fichier que les applications installées
-consultent. Le numéro doit augmenter à chaque fois (v0.2.0, v0.2.1, v0.3.0…).
+Suivi des fabrications : <https://github.com/ALapaque/video-editor/actions/workflows/installeurs.yml>.
 
 Pour seulement fabriquer les installeurs sans rien publier : onglet **Actions**, « Installeurs »,
 « Run workflow » ; ils sont téléchargeables en bas de la page de l'exécution (« Artifacts »).

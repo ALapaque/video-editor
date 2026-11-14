@@ -1,26 +1,111 @@
 name: Installeurs
 
-# Fabrique l'application de bureau pour macOS (Apple Silicon) et Windows.
+# Fabrique l'application de bureau pour macOS (Apple Silicon) et Windows, et la publie.
 #
-# - Étiquette de version (v0.2.0…) : publie une version sur la page « Releases » du dépôt, avec
-#   l'installeur Windows (.exe), l'image Mac (.dmg) et le fichier que l'application consulte
-#   pour proposer ses mises à jour (latest.json). Les paquets de mise à jour sont signés avec la
-#   clé du secret TAURI_SIGNING_PRIVATE_KEY.
-# - Lancement manuel (onglet Actions) : fabrique les installeurs sans rien publier ; ils sont
-#   téléchargeables en bas de la page de l'exécution, section « Artifacts ».
+# - Fusion dans main (si l'application, le moteur ou l'interface ont changé) : nouvelle version
+#   publiée automatiquement. Numéro : le dernier v… publié, dernier chiffre + 1 (v0.2.0, v0.2.1…).
+#   Pour changer de numéro « majeur » (v0.3.0…), pousser soi-même l'étiquette voulue : la suite
+#   repartira de là.
+# - Étiquette de version poussée à la main (v0.3.0…) : publie cette version.
+# - Lancement manuel (onglet Actions, « Run workflow ») : fabrique les installeurs sans rien
+#   publier ; ils sont dans « Artifacts », en bas de la page de l'exécution.
 #
-# Rien ne se fabrique plus à chaque modification : chaque fabrication consomme des minutes de
-# GitHub Actions (celles de macOS comptent dix fois).
+# Une version est d'abord préparée en brouillon ; elle n'est publiée (et proposée en mise à
+# jour aux applications installées) que si Windows ET macOS ont réussi.
+# Les paquets de mise à jour sont signés avec le secret TAURI_SIGNING_PRIVATE_KEY.
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths:
+      - "src/**"
+      - "ui/src/**"
+      - "desktop/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/installeurs.yml"
 
 permissions:
   contents: write
 
+# Deux fusions rapprochées : les versions se suivent, elles ne se chevauchent pas.
+concurrency:
+  group: installeurs
+  cancel-in-progress: false
+
 jobs:
+  preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      version: ${{ steps.version.outputs.version }}
+      release_id: ${{ steps.brouillon.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Numéro de version
+        id: version
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            PUBLISH=true
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            LAST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+            if [ -z "$LAST" ]; then
+              VERSION=0.2.0
+            else
+              IFS=. read -r MAJ MIN PAT <<< "${LAST#v}"
+              VERSION="$MAJ.$MIN.$((PAT + 1))"
+            fi
+            PUBLISH=true
+          else
+            VERSION=0.0.0
+            PUBLISH=false
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "Version : $VERSION (publication : $PUBLISH)"
+
+      - name: Clé de signature des mises à jour
+        if: steps.version.outputs.publish == 'true'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Le secret TAURI_SIGNING_PRIVATE_KEY manque (Settings > Secrets and variables > Actions). Voir TUTORIEL.md, section 9."
+            exit 1
+          fi
+
+      - name: Version en brouillon
+        id: brouillon
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          # Un brouillon laissé par une fabrication ratée est remplacé.
+          OLD=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id")
+          for id in $OLD; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"; done
+          cat > notes.md <<'NOTES'
+          **Windows** : téléchargez le fichier qui finit par `_x64-setup.exe` ci-dessous et lancez-le. Si Windows affiche « Windows a protégé votre ordinateur », cliquez « Informations complémentaires », puis « Exécuter quand même ».
+
+          **Mac (puce Apple)** : téléchargez le fichier `.dmg`, ouvrez-le et glissez moto-blur dans Applications. Au premier lancement, ouvrez Réglages Système > Confidentialité et sécurité et cliquez « Ouvrir quand même ». Si macOS dit que l'application est « endommagée », tapez dans le Terminal : `xattr -cr /Applications/moto-blur.app`
+
+          Une fois installé, moto-blur propose lui-même les versions suivantes au démarrage.
+          NOTES
+          sed -i 's/^          //' notes.md
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "moto-blur $TAG" --notes-file notes.md
+          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -1)
+          echo "release_id=$ID" >> "$GITHUB_OUTPUT"
+
   application:
+    needs: preparation
     strategy:
       fail-fast: false
       matrix:
@@ -37,21 +122,11 @@ jobs:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Clé de signature des mises à jour
-        shell: bash
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::error::Le secret TAURI_SIGNING_PRIVATE_KEY manque (Settings > Secrets and variables > Actions). Voir TUTORIEL.md, section 9."
-            exit 1
-          fi
-
       - name: Numéro de version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: needs.preparation.outputs.publish == 'true'
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          node -e "const f='desktop/src-tauri/tauri.conf.json',fs=require('fs');const c=JSON.parse(fs.readFileSync(f));c.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')" "$VERSION"
-          echo "Version $VERSION"
+          node -e "const f='desktop/src-tauri/tauri.conf.json',fs=require('fs');const c=JSON.parse(fs.readFileSync(f));c.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')" "${{ needs.preparation.outputs.version }}"
 
       - name: Interface web
         working-directory: ui
@@ -84,35 +159,39 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Publication de la version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Installeurs ajoutés à la version
+        if: needs.preparation.outputs.publish == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: moto-blur ${{ github.ref_name }}
-          releaseBody: |
-            **Windows** : téléchargez le fichier `.exe` ci-dessous et lancez-le. Si Windows affiche « Windows a protégé votre ordinateur », cliquez « Informations complémentaires », puis « Exécuter quand même ».
-
-            **Mac (puce Apple)** : téléchargez le fichier `.dmg`, ouvrez-le et glissez moto-blur dans Applications. Au premier lancement, ouvrez Réglages Système > Confidentialité et sécurité et cliquez « Ouvrir quand même ». Si macOS dit que l'application est « endommagée », tapez dans le Terminal : `xattr -cr /Applications/moto-blur.app`
-
-            Une fois installé, moto-blur propose lui-même les versions suivantes au démarrage.
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.preparation.outputs.release_id }}
           includeUpdaterJson: true
 
       - name: Installeurs (sans publication)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: needs.preparation.outputs.publish != 'true'
         working-directory: desktop
         run: npx tauri build
 
       - uses: actions/upload-artifact@v4
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: needs.preparation.outputs.publish != 'true'
         with:
           name: moto-blur-${{ matrix.os }}
           path: |
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
+
+  publication:
+    needs: [preparation, application]
+    if: needs.preparation.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publication de la version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/${{ needs.preparation.outputs.release_id }}" \
+            -F draft=false -f make_latest=true --jq '.html_url'
