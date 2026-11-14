@@ -61,6 +61,9 @@ export interface Track {
   end: number;
   extend_before_s: number | null;
   extend_after_s: number | null;
+  /** Morceau d'objet suivi que le logiciel a « retrouvé » tout seul après une coupure ou une
+   *  perte : une supposition, qui se retire d'un clic comme un flou automatique. */
+  reacquired?: boolean;
   /** Objet suivi dont le contour précis a été calculé (flou qui épouse l'objet). */
   contour?: boolean;
   score: number;
@@ -169,6 +172,44 @@ export interface Job {
   message: string;
   /** Identifiant de la zone créée par le traitement (flou ajouté qui suit), sinon null. */
   created: number | null;
+  /** File d'attente (`kind === "batch"`) : rang de la vidéo en cours, nombre de vidéos, son nom. */
+  item?: [number, number, string] | null;
+  /** File d'attente : un résultat par vidéo, connu à la fin du traitement. */
+  results?: BatchResult[] | null;
+  /** Heure de fin du traitement (secondes Unix), null tant qu'il tourne. */
+  finished?: number | null;
+}
+
+/** Résultat d'une vidéo de la file d'attente. `path` : le projet créé à côté de la vidéo. */
+export interface BatchResult {
+  path: string;
+  name: string;
+  ok: boolean;
+  message: string;
+  seconds: number;
+}
+
+/** Effet d'un réglage de flou sur les corrections déjà faites (voir `Tune`). */
+export interface TuneCount {
+  kept: number; // flous gardés qui le resteraient
+  lost: number; // flous gardés qui seraient perdus
+  wrong_avoided: number; // flous retirés qui ne seraient plus produits
+  wrong_left: number; // flous retirés qui le seraient encore
+  new: number; // objets jamais regardés qui deviendraient floutés
+}
+
+/** « Régler d'après mes corrections » : réglages de flou proposés d'après les flous retirés. */
+export interface Tune {
+  usable: boolean;
+  /** Pourquoi rien n'est proposé, quand `usable` est faux. */
+  reason: string;
+  /** Flous que l'utilisateur a retirés : les erreurs du logiciel. */
+  corrections: number;
+  kept: number;
+  now: TuneCount;
+  best: TuneCount;
+  /** Seulement les réglages à changer. */
+  settings: { face_min_score?: number; plate_min_score?: number; min_hits?: number };
 }
 
 export interface State {

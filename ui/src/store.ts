@@ -192,19 +192,21 @@ export function notify(message: string, kind: "info" | "error" = "info", sticky 
   if (kind === "info" && !sticky) window.setTimeout(() => state.toast === message && (state.toast = ""), 5000);
 }
 
-function apply(next: State): void {
+export function apply(next: State): void {
   const t = time.value;
   const was = state.data.job?.state === "running";
   const now = next.job?.state === "running";
   if (now && !was) {
     // nouveau traitement : le dialogue de progression s'ouvre, même s'il avait été réduit avant
     // (en mode simple, la progression s'affiche dans la page de l'assistant, sans dialogue)
-    state.jobOpen = state.mode !== "simple";
+    // (la file d'attente a son propre dialogue, dans les deux modes : voir batch.ts)
+    state.jobOpen = state.mode !== "simple" && next.job?.kind !== "batch";
     state.jobFinished = false;
   } else if (was && !now && next.job) {
     // un aperçu prêt n'a rien à dire : son dialogue se ferme seul ; sinon le résultat reste affiché,
     // ou attend dans l'indicateur si le dialogue était réduit
     if (next.job.kind === "proxy" && next.job.state === "done") state.jobOpen = false;
+    else if (next.job.kind === "batch") state.jobOpen = false; // son dialogue montre le résultat
     else if (!state.jobOpen) state.jobFinished = true;
   } else if (!next.job) {
     state.jobOpen = false;
@@ -234,7 +236,7 @@ export async function refresh(): Promise<void> {
     state.loaded = true;
     const job = next.job;
     // dialogue de progression ouvert : il affiche lui-même le résultat ; réduit : message habituel
-    if (before === "running" && job && job.state !== "running" && job.message && !state.jobOpen && state.mode !== "simple") {
+    if (before === "running" && job && job.state !== "running" && job.message && !state.jobOpen && state.mode !== "simple" && job.kind !== "batch") {
       notify(job.message, job.state === "error" ? "error" : "info", true); // reste affiché jusqu'au clic
     }
     if (next.project && !job?.state.startsWith("run") && next.project.clips.some((c) => !c.proxy && !c.missing)) {

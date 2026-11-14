@@ -50,6 +50,7 @@ def run_batch(
     paths: list[Path], preset: str | None = None, use_profile: bool = False, device: str = "auto",
     on_item: Callable[[int, int, str], None] | None = None,
     current: pj.Project | None = None, detect_fn=None,
+    on_result: Callable[[list[dict]], None] | None = None,
 ) -> list[dict]:
     """Analyse chaque vidéo ou projet de la liste. Renvoie un résultat par élément :
     {"path", "name", "ok", "message", "seconds"}.
@@ -73,7 +74,10 @@ def run_batch(
                     and Path(current.path).resolve() == Path(project.path).resolve():
                 project = current
             entry["path"] = str(project.path)
-            if preset and preset != project.preset:
+            # Le type de vidéo choisi vaut pour les vidéos neuves : un projet déjà analysé garde
+            # le sien, sinon toute son analyse serait refaite sans qu'on l'ait demandé.
+            analysed = any(state.analyzed for state in project.analysis.values())
+            if preset and preset != project.preset and not analysed:
                 apply_preset(project, preset)
             notes: list[str] = []
             if use_profile and library.profile_summary() and not any(
@@ -98,6 +102,10 @@ def run_batch(
             break
         except Exception as exc:  # noqa: BLE001 - une vidéo en erreur n'arrête pas les suivantes
             entry["message"] = f"Erreur : {exc}"
+        if on_result:
+            on_result(list(results))  # résultats publiés au fil de l'eau
+    if on_result:
+        on_result(list(results))
     return results
 
 

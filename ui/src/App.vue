@@ -6,8 +6,19 @@ import { onBeforeUnmount, onMounted } from "vue";
 import Advanced from "./components/Advanced.vue";
 import ModeChoice from "./components/ModeChoice.vue";
 import Wizard from "./components/Wizard.vue";
-import { historyShortcut, redo, undo } from "./extras";
-import { loadMode, refresh, state } from "./store";
+import { dropToBatch } from "./batch";
+import { historyShortcut, installDrop, redo, undo } from "./extras";
+import { loadMode, refresh, send, state } from "./store";
+import { drop, droppedFile } from "./wizard";
+
+/** Fichiers déposés sur la fenêtre (application installée) : la file d'attente les prend si son
+ *  dialogue est ouvert ; sinon l'assistant décide ; en mode avancé, le premier s'ouvre simplement. */
+async function onDrop(paths: string[]): Promise<void> {
+  if (dropToBatch(paths)) return;
+  if (drop.target) return drop.target(paths);
+  const file = droppedFile(paths);
+  if (file && (await send("POST", "/api/open", { path: file }))) await refresh();
+}
 
 /** Ctrl+Z / Ctrl+Y : annuler et rétablir, dans les deux modes. */
 function onHistoryKey(event: KeyboardEvent): void {
@@ -29,6 +40,7 @@ function onHistoryKey(event: KeyboardEvent): void {
 loadMode();
 onMounted(() => {
   void refresh();
+  installDrop((paths) => void onDrop(paths));
   window.addEventListener("keydown", onHistoryKey);
 });
 onBeforeUnmount(() => window.removeEventListener("keydown", onHistoryKey));

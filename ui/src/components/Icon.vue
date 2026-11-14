@@ -52,6 +52,8 @@ const paths = {
   /* === nouveau flux, mode avancé === */
   ban: '<circle cx="8" cy="8" r="5.75"/><path d="m3.95 3.95 8.1 8.1"/>',
   /* === fin : nouveau flux, mode avancé === */
+  /* file d'attente : plusieurs vidéos à la suite */
+  layers: '<path d="M8 2.25 14 5.4 8 8.55 2 5.4z"/><path d="m2.5 8.1 5.5 2.9 5.5-2.9M2.5 10.7 8 13.6l5.5-2.9"/>',
 } as const;
 export type IconName = keyof typeof paths;
 </script>

@@ -9,10 +9,11 @@
 // Tout ce qui est facultatif (réglages habituels, type de vidéo, planche des flous, extrait
 // d'essai…) se passe d'un clic sur le bouton principal : le chemin court mène toujours à la vidéo.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { call, type ExportPreset, type Job, type Preset, type RenderOptions, type ZoneTuple } from "../api";
+import { call, type ExportPreset, type Job, type Preset, type RenderOptions, type Tune, type ZoneTuple } from "../api";
+import { batch, batchItemText, batchPercent, batchRunning, openBatch } from "../batch";
 import {
-  appliedBlurs, exportPresets, followBlur, formatDuration, installDrop, measureEstimate, neverBlurHere, presetInfo,
-  removeSimilar, render, renderExtract, restoreRemoved, saveProfile, saveSweep, setPreset, setTracksDisabled, undo,
+  appliedBlurs, applyTune, exportPresets, followBlur, formatDuration, measureEstimate, neverBlurHere, presetInfo,
+  removeSimilar, render, renderExtract, restoreRemoved, saveProfile, saveSweep, setPreset, setTracksDisabled, tuneGain, tuneSuggestion, undo,
 } from "../extras";
 import {
   addMark, currentEntry, currentIndex, droppedInPassage, entries, explain, extra, forceZone, leave, loop, markEntries, next, objectHere,
@@ -22,7 +23,8 @@ import {
   busy, current, droppedHere, duration, fpsOf, job, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send,
   setMode, start, state, time, trackById, zonesSteady,
 } from "../store";
-import { clock, dayText, droppedFile, wiz, type Screen } from "../wizard";
+import { clock, dayText, drop, droppedFile, wiz, type Screen } from "../wizard";
+import BatchDialog from "./BatchDialog.vue";
 import FilePicker from "./FilePicker.vue";
 import Icon, { type IconName } from "./Icon.vue";
 import Logo from "./Logo.vue";
@@ -181,6 +183,7 @@ function enter(): void {
     case "analyse": return void (measureFailed.value = false);
     case "verify": return initVerify();
     case "export": return initExport();
+    case "done": return void offerTune();
   }
 }
 
@@ -280,20 +283,8 @@ function confirmDrop(): void {
 function fileName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
-/** Sans assistant à l'écran (mode avancé), un fichier déposé s'ouvre simplement. */
-async function openDropped(paths: string[]): Promise<void> {
-  const file = droppedFile(paths);
-  if (file && (await send("POST", "/api/open", { path: file }))) await refresh();
-}
-let dropTarget: ((paths: string[]) => void) | null = null;
-function listenDrop(): void {
-  dropTarget = dropped;
-  const handler = (paths: string[]): void => (dropTarget ? dropTarget(paths) : void openDropped(paths));
-  if (!wiz.dropReady) {
-    wiz.dropReady = true;
-    installDrop(handler); // une seule fois : pose aussi les écouteurs de la fenêtre
-  } else (window as unknown as { motoBlurDrop: (paths: string[]) => void }).motoBlurDrop = handler; // repris après un passage en mode avancé
-}
+// (l'écoute de la fenêtre est posée par l'application ; sans assistant à l'écran, ou quand le
+// dialogue de la file d'attente est ouvert, les fichiers déposés ne passent pas par ici)
 
 // --- 1 bis. Reprendre vos réglages habituels ? -------------------------------------------
 const psub = ref<"ask" | "running" | "result">("ask");
@@ -956,6 +947,39 @@ async function keepProfile(): Promise<void> {
   savingProfile.value = false;
 }
 
+// Fin de l'assistant : « régler d'après mes corrections ». Les flous retirés pendant la relecture
+// sont des erreurs du logiciel ; s'il existe des réglages qui n'en produiraient plus une partie
+// sans perdre un seul flou gardé, une phrase le propose. Sinon, rien ne s'affiche.
+const tune = ref<Tune | null>(null);
+const tuned = ref(""); // projet dont les réglages viennent d'être améliorés
+const tuning = ref(false);
+async function offerTune(): Promise<void> {
+  const path = p.value?.path ?? "";
+  tune.value = null;
+  if (!path || tuned.value === path) return;
+  const found = await tuneSuggestion();
+  if (alive && wiz.screen === "done" && p.value?.path === path && found?.usable) tune.value = found;
+}
+async function improve(): Promise<void> {
+  const found = tune.value;
+  if (!found || !p.value || busy.value || tuning.value) return;
+  tuning.value = true;
+  const path = p.value.path;
+  const done = await applyTune(found);
+  tuning.value = false;
+  if (!done) return; // refusé : le message est affiché
+  tune.value = null;
+  tuned.value = path;
+  if (wiz.profileSaved === path) wiz.profileSaved = ""; // les réglages enregistrés avant ne sont plus à jour
+}
+// « Annuler la dernière action » défait l'amélioration : la proposition revient
+watch(() => state.data, (data) => {
+  if (data.undone && wiz.screen === "done" && tuned.value) {
+    tuned.value = "";
+    void offerTune();
+  }
+});
+
 // --- Fin des traitements ---------------------------------------------------------------
 watch(() => job.value?.state, (now, before) => {
   const j = job.value;
@@ -985,7 +1009,7 @@ watch(() => job.value?.state, (now, before) => {
 const root = ref<HTMLDivElement>();
 const progress = ref<InstanceType<typeof WizProgress>>();
 function onKey(event: KeyboardEvent): void {
-  if (picker.value || storageOpen.value) return; // le sélecteur de fichiers et le dialogue ont leurs propres touches
+  if (picker.value || storageOpen.value || batch.open) return; // le sélecteur de fichiers et les dialogues ont leurs propres touches
   if (dropAsk.value) {
     if (event.key !== "Escape" && event.key !== "Enter") return;
     event.preventDefault();
@@ -1035,13 +1059,13 @@ function releaseFocus(event: MouseEvent): void {
 }
 
 const withVideo = computed(() => {
-  if (!p.value || !previewReady.value) return false;
+  if (!p.value || !previewReady.value || batchRunning.value) return false;
   if (wiz.screen === "object") return true;
   if (wiz.screen === "trim") return !advancedMontage.value;
   return wiz.screen === "verify" && (vphase.value === "sweep" || inQueue.value);
 });
 /** La planche des flous occupe toute la largeur. */
-const sheetShown = computed(() => state.loaded && !!p.value && !lost.value.length && previewReady.value && wiz.screen === "verify" && vphase.value === "sheet");
+const sheetShown = computed(() => state.loaded && !batchRunning.value && !!p.value && !lost.value.length && previewReady.value && wiz.screen === "verify" && vphase.value === "sheet");
 
 // --- Mise en page des écrans avec la vidéo -------------------------------------------------
 // La vidéo prend toute la hauteur disponible (vidéo verticale comprise), ses commandes juste
@@ -1084,7 +1108,7 @@ const savedPreview = state.preview;
 watch([() => p.value?.path, previewReady], sync);
 onMounted(() => {
   window.addEventListener("keydown", onKey, true);
-  listenDrop();
+  drop.target = dropped;
   sync();
 });
 onBeforeUnmount(() => {
@@ -1092,7 +1116,7 @@ onBeforeUnmount(() => {
   resizer.disconnect();
   quit();
   alive = false;
-  dropTarget = null;
+  drop.target = null;
   state.preview = savedPreview === "blur" ? "boxes" : savedPreview;
 });
 </script>
@@ -1202,6 +1226,20 @@ onBeforeUnmount(() => {
           <span class="spinner large"></span>
           <p class="wiz-lead">Démarrage…</p>
         </template>
+        <!-- Plusieurs vidéos sont en cours d'analyse : le logiciel est occupé, rien d'autre n'est possible -->
+        <template v-else-if="batchRunning">
+          <h1>Vos vidéos sont en cours d'analyse…</h1>
+          <p class="wiz-lead" data-batch-item><strong>{{ batchItemText }}</strong></p>
+          <div class="wiz-progress" role="status" aria-live="off">
+            <p class="wiz-percent mono">{{ batchPercent }}<small> %</small></p>
+            <span class="bar tall"><span :style="{ transform: `scaleX(${batchPercent / 100})` }"></span></span>
+            <p class="wiz-phase">Vous pouvez laisser l'ordinateur travailler. Ne fermez pas le logiciel.</p>
+          </div>
+          <div class="wiz-actions">
+            <button class="primary big" data-primary data-batch-show @click="openBatch()"><Icon name="layers" :size="18" />Afficher la file</button>
+            <button class="big" data-batch-stop @click="openBatch(true)">Arrêter…</button>
+          </div>
+        </template>
         <template v-else-if="p && lost.length">
           <span class="wiz-icon warn"><Icon name="alert" :size="34" /></span>
           <h1>La vidéo est introuvable</h1>
@@ -1244,7 +1282,10 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <RecentList :exclude="p?.path" :disabled="busy" @open="picked" />
-          <button class="wiz-link" data-storage @click="storageOpen = true"><Icon name="drive" />Libérer de la place</button>
+          <div class="wiz-links wiz-more">
+            <button class="wiz-link" data-batch @click="openBatch()"><Icon name="layers" />Analyser plusieurs vidéos à la suite{{ batch.last ? "\u00a0: voir le résultat" : "" }}</button>
+            <button class="wiz-link" data-storage @click="storageOpen = true"><Icon name="drive" />Libérer de la place</button>
+          </div>
         </template>
 
         <!-- 1 bis. Réglages habituels -->
@@ -1701,6 +1742,12 @@ onBeforeUnmount(() => {
             <button class="primary big" data-primary @click="reveal()"><Icon name="folderOpen" :size="18" />Ouvrir le dossier</button>
             <button class="big" @click="another">Flouter une autre vidéo</button>
           </div>
+          <!-- proposition discrète, seulement si les corrections permettent d'améliorer les réglages -->
+          <div v-if="tune" class="wiz-tune" data-tune>
+            <p><Icon name="sliders" /><span>Le logiciel peut apprendre de vos corrections : {{ tuneGain(tune) }}, sans perdre aucun flou que vous avez gardé.{{ tune.best.new ? ` En échange, ${tune.best.new > 1 ? `${tune.best.new} objets qu'il avait laissés nets seraient floutés` : "1 objet qu'il avait laissé net serait flouté"}.` : "" }}</span></p>
+            <button class="small" data-tune-apply :disabled="busy || tuning" @click="improve">Oui, améliorer</button>
+          </div>
+          <p v-else-if="p && tuned === p.path" class="wiz-note shown wiz-tuned" data-tuned role="status"><Icon name="check" /><span>C'est réglé. Pour en profiter dans vos prochaines vidéos, enregistrez ces réglages ci-dessous.</span></p>
           <div v-if="p" class="wiz-keep">
             <button class="big" data-keep :disabled="savingProfile || profileKept" @click="keepProfile"><Icon :name="profileKept ? 'check' : 'gauge'" :size="18" />{{ profileKept ? "Réglages enregistrés" : "Enregistrer ces réglages pour mes prochaines vidéos" }}</button>
             <small>À la prochaine vidéo, le logiciel vous proposera de flouter les mêmes choses{{ objects.length ? ` et cherchera tout seul ${list(objects.map((o) => `« ${capital(o.name)} »`))}` : "" }}.{{ profile && !profileKept ? " Vos réglages enregistrés auparavant seront remplacés." : "" }}</small>
@@ -1714,6 +1761,9 @@ onBeforeUnmount(() => {
     </Transition>
     <Transition name="modal">
       <StorageDialog v-if="storageOpen" @close="storageOpen = false" />
+    </Transition>
+    <Transition name="modal">
+      <BatchDialog v-if="batch.open" simple @open="picked" />
     </Transition>
     <Transition name="modal">
       <div v-if="dropAsk" class="modal" @pointerdown.self="dropAsk = ''">
@@ -1808,6 +1858,16 @@ onBeforeUnmount(() => {
 .wiz-extract-path { font-size: 13.5px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .wiz-extract button.small { height: 32px; padding: 0 12px; font-size: 14px; }
 .wiz-hint { max-width: 62ch; color: var(--faint); font-size: 14px; }
+
+/* accueil : liens discrets sous les vidéos récentes */
+.wiz-more { margin-top: 6px; }
+/* fin : régler d'après les corrections (proposition discrète) */
+.wiz-tune { align-self: stretch; display: flex; align-items: center; gap: 12px; margin-top: 10px; color: var(--dim); font-size: 14.5px; line-height: 1.45; }
+.wiz-tune p { flex: 1; min-width: 0; display: flex; gap: 9px; }
+.wiz-tune p .icon { flex: none; margin-top: 3px; color: var(--faint); }
+.wiz-tune button.small { flex: none; height: 34px; padding: 0 13px; font-size: 14px; }
+.wiz-panel .wiz-tuned { margin-top: 10px; color: var(--dim); font-size: 14.5px; }
+.wiz-panel .wiz-tuned .icon { color: var(--face); }
 
 /* fin : retenir ces réglages */
 .wiz-keep { align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 14px; padding-top: 18px; border-top: 1px solid var(--line); }

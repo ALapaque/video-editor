@@ -417,7 +417,7 @@ def _contour_project(tmp_path):
     project = make_project(tmp_path, path)
     analyze_project(project, detect_fn=none())
     clip = project.clips[0]
-    tracks = dash.track_from_click(project, clip, round(10 * clip.video.frame_pts), truth[10])
+    tracks = dash.track_from_click(project, clip, round(10 * clip.video.frame_pts), truth[10], reacquire=True)
     return project, clip, tracks, truth
 
 

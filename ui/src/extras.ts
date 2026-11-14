@@ -2,7 +2,7 @@
 // flou ajouté qui suit, relecture mémorisée, capture, vignettes, récents, ménage, profil.
 // Couche commune aux deux modes : les composants l'importent, sans la dupliquer.
 
-import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track } from "./api";
+import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track, type Tune } from "./api";
 import { computed } from "vue";
 import { busy, mapRange, notify, project, refresh, send, start, state, trackById } from "./store";
 
@@ -221,6 +221,34 @@ export async function applyProfile(): Promise<void> {
   await start("/api/profile/apply");
 }
 
+// --- Régler d'après mes corrections ---------------------------------------------------------
+// Les flous que l'utilisateur a retirés sont des erreurs du logiciel. Le moteur cherche, sans rien
+// réanalyser, les réglages de flou qui n'en produiraient plus le plus grand nombre, sans perdre un
+// seul flou gardé. La proposition s'applique comme un réglage de flou ordinaire (annulable).
+
+/** Proposition du moteur (réponse immédiate). `undefined` si le moteur ne répond pas. */
+export async function tuneSuggestion(): Promise<Tune | undefined> {
+  try {
+    return await call<Tune>("GET", "/api/tune");
+  } catch {
+    return undefined;
+  }
+}
+
+/** « 14 des 18 flous que vous avez retirés ne seraient plus produits » (sans majuscule ni point). */
+export function tuneGain(tune: Tune): string {
+  const n = tune.best.wrong_avoided;
+  const total = tune.corrections;
+  if (total <= 1) return "le flou que vous avez retiré ne serait plus produit";
+  if (n >= total) return `les ${total} flous que vous avez retirés ne seraient plus produits`;
+  return `${n} des ${total} flous que vous avez retirés ne ${n > 1 ? "seraient plus produits" : "serait plus produit"}`;
+}
+
+/** Applique les réglages proposés. Vrai si le moteur les a acceptés. */
+export async function applyTune(tune: Tune): Promise<boolean> {
+  return !!(await send("PUT", "/api/settings", { blur: tune.settings }));
+}
+
 // --- Glisser-déposer (application installée) ---------------------------------------------
 
 /** L'application installée appelle `window.motoBlurDrop(chemins)` quand des fichiers sont déposés
@@ -317,7 +345,9 @@ export const beforeExport = computed(() => ({
 export async function removeBlur(clip: string, id: number, group: number[] = []): Promise<void> {
   const track = trackById(clip, id);
   if (!track || track.disabled) return;
-  if (track.source !== "auto") {
+  // Un flou que vous avez posé vous-même ne part pas d'un clic ; un morceau que le logiciel a
+  // « retrouvé » tout seul (une supposition), si.
+  if (track.source !== "auto" && !track.reacquired) {
     notify("Ce flou a été ajouté par vous : supprimez-le depuis la liste des flous.");
     return;
   }
@@ -325,7 +355,7 @@ export async function removeBlur(clip: string, id: number, group: number[] = [])
   // en une seule action, pour que « cliquez dessus, il disparaît » soit vrai.
   const others = group.filter((g) => {
     const t = trackById(clip, g);
-    return g !== id && !!t && t.source === "auto" && !t.disabled;
+    return g !== id && !!t && (t.source === "auto" || !!t.reacquired) && !t.disabled;
   });
   if (!(await send("PATCH", "/api/tracks", { clip, ids: [id, ...others], disabled: true }))) return;
   let similar: number[] = [];
