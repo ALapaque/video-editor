@@ -32,7 +32,8 @@ estimation de durée, planche de vignettes pour retirer les faux flous, relectur
 export d'un extrait de contrôle et préréglages d'export, capture d'image, profil « ma moto »,
 projets récents, ménage des fichiers d'aperçu, export d'images d'entraînement.
 
-**Pour démarrer : [TUTORIEL.md](TUTORIEL.md).** Choix techniques : [docs/CHOIX-TECHNIQUES.md](docs/CHOIX-TECHNIQUES.md).
+**Installer l'application (Windows, Mac) : [page des versions](https://github.com/ALapaque/video-editor/releases/latest)**, puis
+[TUTORIEL.md](TUTORIEL.md), section 9. **Pour démarrer : [TUTORIEL.md](TUTORIEL.md).** Choix techniques : [docs/CHOIX-TECHNIQUES.md](docs/CHOIX-TECHNIQUES.md).
 
 > **À lire avant de publier une vidéo.** Aucun logiciel automatique ne garantit « zéro fuite ».
 > moto-blur comble les trous de détection, prolonge les flous et élargit les zones, mais un
@@ -295,8 +296,9 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
   lui ressemble. Les objets retrouvés sont à confirmer à la vérification.
 - Le gain de vitesse du traitement des plaques « par lot » sur carte graphique n'a pas été mesuré
   (aucun gain sur processeur).
-- L'application de bureau n'est pas signée, et ses installeurs n'ont jamais été lancés sur une
-  vraie machine.
+- L'application de bureau n'est pas signée (avertissement de Windows et de macOS au premier
+  lancement), et ses installeurs n'ont jamais été lancés sur une vraie machine. Elle vérifie
+  au démarrage s'il existe une version plus récente (désactivable : `MOTO_BLUR_NO_UPDATE=1`).
 - Avec `--codec h264` sur une source 10 bits, la sortie est en 8 bits.
 
 ## Développement

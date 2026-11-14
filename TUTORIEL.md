@@ -488,36 +488,64 @@ Pour mettre à jour le logiciel : `git pull` puis `uv sync` dans le dossier `vid
 La même interface existe en application autonome : une fenêtre propre, sans terminal ni
 navigateur, et sans rien installer d'autre (ni uv, ni Python).
 
-Les installeurs sont fabriqués automatiquement par GitHub :
+### Installer
 
-1. Ouvrez <https://github.com/ALapaque/video-editor/actions/workflows/installeurs.yml>
-   (il faut être connecté à GitHub).
-2. Cliquez la ligne la plus récente marquée d'une coche verte.
-3. En bas de la page, section « Artifacts », téléchargez `moto-blur-macos-latest` (contient le
-   `.dmg` pour Mac Apple Silicon) ou `moto-blur-windows-latest` (contient l'installeur `.exe`).
-4. Décompressez le fichier ZIP téléchargé, puis ouvrez le `.dmg` ou lancez le `.exe`.
+1. Ouvrez la page des versions : <https://github.com/ALapaque/video-editor/releases/latest>
+   (pas besoin de compte GitHub).
+2. Téléchargez :
+   - **Windows** : le fichier qui finit par `_x64-setup.exe`, puis lancez-le ;
+   - **Mac (puce Apple)** : le fichier `.dmg`, ouvrez-le et glissez moto-blur dans Applications.
+3. L'application n'est pas signée (la signature est payante), d'où un avertissement la
+   première fois seulement :
+   - **Windows** : « Windows a protégé votre ordinateur » : cliquez « Informations
+     complémentaires », puis « Exécuter quand même » ;
+   - **Mac** : au premier lancement, le système refuse de l'ouvrir. Ouvrez Réglages Système,
+     « Confidentialité et sécurité », descendez jusqu'au message concernant moto-blur et
+     cliquez « Ouvrir quand même ». Si le message dit que l'application est « endommagée »,
+     tapez dans le Terminal : `xattr -cr /Applications/moto-blur.app`, puis relancez-la.
 
-Ces installeurs ont été fabriqués avec succès, mais l'application installée n'a jamais été
-lancée sur un vrai Mac ni un vrai PC : seule sa version Linux l'a été. Si elle ne démarre pas,
-utilisez `uv run moto-blur ui` (section 2), qui offre exactement la même interface, et
-dites-moi ce qui s'affiche.
+### Mises à jour
 
-Pour les fabriquer vous-même (il faut Node et Rust) :
+Au démarrage, moto-blur regarde s'il existe une version plus récente sur la page des versions.
+Si oui, il propose « Mettre à jour » ou « Plus tard » ; rien n'est téléchargé sans votre
+accord. Le paquet est vérifié par sa signature avant d'être installé, puis l'application
+redémarre ; vos projets sont conservés. C'est le seul appel réseau en dehors du premier
+téléchargement des modèles : le traitement des vidéos reste entièrement local. Pour
+désactiver cette vérification, lancez l'application avec la variable `MOTO_BLUR_NO_UPDATE=1`.
+
+### Si l'application ne démarre pas
+
+L'application installée n'a été essayée que sous Linux, jamais sur un vrai Mac ni un vrai
+PC. Si elle ne démarre pas, utilisez `uv run moto-blur ui` (section 2), qui offre exactement
+la même interface, et dites-moi ce qui s'affiche.
+
+### Publier une nouvelle version (pour le développeur)
+
+Une seule fois : dans GitHub, **Settings > Secrets and variables > Actions > New repository
+secret**, créez le secret `TAURI_SIGNING_PRIVATE_KEY` avec le contenu de la clé privée de
+signature des mises à jour. **Gardez une copie de cette clé** : sans elle, les applications
+déjà installées ne pourront plus se mettre à jour (il faudrait les réinstaller à la main).
+
+Ensuite, pour chaque version, depuis `main` :
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+GitHub fabrique l'installeur Windows et l'image Mac (une quinzaine de minutes), puis publie
+la version sur la page des versions avec le fichier que les applications installées
+consultent. Le numéro doit augmenter à chaque fois (v0.2.0, v0.2.1, v0.3.0…).
+
+Pour seulement fabriquer les installeurs sans rien publier : onglet **Actions**, « Installeurs »,
+« Run workflow » ; ils sont téléchargeables en bas de la page de l'exécution (« Artifacts »).
+
+Pour les fabriquer sur sa propre machine (il faut Node et Rust) :
 
 ```sh
 uv run --with pyinstaller pyinstaller desktop/engine.spec --distpath desktop/engine-dist --workpath desktop/engine-build -y
-cd desktop && npm install && npx tauri build
+cd desktop && npm install && TAURI_SIGNING_PRIVATE_KEY="$(cat chemin/vers/la/cle)" npx tauri build
 ```
-
-L'application n'est pas signée (la signature demande un compte développeur Apple payant et un
-certificat Windows).
-
-- **macOS** : au premier lancement, le système refuse de l'ouvrir. Ouvrez Réglages Système,
-  « Confidentialité et sécurité », descendez jusqu'au message concernant moto-blur et cliquez
-  « Ouvrir quand même ». Si le message dit que l'application est « endommagée », tapez dans le
-  Terminal : `xattr -cr /Applications/moto-blur.app`, puis relancez-la.
-- **Windows** : SmartScreen affiche un avertissement ; cliquez « Informations complémentaires »,
-  puis « Exécuter quand même ».
 
 ## 10. Ce qui m'aiderait après vos essais
 
