@@ -13,7 +13,7 @@ from pathlib import Path
 
 import av
 
-from . import library
+from . import library, names
 from . import project as pj
 from .analyze import analyze_project, apply_ignore_zones, apply_preset, refresh_review
 from .video import probe
@@ -32,7 +32,7 @@ def open_or_create(path: Path) -> pj.Project:
         raise ValueError(f"ni une vidéo ni un projet : {path.name}")
     if not path.exists():
         raise ValueError(f"fichier introuvable : {path}")
-    project_path = path.with_name(path.stem + ".motoblur.json")
+    project_path = names.project_for(path)
     if project_path.exists():
         return pj.load(project_path)
     project = pj.Project(path=project_path)
@@ -62,7 +62,7 @@ def run_batch(
     results: list[dict] = []
     for i, raw in enumerate(paths):
         path = Path(raw).expanduser()
-        name = path.name.replace(".motoblur.json", "")
+        name = names.project_name(path)
         if on_item:
             on_item(i, len(paths), name)
         started = time.perf_counter()

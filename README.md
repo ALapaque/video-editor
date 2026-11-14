@@ -1,6 +1,6 @@
-# moto-blur
+# Flouto
 
-Floutage automatique des visages et des plaques d'immatriculation dans des vidéos moto
+Floutage automatique des visages et des plaques d'immatriculation dans des vidéos (moto, vélo, balade, rue…)
 (Insta360 exportée « à plat », ou n'importe quelle action cam), avec un montage simple :
 rogner, supprimer des passages, assembler plusieurs clips, couper le son.
 
@@ -14,7 +14,7 @@ sur une machine Linux sans carte graphique et sans vraies vidéos de moto) :
 |---|---|---|
 | 1 | ligne de commande : analyse, rendu, montage minimal, mode debug, rapport | oui, sur vidéos de synthèse |
 | 2 | compteur : zone fixe, suivi à partir d'un clic | oui, sur vidéos de synthèse |
-| 3 | interface de montage et de vérification (`moto-blur ui`) | oui, dans un navigateur |
+| 3 | interface de montage et de vérification (`flouto ui`) | oui, dans un navigateur |
 | 4 | application de bureau Tauri | coque lancée sous Linux ; installeurs macOS et Windows fabriqués par GitHub Actions, jamais lancés sur une vraie machine |
 
 Essais faits sur les machines virtuelles de GitHub (sans carte graphique) : sur macOS, CoreML se
@@ -36,7 +36,7 @@ projets récents, ménage des fichiers d'aperçu, export d'images d'entraînemen
 [TUTORIEL.md](TUTORIEL.md), section 9. **Pour démarrer : [TUTORIEL.md](TUTORIEL.md).** Choix techniques : [docs/CHOIX-TECHNIQUES.md](docs/CHOIX-TECHNIQUES.md).
 
 > **À lire avant de publier une vidéo.** Aucun logiciel automatique ne garantit « zéro fuite ».
-> moto-blur comble les trous de détection, prolonge les flous et élargit les zones, mais un
+> Flouto comble les trous de détection, prolonge les flous et élargit les zones, mais un
 > objet que le détecteur n'a **jamais** vu (plaque minuscule, de nuit, sous la pluie) n'est ni
 > flouté ni signalé. Regardez la vidéo debug et la vidéo finale avant de publier.
 
@@ -66,7 +66,7 @@ uv sync
 Vérifiez ensuite ce que la machine sait accélérer :
 
 ```sh
-uv run moto-blur info
+uv run flouto info
 ```
 
 La ligne « ONNX Runtime » doit contenir `CoreML` sur Mac et `Dml` (DirectML) sur Windows.
@@ -79,8 +79,8 @@ Placez vos vidéos dans `samples/` (ce dossier n'est jamais commité).
 ### Interface
 
 ```sh
-uv run moto-blur ui                      # écran d'accueil
-uv run moto-blur ui samples/sortie.mp4   # ouvre directement une vidéo ou un projet
+uv run flouto ui                      # écran d'accueil
+uv run flouto ui samples/sortie.mp4   # ouvre directement une vidéo ou un projet
 ```
 
 L'interface s'ouvre dans le navigateur, servie par le moteur sur `127.0.0.1` uniquement. Au
@@ -94,36 +94,36 @@ l'export. Le mode d'emploi détaillé est dans [TUTORIEL.md](TUTORIEL.md).
 
 ```sh
 # Caractéristiques d'une vidéo (codec, résolution, fréquence, 8 ou 10 bits, audio)
-uv run moto-blur probe samples/sortie.mp4
+uv run flouto probe samples/sortie.mp4
 
 # Tout enchaîner : analyse, puis rendu flouté
-uv run moto-blur run samples/sortie.mp4 -o samples/sortie_floutee.mp4
+uv run flouto run samples/sortie.mp4 -o samples/sortie_floutee.mp4
 
 # La même chose en mode debug : cadres de détection et scores dessinés, pas de flou
-uv run moto-blur run samples/sortie.mp4 -o samples/sortie_debug.mp4 --debug
+uv run flouto run samples/sortie.mp4 -o samples/sortie_debug.mp4 --debug
 ```
 
 Les deux passes peuvent être lancées séparément. L'analyse écrit un fichier projet
-(`samples/sortie.motoblur.json`) ; le rendu le relit sans rien réanalyser :
+(`samples/sortie.flouto.json`) ; le rendu le relit sans rien réanalyser :
 
 ```sh
-uv run moto-blur analyze samples/sortie.mp4
-uv run moto-blur render samples/sortie.motoblur.json -o samples/sortie_floutee.mp4
-uv run moto-blur render samples/sortie.motoblur.json -o samples/sortie_debug.mp4 --debug
-uv run moto-blur report samples/sortie.motoblur.json
+uv run flouto analyze samples/sortie.mp4
+uv run flouto render samples/sortie.flouto.json -o samples/sortie_floutee.mp4
+uv run flouto render samples/sortie.flouto.json -o samples/sortie_debug.mp4 --debug
+uv run flouto report samples/sortie.flouto.json
 ```
 
 ### Montage
 
 ```sh
 # Rogner 12,5 s au début et 8 s à la fin
-uv run moto-blur run samples/a.mp4 -o samples/out.mp4 --trim-start 12.5 --trim-end 8
+uv run flouto run samples/a.mp4 -o samples/out.mp4 --trim-start 12.5 --trim-end 8
 
 # Ne garder que deux passages (supprime ce qu'il y a entre les deux)
-uv run moto-blur run samples/a.mp4 -o samples/out.mp4 --keep 0:10-1:30 --keep 2:00-3:15
+uv run flouto run samples/a.mp4 -o samples/out.mp4 --keep 0:10-1:30 --keep 2:00-3:15
 
 # Assembler plusieurs clips, dans l'ordre donné
-uv run moto-blur run samples/a.mp4 samples/b.mp4 -p samples/sortie.motoblur.json -o samples/out.mp4
+uv run flouto run samples/a.mp4 samples/b.mp4 -p samples/sortie.flouto.json -o samples/out.mp4
 ```
 
 Pour le reste (ordre des passages, passages muets, plusieurs passages sur plusieurs clips),
@@ -157,16 +157,16 @@ Règles du montage :
 
 ```sh
 # Suivre le compteur à partir du rectangle donné sur l'image située à 5 s (x, y, largeur, hauteur)
-uv run moto-blur dash samples/sortie.motoblur.json --at 0:05 --box 1500,1700,600,300
+uv run flouto dash samples/sortie.flouto.json --at 0:05 --box 1500,1700,600,300
 
 # Zone fixe sur tout le clip (caméra fixée à la moto)
-uv run moto-blur dash samples/sortie.motoblur.json --fixed --box 1500,1700,600,300
+uv run flouto dash samples/sortie.flouto.json --fixed --box 1500,1700,600,300
 
 # Suivre un autre objet, désigné par son nom (chaque nom est suivi séparément)
-uv run moto-blur dash samples/sortie.motoblur.json --name téléphone --at 0:05 --box 900,1200,300,500
+uv run flouto dash samples/sortie.flouto.json --name téléphone --at 0:05 --box 900,1200,300,500
 
 # Supprimer les zones d'un objet (sans --name : de tous les objets)
-uv run moto-blur dash samples/sortie.motoblur.json --name téléphone --clear
+uv run flouto dash samples/sortie.flouto.json --name téléphone --clear
 ```
 
 Dans l'interface, le rectangle se trace à la souris (onglet « Zones », bouton « Suivre un
@@ -182,7 +182,7 @@ par défaut dans ce cas) ; `--scope all` refait tout le clip.
 | Option | Effet |
 |---|---|
 | `--device auto\|gpu\|cpu` | Accélération de l'analyse. `gpu` échoue au lieu de se replier sur le processeur. |
-| `--face-model`, `--plate-model` | Modèle à utiliser (liste : `moto-blur info`, licences : `MODELS.md`). |
+| `--face-model`, `--plate-model` | Modèle à utiliser (liste : `flouto info`, licences : `MODELS.md`). |
 | `--only face\|plate` | N'analyser qu'une catégorie. |
 | `--conf-new 0.20` | Score minimal pour commencer à suivre un objet. Plus bas : moins de fuites, plus de faux flous. |
 | `--conf-keep 0.05` | Score minimal pour continuer à suivre un objet déjà vu. |
@@ -213,21 +213,21 @@ relancer la même commande reprend là où elle s'est arrêtée.
 
 ```sh
 # File d'attente : analyser plusieurs vidéos l'une après l'autre, chacune dans son projet
-uv run moto-blur batch samples/a.mp4 samples/b.mp4 --preset normal --profile
+uv run flouto batch samples/a.mp4 samples/b.mp4 --preset normal --profile
 
 # Seuils de flou proposés d'après vos corrections (rien n'est réanalysé)
-uv run moto-blur measure samples/sortie.motoblur.json
+uv run flouto measure samples/sortie.flouto.json
 
 # Comparer un autre réglage d'analyse au projet corrigé (le projet n'est pas modifié)
-uv run moto-blur measure samples/sortie.motoblur.json --tile-every 2
-uv run moto-blur measure samples/sortie.motoblur.json --plate-model mes-plaques
+uv run flouto measure samples/sortie.flouto.json --tile-every 2
+uv run flouto measure samples/sortie.flouto.json --plate-model mes-plaques
 
 # Entraîner un modèle de plaques sur vos projets vérifiés et l'installer
-uv run moto-blur train samples/sortie1.motoblur.json samples/sortie2.motoblur.json --name mes-plaques
+uv run flouto train samples/sortie1.flouto.json samples/sortie2.flouto.json --name mes-plaques
 ```
 
 Un modèle de plaques entraîné sur vos propres vidéos s'installe dans
-`~/.moto-blur/models/perso/plate/` et s'utilise comme les autres. L'outil d'entraînement
+`~/.flouto/models/perso/plate/` et s'utilise comme les autres. L'outil d'entraînement
 (Ultralytics) est téléchargé à part par la commande `train` : [docs/ENTRAINEMENT.md](docs/ENTRAINEMENT.md).
 
 ## Comment ça marche
@@ -286,7 +286,7 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
   rapport au réglage normal : le préréglage « Rapide » va 4 fois plus vite et perd environ 5
   petits visages sur 120 ; « tuiles fines une image sur deux » va 2 fois plus vite et en perd
   autant. Sur ce type de scène, « Rapide » est donc le meilleur choix des deux ; sur vos vidéos,
-  `moto-blur measure PROJET --preset rapide` le dit sans rien modifier.
+  `flouto measure PROJET --preset rapide` le dit sans rien modifier.
 - La vérification ne demande plus de valider les flous : un flou inutile peut donc rester dans
   la vidéo si vous ne le retirez pas pendant la relecture. Rien ne fuit pour autant.
 - Les préréglages « Conditions difficiles » et « Rapide » n'ont pas été évalués sur de vraies
@@ -298,7 +298,7 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
   (aucun gain sur processeur).
 - L'application de bureau n'est pas signée (avertissement de Windows et de macOS au premier
   lancement), et ses installeurs n'ont jamais été lancés sur une vraie machine. Elle vérifie
-  au démarrage s'il existe une version plus récente (désactivable : `MOTO_BLUR_NO_UPDATE=1`).
+  au démarrage s'il existe une version plus récente (désactivable : `FLOUTO_NO_UPDATE=1`).
 - Avec `--codec h264` sur une source 10 bits, la sortie est en 8 bits.
 
 ## Développement
@@ -307,11 +307,11 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
 uv run pytest        # tests du moteur (les tests du suivi du compteur téléchargent un modèle de 0,7 Mo)
 uv run ruff check src tests
 
-cd ui && npm install && npm run build   # recompile l'interface dans src/moto_blur/ui
+cd ui && npm install && npm run build   # recompile l'interface dans src/flouto/ui
 ```
 
-Organisation : `src/moto_blur` (moteur et serveur local), `ui` (interface Vue + TypeScript, dont
-la version compilée est commitée dans `src/moto_blur/ui` pour que `moto-blur ui` fonctionne sans
+Organisation : `src/flouto` (moteur et serveur local), `ui` (interface Vue + TypeScript, dont
+la version compilée est commitée dans `src/flouto/ui` pour que `flouto ui` fonctionne sans
 Node), `desktop` (coque Tauri et empaquetage du moteur), `tests`.
 
 Les tests couvrent le suivi, l'interpolation, la prolongation et les marges des zones, la

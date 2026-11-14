@@ -1,7 +1,7 @@
 """Ce que le logiciel retient d'une vidéo à l'autre : projets récents, place occupée par les
 aperçus, et profil « ma moto » (réglages et objets à flouter réutilisés sur chaque nouvelle vidéo).
 
-Tout est rangé dans le dossier de l'application (`~/.moto-blur`), jamais dans les vidéos.
+Tout est rangé dans le dossier de l'application (`~/.flouto`), jamais dans les vidéos.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 import av
 import cv2
 
-from . import dash
+from . import dash, names
 from . import project as pj
 from .models import models_dir
 from .progress import Progress
@@ -29,8 +29,7 @@ PROFILE_SAMPLES = 30  # images examinées pour retrouver un objet du profil dans
 
 
 def app_dir() -> Path:
-    env = os.environ.get("MOTO_BLUR_HOME")
-    folder = Path(env) if env else Path.home() / ".moto-blur"
+    folder = names.home()
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
@@ -62,7 +61,7 @@ def recent() -> list[dict]:
     for p in _read_recent():
         path = Path(p)
         if path.is_file():
-            out.append({"path": p, "name": path.name.replace(".motoblur.json", ""), "folder": str(path.parent),
+            out.append({"path": p, "name": names.project_name(path), "folder": str(path.parent),
                         "modified": int(path.stat().st_mtime)})
     return out
 
@@ -94,7 +93,7 @@ def storage(current: pj.Project | None) -> dict:
         for entry in entries:
             project_file = entry.with_name(entry.name[: -len(".proxies")] + ".json")
             previews.append({
-                "path": str(entry), "name": entry.name[: -len(".proxies")].replace(".motoblur", ""),
+                "path": str(entry), "name": entry.name[: -len(".proxies")].removesuffix(".flouto").removesuffix(".motoblur"),
                 "size": _size(entry), "current": mine is not None and entry.resolve() == mine,
                 "orphan": not project_file.exists(),
             })

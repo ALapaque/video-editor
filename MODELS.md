@@ -1,7 +1,7 @@
 # Modèles utilisés et licences
 
-moto-blur ne contient aucun modèle dans son dépôt. Les modèles sont téléchargés au premier
-usage dans `~/.moto-blur/models` (ou le dossier indiqué par la variable `MOTO_BLUR_MODELS`),
+flouto ne contient aucun modèle dans son dépôt. Les modèles sont téléchargés au premier
+usage dans `~/.flouto/models` (ou le dossier indiqué par la variable `FLOUTO_MODELS`),
 depuis les adresses ci-dessous, et leur empreinte SHA-256 est vérifiée. C'est le seul appel
 réseau du logiciel.
 
@@ -11,7 +11,7 @@ réseau du logiciel.
 
 ### Visages — YOLO11-face (dépôt Hugging Face `deepghs/yolo-face`)
 
-| Nom dans moto-blur | Taille | Entrée | Usage |
+| Nom dans Flouto | Taille | Entrée | Usage |
 |---|---|---|---|
 | `yolo11n-face` | 10 Mo | 640 px | le plus rapide, moins bon sur les petits visages |
 | `yolo11s-face` (défaut) | 36 Mo | 640 px | compromis |
@@ -24,7 +24,7 @@ réseau du logiciel.
   « AGPL-3.0 License (https://ultralytics.com/license) ». Le dépôt Hugging Face est étiqueté
   « other », sans texte de licence.
 - Données d'entraînement : WIDER FACE (indiqué dans les métadonnées des fichiers).
-- Compatibilité : AGPL-3.0, identique à la licence de moto-blur.
+- Compatibilité : AGPL-3.0, identique à la licence de Flouto.
 - **Zone grise** : WIDER FACE est décrit par plusieurs sources tierces comme réservé à la
   recherche non commerciale ; le site du jeu de données était inaccessible lors de la
   vérification. La question de savoir si les conditions d'un jeu de données s'imposent aux poids
@@ -41,7 +41,7 @@ yolo11m-face  0136c7938193241ebde248abc0678455c01120976dacea425af53d72fc4a70a3
 
 ### Plaques — YOLOv9 (projet `open-image-models`)
 
-| Nom dans moto-blur | Taille | Entrée | Rappel annoncé par l'auteur |
+| Nom dans Flouto | Taille | Entrée | Rappel annoncé par l'auteur |
 |---|---|---|---|
 | `yolo-v9-t-640` | 7,5 Mo | 640 px | 0,896 |
 | `yolo-v9-s-608` (défaut) | 27 Mo | 608 px | 0,917 |
@@ -56,7 +56,7 @@ yolo11m-face  0136c7938193241ebde248abc0678455c01120976dacea425af53d72fc4a70a3
 - Les rappels annoncés sont mesurés sur le jeu de test de l'auteur, pas sur des vidéos
   d'action cam. À mesurer sur vos propres vidéos.
 - Particularité technique : la suppression des doublons est intégrée au modèle, avec un seuil de
-  score de 0,001 (vérifié dans le graphe) ; elle ne bride donc pas les seuils bas de moto-blur.
+  score de 0,001 (vérifié dans le graphe) ; elle ne bride donc pas les seuils bas de Flouto.
 
 Empreintes SHA-256 :
 
@@ -67,7 +67,7 @@ yolo-v9-s-608  2b878b38d9aa07b6ddc3ea75c4ffcb39869bc5c218e0a14002f60ab2f7b0be9a
 
 ### Compteur — VitTrack (OpenCV Zoo)
 
-| Nom dans moto-blur | Taille | Usage |
+| Nom dans Flouto | Taille | Usage |
 |---|---|---|
 | `vittrack` | 0,7 Mo | suivi du compteur à partir d'un rectangle tracé sur une image |
 
@@ -82,7 +82,7 @@ vittrack  2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d
 
 ### Contour précis — SAM 2.1 « tiny » (Meta, conversion ONNX `onnx-community`)
 
-| Nom dans moto-blur | Taille | Usage |
+| Nom dans Flouto | Taille | Usage |
 |---|---|---|
 | `sam2.1-tiny` | 155 Mo (4 fichiers) | silhouette exacte d'un objet suivi, à la demande (« Contour précis ») |
 
@@ -107,7 +107,7 @@ prompt_encoder_mask_decoder.onnx_data  e9874d900dd4134ed60eab1e97910327c2419e0b2
 
 ### Contexte — YOLOX-S (OpenCV Zoo)
 
-| Nom dans moto-blur | Taille | Usage |
+| Nom dans Flouto | Taille | Usage |
 |---|---|---|
 | `yolox-s` | 36 Mo | repère les personnes et les véhicules autour d'un objet douteux : un « visage » sans personne dessous, une « plaque » hors de tout véhicule, n'est pas flouté |
 
@@ -124,17 +124,17 @@ yolox-s  c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063
 ### Modèles personnels
 
 Un modèle entraîné par vous (voir `docs/ENTRAINEMENT.md`) se pose dans
-`~/.moto-blur/models/perso/plate/` (ou `perso/face/`) : fichier ONNX exporté par Ultralytics,
-une seule classe. Il apparaît alors dans la liste des modèles. moto-blur ne le télécharge ni ne
+`~/.flouto/models/perso/plate/` (ou `perso/face/`) : fichier ONNX exporté par Ultralytics,
+une seule classe. Il apparaît alors dans la liste des modèles. Flouto ne le télécharge ni ne
 l'envoie nulle part. Sa licence dépend de l'outil d'entraînement : un modèle entraîné avec
-Ultralytics est sous AGPL-3.0, comme moto-blur.
+Ultralytics est sous AGPL-3.0, comme Flouto.
 
 ### Conversion locale des modèles de plaques
 
 Les modèles de plaques sont publiés avec la suppression des doublons intégrée et une seule image
-par appel. Au premier usage, moto-blur en tire sur votre machine une version « par lot »
+par appel. Au premier usage, Flouto en tire sur votre machine une version « par lot »
 (`<nom>.lot.onnx`, à côté du fichier téléchargé) qui traite toutes les tuiles d'une image en un
-appel ; la suppression des doublons est alors faite par moto-blur, comme pour les visages. Les
+appel ; la suppression des doublons est alors faite par Flouto, comme pour les visages. Les
 poids sont inchangés. Si la conversion échoue, le fichier d'origine est utilisé tel quel.
 
 ## Modèles étudiés et écartés

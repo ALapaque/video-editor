@@ -12,7 +12,7 @@
 
 - VitTrack (OpenCV, Apache-2.0, 0,7 Mo) tourne sur le processeur sans accélération : environ
   140 images par seconde mesurées ici sur une vidéo 1080p de synthèse, décodage compris. Il
-  renvoie à chaque image un rectangle et un score ; quand le score chute, moto-blur maintient
+  renvoie à chaque image un rectangle et un score ; quand le score chute, Flouto maintient
   la dernière position sûre et signale le passage.
 - Limite : il rend un rectangle, pas un contour. Pour un compteur, objet grand et à peu près
   rectangulaire, c'est suffisant. Il n'a été essayé que sur des vidéos de synthèse ; sa tenue
@@ -55,7 +55,7 @@ images B. Conséquences :
 
 **Recommandation : garder le moteur Python embarqué.** L'application Tauri n'est qu'une coque :
 elle lance le moteur, attend qu'il annonce l'adresse locale de son interface et l'affiche. Le
-moteur s'arrête quand la fenêtre se ferme. L'interface est la même qu'avec `moto-blur ui`, ce
+moteur s'arrête quand la fenêtre se ferme. L'interface est la même qu'avec `flouto ui`, ce
 qui permet de tout développer et tester dans un navigateur.
 
 Une réécriture ne se justifierait que si la taille de l'application devenait un vrai frein à

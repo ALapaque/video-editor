@@ -1,6 +1,6 @@
 """Serveur local de l'interface de montage et de vérification.
 
-`moto-blur ui` démarre ce serveur sur 127.0.0.1 (jamais accessible depuis le réseau) et ouvre
+`flouto ui` démarre ce serveur sur 127.0.0.1 (jamais accessible depuis le réseau) et ouvre
 l'interface dans le navigateur. L'application de bureau lance le même serveur en arrière-plan.
 L'interface ne fait que piloter le moteur : toute la logique (montage, zones, analyse, rendu)
 reste dans le moteur Python, et le fichier projet reste la seule source de vérité.
@@ -24,7 +24,7 @@ from pathlib import Path
 import av
 import cv2
 
-from . import batch, confirm, contour, dash, library, media, progress, training, tuning
+from . import batch, confirm, contour, dash, library, media, names, progress, training, tuning
 from . import project as pj
 from .analyze import (
     PRESETS,
@@ -187,7 +187,7 @@ class Engine:
                     self.project = pj.Project(path=path)
                     pj.save(self.project)
             elif path.suffix.lower() in VIDEO_EXTENSIONS:
-                project_path = path.with_name(path.stem + ".motoblur.json")
+                project_path = names.project_for(path)
                 if project_path.exists():
                     self.project = pj.load(project_path)
                 else:
@@ -770,7 +770,7 @@ class Engine:
         image = self.frame_image(clip.id, index, blur)
         seconds = index / float(clip.video.fps_fraction)
         stamp = f"{int(seconds // 60):02d}m{seconds % 60:05.2f}s".replace(".", "-")
-        name = project.path.name.replace(".motoblur.json", "").replace(".json", "")
+        name = names.project_name(project.path)
         target = project.path.parent / f"{name}_image_{stamp}{'' if blur else '_nette'}.png"
         if not cv2.imwrite(str(target), image):
             raise ApiError("enregistrement de l'image impossible.", 500)
@@ -1084,7 +1084,7 @@ def browse(directory: str | None, engine: Engine) -> dict:
             if entry.is_dir():
                 if not entry.name.endswith(".proxies"):
                     folders.append(entry.name)
-            elif entry.suffix.lower() in VIDEO_EXTENSIONS or entry.name.endswith(".motoblur.json"):
+            elif entry.suffix.lower() in VIDEO_EXTENSIONS or names.is_project(entry.name):
                 files.append({"name": entry.name, "size": entry.stat().st_size})
         except OSError:
             continue
@@ -1426,7 +1426,7 @@ def serve(
     server = make_server(engine, port)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     # Ligne lue par l'application de bureau pour connaître le port : ne pas en changer le format.
-    print(f"MOTO_BLUR_UI {url}", flush=True)
+    print(f"FLOUTO_UI {url}", flush=True)
     if open_browser:
         print("Interface ouverte dans le navigateur. Ctrl+C dans ce terminal pour arrêter.", flush=True)
     if open_browser:

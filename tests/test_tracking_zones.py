@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from moto_blur import project as pj
-from moto_blur.detect import Crop, make_crops, merge_detections, to_frame_coords
-from moto_blur.postprocess import TrackZones, ZoneIndex, build_review, track_reasons
-from moto_blur.tracking import Tracker
+from flouto import project as pj
+from flouto.detect import Crop, make_crops, merge_detections, to_frame_coords
+from flouto.postprocess import TrackZones, ZoneIndex, build_review, track_reasons
+from flouto.tracking import Tracker
 
 F = 512  # PTS par image (30 i/s, base 1/15360)
 
@@ -295,7 +295,7 @@ def test_ellipse_always_contains_the_whole_detected_box(video_info, margin):
 
 
 def test_rounded_corners_never_uncover_the_detected_box(video_info):
-    from moto_blur.blur import shape_mask
+    from flouto.blur import shape_mask
 
     t = pj.Track(1, "plate", [[0, 500, 400, 620, 440, 0.9]])
     for margin, min_px in [(0.0, 3), (0.1, 6), (0.3, 6)]:
@@ -360,7 +360,7 @@ def test_portrait_video_is_not_over_tiled():
 
 
 def test_low_score_tracks_are_not_blurred_unless_forced(video_info):
-    from moto_blur.postprocess import below_min_score
+    from flouto.postprocess import below_min_score
 
     weak = pj.Track(1, "face", [[i * F, 100, 100, 140, 150, 0.22] for i in range(20)])
     real = pj.Track(2, "face", [[i * F, 600, 100, 640, 150, 0.25 if i not in (7, 8, 12) else 0.52] for i in range(20)])
@@ -380,7 +380,7 @@ def test_low_score_tracks_are_not_blurred_unless_forced(video_info):
 
 
 def test_min_score_never_hides_manual_or_tracked_zones(video_info):
-    from moto_blur.postprocess import below_min_score
+    from flouto.postprocess import below_min_score
 
     s = pj.BlurSettings(face_min_score=0.9, plate_min_score=0.9)
     manual = pj.Track(1, "manual", [[0, 1, 1, 50, 50, 1.0], [10 * F, 1, 1, 50, 50, 1.0]], source="manual")
@@ -394,7 +394,7 @@ def test_min_score_never_hides_manual_or_tracked_zones(video_info):
 
 def _coverage(zones, w=400, h=300):
     """Part de chaque pixel couverte par une liste de zones (0 à 1), calculée par le vrai masque."""
-    from moto_blur.blur import shape_mask
+    from flouto.blur import shape_mask
 
     total = np.zeros((h, w), dtype=np.float32)
     for z in zones:
@@ -412,7 +412,7 @@ def _nothing_uncovered(before, after) -> bool:
 
 
 def test_zone_inside_another_is_dropped_and_overlapping_zones_become_one():
-    from moto_blur.postprocess import Zone, merge_zones
+    from flouto.postprocess import Zone, merge_zones
 
     face = Zone("face", (100, 60, 300, 260), "ellipse", 0, 1)  # tableau de bord pris pour un visage
     plate = Zone("plate", (80, 110, 320, 210), "rounded", 20, 2)  # ... et pour une plaque
@@ -429,7 +429,7 @@ def test_zone_inside_another_is_dropped_and_overlapping_zones_become_one():
 
 
 def test_zones_that_barely_touch_stay_separate_and_corners_are_respected():
-    from moto_blur.postprocess import Zone, merge_zones
+    from flouto.postprocess import Zone, merge_zones
 
     a = Zone("face", (100, 100, 200, 200), "ellipse", 0, 1)
     b = Zone("face", (190, 100, 290, 200), "ellipse", 0, 2)  # 10 % de recouvrement
@@ -452,7 +452,7 @@ def test_detection_inside_a_tracked_object_gives_a_single_blur(video_info):
 
 def test_merging_random_zones_never_uncovers_a_pixel():
     """Tirage de nombreuses configurations : la fusion ne retire jamais de flou."""
-    from moto_blur.postprocess import Zone, merge_zones
+    from flouto.postprocess import Zone, merge_zones
 
     rng = np.random.default_rng(7)
     for _ in range(150):
@@ -478,7 +478,7 @@ def test_tracked_object_covered_by_a_larger_detection_keeps_its_name(video_info)
 
 
 def test_flickering_detections_are_dropped_but_a_clear_one_is_kept(video_info):
-    from moto_blur.postprocess import below_min_score
+    from flouto.postprocess import below_min_score
 
     s = pj.BlurSettings()  # visages : 0,40 sur 3 images, ou 0,65 une fois
     flicker = pj.Track(1, "face", [[0, 100, 100, 140, 150, 0.45]])

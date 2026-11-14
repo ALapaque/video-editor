@@ -8,10 +8,10 @@ import urllib.request
 import pytest
 
 from conftest import FakeDetector, make_project, make_video
-from moto_blur import project as pj
-from moto_blur.analyze import analyze_project
-from moto_blur.proxy import build_proxy
-from moto_blur.server import Engine, make_server
+from flouto import project as pj
+from flouto.analyze import analyze_project
+from flouto.proxy import build_proxy
+from flouto.server import Engine, make_server
 
 
 def _serve(tmp_path, detector):
@@ -135,7 +135,7 @@ def test_requests_from_other_websites_are_refused(api):
 def test_browse_lists_videos_and_projects(api, tmp_path):
     listing = api("GET", "/api/browse")
     names = [f["name"] for f in listing["files"]]
-    assert "clip.mp4" in names and "test.motoblur.json" in names
+    assert "clip.mp4" in names and "test.flouto.json" in names
 
 
 def test_review_validation_is_saved_in_the_project(doubtful):
@@ -264,7 +264,7 @@ def test_no_kind_means_nothing_to_analyse(api, tmp_path):
 
 def test_reveal_opens_the_folder_of_a_project_file_only(api, tmp_path, monkeypatch):
     """« Ouvrir le dossier » : seulement un fichier existant du projet, jamais autre chose."""
-    import moto_blur.server as server
+    import flouto.server as server
 
     calls = []
     monkeypatch.setattr(server.subprocess, "Popen", lambda command, **kw: calls.append(command))

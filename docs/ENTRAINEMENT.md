@@ -5,10 +5,10 @@ pas (voir `MODELS.md`). Il n'a jamais vu vos trajets, votre caméra, ni l'angle 
 voit les plaques. Un modèle affiné sur vos propres images peut mieux faire : moins de plaques
 manquées, moins de fausses détections.
 
-**Ce que moto-blur fournit** : une commande qui exporte les images de vos projets vérifiés, lance
+**Ce que Flouto fournit** : une commande qui exporte les images de vos projets vérifiés, lance
 l'entraînement, convertit le résultat et l'installe ; et une autre qui mesure si le modèle
 obtenu fait mieux que le modèle fourni.
-**Ce qui n'est pas dans moto-blur** : l'outil d'entraînement lui-même (Ultralytics, licence
+**Ce qui n'est pas dans Flouto** : l'outil d'entraînement lui-même (Ultralytics, licence
 AGPL-3.0). La commande le télécharge à part, la première fois.
 
 Rien de ce qui suit n'a pu être essayé sur vos machines ni sur vos vidéos : prenez-le comme une
@@ -34,10 +34,10 @@ espérer un gain. Une seule vidéo ne suffit pas.
 
 ## 2. Entraîner, en une commande
 
-Sur le Mac, depuis le dossier de moto-blur, en donnant vos projets vérifiés :
+Sur le Mac, depuis le dossier de Flouto, en donnant vos projets vérifiés :
 
 ```bash
-uv run moto-blur train samples/sortie1.motoblur.json samples/sortie2.motoblur.json --name mes-plaques
+uv run flouto train samples/sortie1.flouto.json samples/sortie2.flouto.json --name mes-plaques
 ```
 
 La commande enchaîne quatre étapes :
@@ -45,14 +45,14 @@ La commande enchaîne quatre étapes :
 1. elle exporte les images d'entraînement (dossier `entrainement_mes-plaques`, à côté du premier
    projet) : `images/`, `labels/`, la liste d'entraînement et celle gardée pour la mesure ;
 2. elle lance l'entraînement avec Ultralytics, sur la puce Apple si elle est là ;
-3. elle convertit le résultat au format lu par moto-blur ;
-4. elle l'installe comme modèle personnel dans `~/.moto-blur/models/perso/plate/`.
+3. elle convertit le résultat au format lu par Flouto ;
+4. elle l'installe comme modèle personnel dans `~/.flouto/models/perso/plate/`.
 
 Ce qu'il faut savoir :
 
 - **La première fois, l'outil d'entraînement est téléchargé** (plusieurs centaines de Mo), puis
   le modèle de départ. C'est le seul moment où cette commande utilise le réseau. L'analyse et
-  le rendu de moto-blur, eux, n'en font toujours aucun usage.
+  le rendu de Flouto, eux, n'en font toujours aucun usage.
 - **Les images exportées montrent des plaques non floutées.** Elles restent sur votre machine ;
   ne les publiez pas (le dossier `samples/` est déjà ignoré par git).
 - Avec moins de 50 plaques vérifiées, la commande refuse : ce serait du temps perdu.
@@ -64,11 +64,11 @@ Ce qu'il faut savoir :
   viennent des mêmes sorties que les images d'entraînement. Le vrai test est à l'étape 3.
 
 La chaîne complète a été essayée de bout en bout (export, entraînement de deux passes,
-conversion, installation, chargement dans moto-blur) sur une machine Linux sans carte
+conversion, installation, chargement dans Flouto) sur une machine Linux sans carte
 graphique. Elle n'a pas été essayée sur un Mac, et aucun modèle utile n'a été entraîné : il
 faut vos projets pour cela.
 
-Pour seulement exporter les images, sans entraîner : `uv run moto-blur dataset PROJET -o DOSSIER`,
+Pour seulement exporter les images, sans entraîner : `uv run flouto dataset PROJET -o DOSSIER`,
 ou le bouton « Exporter des images d'entraînement » des réglages experts.
 
 ## 3. Vérifier qu'il fait mieux
@@ -76,7 +76,7 @@ ou le bouton « Exporter des images d'entraînement » des réglages experts.
 Sur un projet vérifié dont la vidéo n'a **pas** servi à l'entraînement :
 
 ```bash
-uv run moto-blur measure samples/autre-sortie.motoblur.json --plate-model mes-plaques
+uv run flouto measure samples/autre-sortie.flouto.json --plate-model mes-plaques
 ```
 
 La commande réanalyse la vidéo avec votre modèle, sans toucher au projet, et compare :
@@ -93,5 +93,5 @@ Pour l'utiliser ensuite : mode avancé, réglages experts, « Modèle de plaques
 
 ## Licence
 
-Un modèle entraîné avec Ultralytics est soumis à l'AGPL-3.0, la licence de moto-blur. Tant
+Un modèle entraîné avec Ultralytics est soumis à l'AGPL-3.0, la licence de Flouto. Tant
 qu'il reste sur votre machine, cela n'a pas de conséquence pratique.

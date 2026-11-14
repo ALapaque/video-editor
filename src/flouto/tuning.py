@@ -23,6 +23,7 @@ import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from . import names
 from . import project as pj
 from .postprocess import ZoneIndex, below_min_score, is_blurred
 
@@ -170,7 +171,7 @@ def measure(project: pj.Project, change, device: str = "auto") -> dict:
         blur_settings=replace(project.blur_settings), ignore=copy.deepcopy(project.ignore),
         preset=project.preset,
     )
-    trial.path = Path(project.path).with_name(Path(project.path).name.replace(".motoblur.json", "") + ".mesure.motoblur.json")
+    trial.path = Path(project.path).with_name(names.project_name(project.path) + ".mesure" + names.PROJECT_SUFFIX)
     change(trial)
     frames = frames_to_analyze(trial)
     started = time.perf_counter()

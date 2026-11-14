@@ -3,7 +3,7 @@
 # Un dossier (et non un fichier unique) : le démarrage est immédiat, rien n'est décompressé.
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
-datas = collect_data_files("moto_blur")  # interface web compilée
+datas = collect_data_files("flouto")  # interface web compilée
 binaries = collect_dynamic_libs("onnxruntime")
 
 a = Analysis(
@@ -15,5 +15,5 @@ a = Analysis(
     excludes=["tkinter", "matplotlib", "pytest"],
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="moto-blur-engine", console=True, upx=False)
-coll = COLLECT(exe, a.binaries, a.datas, name="moto-blur-engine", upx=False)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="flouto-engine", console=True, upx=False)
+coll = COLLECT(exe, a.binaries, a.datas, name="flouto-engine", upx=False)

@@ -849,7 +849,7 @@ const revealError = ref("");
 const stopped = ref(false);
 const extracting = ref(false); // le traitement en cours (ou le dernier) est l'extrait d'essai
 function initExport(): void {
-  const base = (p.value?.name ?? "video").replace(/\.motoblur\.json$/, "").replace(/\.json$/, "");
+  const base = (p.value?.name ?? "video").replace(/\.(flouto|motoblur)\.json$/, "").replace(/\.json$/, "");
   if (!form.output || wiz.exportFor !== p.value?.path) {
     form.output = `${base}_floute.mp4`;
     form.quality = presetQuality[wiz.format];
@@ -1125,7 +1125,7 @@ onBeforeUnmount(() => {
   <!-- data-phase : où en est l'étape Vérification, lisible par les essais automatiques -->
   <div ref="root" class="wiz" :data-phase="wiz.screen === 'verify' ? vphase : undefined" @click="releaseFocus">
     <header class="wiz-top">
-      <span class="brand"><Logo /><strong>moto-blur</strong></span>
+      <span class="brand"><Logo /><strong>Flouto</strong></span>
       <ol class="wsteps" aria-label="Étapes">
         <li v-for="(label, i) in steps" :key="label" class="wstep" :class="{ current: step === i + 1, done: step > i + 1 }" :aria-current="step === i + 1 ? 'step' : undefined">
           <span class="step-num"><Icon v-if="step > i + 1" name="check" :size="12" /><template v-else>{{ i + 1 }}</template></span>
