@@ -219,8 +219,9 @@ jobs:
             echo "$ASSETS" | grep -Eq "$want" || { echo "::error::Fichier manquant dans la version : $want"; exit 1; }
           done
           # Le fichier des mises à jour doit connaître Windows ET le Mac.
-          gh release download "$(gh api "repos/$GITHUB_REPOSITORY/releases/$ID" --jq .tag_name)" -R "$GITHUB_REPOSITORY" -p latest.json -O latest.json 2>/dev/null \
-            || gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(gh api "repos/$GITHUB_REPOSITORY/releases/$ID/assets" --jq '.[]|select(.name=="latest.json")|.id')" -H "Accept: application/octet-stream" > latest.json
+          ASSET=$(gh api "repos/$GITHUB_REPOSITORY/releases/$ID/assets" --paginate --jq '.[] | select(.name == "latest.json") | .id')
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET" -H "Accept: application/octet-stream" > latest.json
+          cat latest.json
           for platform in windows-x86_64 darwin-aarch64; do
             jq -e --arg p "$platform" '.platforms[$p].signature | length > 0' latest.json >/dev/null \
               || { echo "::error::$platform absent du fichier des mises à jour"; exit 1; }
