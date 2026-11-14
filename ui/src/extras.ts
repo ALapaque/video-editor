@@ -299,7 +299,7 @@ export function installDrop(open: (paths: string[]) => void): void {
 // L'interface parle de « flou » partout (jamais de « zone », « détection » ou « piste ») et
 // remplace les scores chiffrés par trois niveaux. Règle unique, utilisée par les deux modes.
 
-export type Confidence = "sur" | "verifier" | "douteux" | "ecarte" | "main";
+export type Confidence = "sur" | "verifier" | "douteux" | "ecarte" | "main" | "retrouve";
 
 export const confidenceInfo: Record<Confidence, { label: string; help: string }> = {
   sur: { label: "sûr", help: "Le logiciel est sûr de ce qu'il a trouvé." },
@@ -307,10 +307,12 @@ export const confidenceInfo: Record<Confidence, { label: string; help: string }>
   douteux: { label: "douteux", help: "Le logiciel hésite beaucoup : c'est peut-être une erreur." },
   ecarte: { label: "non flouté", help: "Trop peu sûr pour être flouté. Vous pouvez le flouter quand même." },
   main: { label: "ajouté par vous", help: "Flou que vous avez ajouté ou objet que vous avez désigné." },
+  retrouve: { label: "retrouvé par le logiciel", help: "Le logiciel a cru retrouver l'objet ici, tout seul, après une coupure ou une perte. Il a pu se tromper d'objet : regardez, et retirez ce flou s'il n'est pas au bon endroit." },
 };
 
 /** Niveau de confiance d'un flou, d'après son score habituel (médian) sur toute sa durée. */
 export function confidence(track: Track): Confidence {
+  if (track.reacquired) return "retrouve"; // une supposition du logiciel, pas un flou posé par l'utilisateur
   if (track.source !== "auto") return "main";
   if (track.below_min_score && !track.forced) return "ecarte";
   if (track.score >= 0.6) return "sur";

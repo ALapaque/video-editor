@@ -55,7 +55,7 @@ export function levelLabel(track: Track): string {
 }
 
 /** Ordre « du plus douteux au plus sûr » ; les flous ajoutés par vous viennent en dernier. */
-const doubtRank: Record<Confidence, number> = { douteux: 0, verifier: 1, ecarte: 2, sur: 3, main: 4 };
+const doubtRank: Record<Confidence, number> = { douteux: 0, retrouve: 0, verifier: 1, ecarte: 2, sur: 3, main: 4 };
 
 export function byDoubt(a: Track, b: Track): number {
   return doubtRank[confidence(a)] - doubtRank[confidence(b)] || a.score - b.score || a.start - b.start || a.id - b.id;

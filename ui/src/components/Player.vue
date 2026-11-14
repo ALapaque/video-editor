@@ -246,6 +246,11 @@ function step(frames: number): void {
 function toggleView(): void {
   state.preview = state.preview === "blur" ? "boxes" : "blur";
 }
+/** Masque (ou remontre) flous et contours dans l'aperçu, pour regarder l'image telle qu'elle a
+ *  été filmée. Rien n'est retiré du projet : l'export garde tous les flous. */
+function toggleHidden(): void {
+  state.preview = state.preview === "off" ? "blur" : "off";
+}
 
 // --- Zoom sur la vidéo ---------------------------------------------------------
 // Cadrage en pixels CSS de l'image : point affiché = point de l'image × s + (x, y). La vidéo et
@@ -1088,6 +1093,11 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
       <button
         class="view-toggle" :title="state.preview === 'blur' ? 'Voir les contours des flous, avec leur nom au survol (V)' : 'Voir le flou tel qu\'il sera à l\'export (V)'" @click="toggleView"
       ><Icon :name="state.preview === 'blur' ? 'target' : 'eye'" />{{ state.preview === "blur" ? "Voir les contours" : "Voir le flou" }}</button>
+      <button
+        class="icon-btn hide-toggle" :class="{ on: state.preview === 'off' }" :aria-pressed="state.preview === 'off'" data-hide-blurs
+        :title="state.preview === 'off' ? 'Remontrer les flous dans l\'aperçu' : 'Masquer les flous et les contours dans l\'aperçu, pour voir l\'image telle qu\'elle a été filmée. L\'export garde tous les flous.'"
+        :aria-label="state.preview === 'off' ? 'Remontrer les flous' : 'Masquer les flous dans l\'aperçu'" @click="toggleHidden"
+      ><Icon name="eyeOff" /></button>
       <label class="dim field quality" :title="qualityTip"><span class="field-label">Qualité</span>
         <select :value="shownQuality" aria-label="Qualité de l'aperçu" :disabled="!clip" @change="pickQuality(($event.target as HTMLSelectElement).value as Quality, $event)">
           <option value="">rapide</option>
@@ -1145,9 +1155,11 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
           <div class="pp-group" role="group" aria-labelledby="pp-view">
             <span id="pp-view" class="pp-title">Affichage</span>
             <span class="joined pp-view">
-              <button :class="{ on: state.preview === 'blur' }" :aria-pressed="state.preview === 'blur'" data-view="blur" @click="state.preview = 'blur'"><Icon name="eye" />Voir le flou</button>
-              <button :class="{ on: state.preview !== 'blur' }" :aria-pressed="state.preview !== 'blur'" data-view="boxes" @click="state.preview = 'boxes'"><Icon name="target" />Voir les contours</button>
+              <button :class="{ on: state.preview === 'blur' }" :aria-pressed="state.preview === 'blur'" data-view="blur" @click="state.preview = 'blur'"><Icon name="eye" />Flou</button>
+              <button :class="{ on: state.preview === 'boxes' }" :aria-pressed="state.preview === 'boxes'" data-view="boxes" @click="state.preview = 'boxes'"><Icon name="target" />Contours</button>
+              <button :class="{ on: state.preview === 'off' }" :aria-pressed="state.preview === 'off'" data-view="off" @click="state.preview = 'off'"><Icon name="eyeOff" />Rien</button>
             </span>
+            <p class="pp-note">{{ state.preview === "off" ? "Les flous sont masqués ici seulement : la vidéo enregistrée les garde tous." : state.preview === "boxes" ? "Chaque flou est entouré : l'image dessous reste nette." : "Le flou tel qu'il sera dans la vidéo enregistrée." }}</p>
           </div>
           <div class="pp-group" role="group" aria-labelledby="pp-sound">
             <span id="pp-sound" class="pp-title">Son</span>
@@ -1180,6 +1192,7 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
 .transport { flex-wrap: wrap; row-gap: 6px; }
 .group-name { flex: none; color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 .view-toggle { flex: none; min-width: 152px; }
+.hide-toggle { flex: none; }
 .legend { flex: none; display: flex; align-items: center; gap: 4px 14px; height: 16px; overflow: hidden; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .legend-item.none { color: var(--faint); }

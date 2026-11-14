@@ -456,7 +456,7 @@ async function confirmProfile(): Promise<void> {
                   <template v-if="tr.disabled">retiré</template>
                   <template v-else-if="tr.kind === 'dash' && tr.source === 'manual'">flou fixe</template>
                   <template v-else-if="tr.source === 'manual'">ajouté à la main</template>
-                  <template v-else-if="tr.source === 'tracker' && tr.reacquired">retrouvé par le logiciel</template>
+                  <template v-else-if="tr.source === 'tracker' && tr.reacquired">après une coupure ou une perte : peut-être pas le bon objet</template>
                   <template v-else-if="tr.source === 'tracker'">suit ce que vous avez entouré</template>
                   <span v-if="tr.forced" class="tag" title="Flouté bien que le logiciel soit peu sûr">flouté quand même</span>
                   <span v-if="!hereNow(tr)" class="tag" title="Ce flou n'est pas présent à l'image affichée. Il reste listé tant qu'il est sélectionné, pour régler son début ou sa fin.">pas sur cette image</span>
@@ -629,6 +629,15 @@ async function confirmProfile(): Promise<void> {
             </select>
           </label>
         </template>
+        <!-- objets suivis (compteur, téléphone…) : le logiciel les cherche-t-il seul après une coupure ? -->
+        <template v-if="project?.settings.blur.dash_reacquire !== undefined">
+          <h4>Objets suivis</h4>
+          <label>Rechercher l'objet tout seul après une coupure <input v-model="blur.dash_reacquire" type="checkbox" data-reacquire aria-describedby="reacquire-help" :disabled="busy" @change="saveBlur" /></label>
+          <p id="reacquire-help" class="help">
+            <strong>Décoché (conseillé)</strong> : quand l'objet suivi disparaît ou après un changement de plan, le flou s'arrête et une alerte vous demande de le remontrer.
+            <strong>Coché</strong> : le logiciel essaie de le retrouver tout seul, mais il peut se tromper d'objet (un rétroviseur pris pour le compteur). Les morceaux retrouvés ainsi sont marqués « retrouvé par le logiciel » dans la liste des flous. S'applique aux prochains suivis.
+          </p>
+        </template>
         <h4>Analyse</h4>
         <PresetChoice />
 
@@ -653,11 +662,6 @@ async function confirmProfile(): Promise<void> {
               <input id="min-hits" v-model.number="minScore.hits" type="range" min="1" max="8" step="1" :disabled="busy" @input="setMinScore" />
             </div>
             <p class="help">Un objet n'est flouté que s'il atteint ce score minimal sur ce nombre d'images (une seule suffit s'il est très net). Les faux flous clignotent ; les vrais visages et plaques restent à l'écran. Plus haut : moins de faux flous, mais un vrai visage aperçu très brièvement peut être manqué.</p>
-            <template v-if="project?.settings.blur.dash_reacquire !== undefined">
-              <h5>Objets suivis</h5>
-              <label>Rechercher l'objet tout seul après une coupure <input v-model="blur.dash_reacquire" type="checkbox" data-reacquire aria-describedby="reacquire-help" :disabled="busy" @change="saveBlur" /></label>
-              <p id="reacquire-help" class="help"><strong>Peut se tromper d'objet (un rétroviseur pris pour le compteur).</strong> Sans cette recherche, le flou s'arrête à la coupure ou quand l'objet est perdu, et une alerte vous demande de le remontrer. S'applique aux prochains suivis.</p>
-            </template>
             <h5>Détection</h5>
             <label>Modèle de visages
               <select v-model="analysis.face_model"><option v-for="m in faceModels" :key="m">{{ m }}</option></select>

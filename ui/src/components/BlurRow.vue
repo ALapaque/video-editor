@@ -46,7 +46,7 @@ const showThumb = computed(() => !failed.value && (!props.defer || !state.playin
 .blur-line { line-height: 1.35; }
 .blur-line strong { font-weight: 600; }
 .level { white-space: nowrap; }
-.level.douteux { color: var(--accent-hi); font-weight: 600; }
+.level.douteux, .level.retrouve { color: var(--accent-hi); font-weight: 600; }
 .level.verifier { color: var(--text); }
 .level.sur, .level.main { color: var(--dim); }
 .level.ecarte { color: var(--faint); }
