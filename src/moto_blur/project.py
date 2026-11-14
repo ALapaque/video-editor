@@ -24,7 +24,8 @@ from pathlib import Path
 PROJECT_VERSION = 1
 KINDS = ("face", "plate")  # catégories détectées automatiquement
 DEFAULT_OBJECT = "compteur"  # nom d'un objet suivi quand aucun n'est donné
-KIND_LABELS = {"face": "visage", "plate": "plaque", "dash": "compteur", "manual": "flou ajouté"}
+KIND_LABELS = {"face": "visage", "plate": "plaque", "dash": "compteur", "manual": "flou ajouté",
+               "context": "contexte"}
 
 
 @dataclass

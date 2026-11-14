@@ -968,3 +968,13 @@ def needed_after(project):
     from moto_blur.analyze import needed_intervals
 
     return any(needed_intervals(project, c) for c in project.clips)
+
+
+def test_info_command_lists_every_model(capsys):
+    """« moto-blur info » doit connaître toutes les catégories de modèles (l'installeur la lance)."""
+    from moto_blur.cli import main
+    from moto_blur.models import MODELS
+
+    assert main(["info"]) == 0
+    out = capsys.readouterr().out
+    assert all(name in out for name in MODELS)
