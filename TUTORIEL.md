@@ -119,6 +119,10 @@ l'analyse ne porte que sur la partie gardée.
    le suit dans toute la vidéo) ou « Non, il reste au même endroit » (caméra fixée à la moto).
    Le résultat est montré quelques secondes : « C'est bon », « Recommencer » ou « Ajouter un
    autre objet ».
+
+   Vous préférez **tout choisir vous-même** ? Cochez « Je choisis moi-même » (sous les trois
+   cartes) : rien n'est flouté automatiquement et il n'y a pas d'analyse. Voir « Tout à la main »
+   juste après cette liste.
 3. **Voulez-vous couper le début ou la fin ?** Faites glisser les deux poignées orange sous la
    vidéo ; ce qui est grisé sera retiré. « Lire l'extrait » montre ce qui reste. Puis « Garder
    cette partie », ou « Ne rien couper ».
@@ -183,6 +187,61 @@ l'analyse ne porte que sur la partie gardée.
 « Annuler la dernière action », en haut de l'écran, défait la dernière modification (flou
 retiré, flou ajouté, coupe…).
 
+### Tout à la main : « Je choisis moi-même »
+
+Avec ce choix, le logiciel ne cherche rien tout seul : pas de flou posé à tort (un arbre, un
+reflet), pas de longue liste à vérifier. En contrepartie, **ce que vous n'entourez pas reste
+visible**. Les étapes deviennent : Vidéo, Quoi flouter, Couper, **Vos flous**, Enregistrer.
+
+À l'étape « Posez vos flous » :
+
+1. Regardez la vidéo (lecture, « 5 s » en arrière, curseur, vitesse normale ou 2×). Quand
+   quelque chose doit être caché, cliquez **« Flouter quelque chose ici »** : la vidéo s'arrête.
+2. **Entourez** ce qu'il faut cacher avec la souris (cliquez, glissez, relâchez). Pas la bonne
+   image ? Déplacez le curseur sous la vidéo avant d'entourer.
+3. Répondez : **« Le flou suit ce que j'ai entouré »** (une personne, une plaque, tout ce qui
+   bouge dans l'image) ou **« Le flou reste à cet endroit »** (un compteur, un autocollant sur le
+   pare-brise).
+4. Réglez **quand il commence et quand il finit** en faisant glisser les deux poignées orange
+   sous la vidéo ; le passage est lu en boucle pour contrôler. Un flou qui suit ne peut qu'être
+   raccourci : s'il s'arrête trop tôt, posez-en un autre à cet endroit. « C'est bon » reprend la
+   lecture là où vous en étiez.
+5. Recommencez autant de fois que nécessaire. La liste **« Vos flous »** sous les boutons permet
+   de revenir sur un flou (« Régler ») ou de le retirer (corbeille). « Annuler la dernière
+   action », en haut, remet un flou retiré par erreur.
+6. « J'ai terminé » mène à l'enregistrement, qui rappelle que seul ce que vous avez entouré est
+   flouté.
+
+Vous pouvez aussi mélanger : cochez les visages ou les plaques **et** « Je choisis moi-même ».
+Le logiciel floute alors ce qu'il trouve, et vous ajoutez vous-même le reste.
+
+En mode avancé, la même chose se règle dans l'onglet « Réglages », partie « Flous
+automatiques » : décochez « Visages » et « Plaques », ou cliquez « Aucun : je pose tout à la
+main ». L'étape « Analyse » disparaît alors du guide ; « Ajouter un flou » (onglet
+« Vérification » ou « Flous ») pose un flou, et son début et sa fin se règlent dans l'onglet
+« Flous » avec « Début = cette image » et « Fin = cette image ».
+
+### Réglages de lecture
+
+Dans le mode simple, le petit bouton en forme de roue dentée, en bas à droite de la vidéo, ouvre
+les **réglages de lecture** (Échap ou un clic ailleurs les ferme). En mode avancé, les mêmes
+réglages sont dans la barre « Lecture », sous la vidéo.
+
+- **Qualité de l'image.** « Rapide » : l'aperçu allégé, fluide sur tous les ordinateurs (c'est
+  pour cela que l'image peut paraître moins nette). « Nette » : plus de détails ; cet aperçu se
+  prépare une seule fois par vidéo, ce qui prend un moment, et la lecture continue en « Rapide »
+  en attendant. « Image exacte » : à l'arrêt, l'image en pleine qualité, telle qu'elle sera
+  enregistrée. **La vidéo enregistrée garde toujours la qualité d'origine**, quel que soit ce
+  choix.
+- **Affichage.** « Flou » montre le flou tel qu'il sera dans la vidéo ; « Contours » entoure
+  chaque flou en laissant l'image nette dessous ; « Rien » masque flous et contours pour voir
+  l'image telle qu'elle a été filmée (en mode avancé : bouton à l'œil barré). Cela ne change que
+  l'aperçu : la vidéo enregistrée garde tous les flous.
+- **Son.** Couper le son ou régler le volume de l'écoute. Le son de la vidéo enregistrée n'est
+  pas modifié.
+
+Ces choix sont mémorisés sur cet ordinateur et valent pour les deux modes.
+
 Le mode simple ne coupe que le début et la fin d'une seule vidéo. Pour couper au milieu,
 assembler plusieurs vidéos, couper le son d'un passage ou changer les réglages, passez en mode
 avancé : la suite de ce guide le décrit.
@@ -233,6 +292,8 @@ tester vite.
 | Annuler / rétablir la dernière modification | flèches en haut à droite | Ctrl+Z / Ctrl+Y (Cmd+Z / Maj+Cmd+Z sur Mac) |
 | Enregistrer l'image affichée en pleine résolution | appareil photo dans la barre « Lecture » (image floutée ; nette si « Qualité » est sur « image exacte, sans flou ») | |
 | Voir le flou / voir les contours des flous | bouton « Voir les contours » / « Voir le flou » | V |
+| Masquer les flous dans l'aperçu | bouton à l'œil barré, à côté (l'export garde tous les flous) | |
+| Qualité de l'aperçu | menu « Qualité » : rapide, nette (préparée une fois par vidéo), image exacte (voir « Réglages de lecture ») | |
 | Zoomer sur la vidéo (petite plaque lointaine) | molette sur la vidéo (ou pincement sur le pavé tactile) ; glisser pour se déplacer ; « Image entière » pour revenir | + et −, 0 pour revenir |
 | Voir tous les raccourcis | bouton « ? » en haut | ? |
 | Régler le volume de l'aperçu | curseur à côté du haut-parleur (50 % au départ) ; un clic sur le haut-parleur coupe ou rétablit le son | |
@@ -366,12 +427,14 @@ téléphone, GPS…) se désigne à la main, une fois par clip ; chaque objet po
    - **Suivre l'objet** s'il bouge dans l'image (cas d'une vidéo recadrée depuis le 360). Il est
      suivi image par image, vers l'avant et l'arrière.
    - **Flou fixe** si la caméra est fixée à la moto et que l'objet ne bouge pas dans l'image.
-5. À chaque changement de plan, le suivi s'arrête : il ne glisse plus sur un autre objet (un
-   rétroviseur, par exemple). Le logiciel cherche ensuite l'objet dans le nouveau plan et, s'il le
-   retrouve avec une forte ressemblance, reprend le suivi. Deux cas sont signalés à la
-   vérification :
-   - « retrouvé automatiquement » : vérifiez que le flou est bien sur l'objet ;
-   - « n'est plus suivi ici » : l'objet n'a pas été retrouvé, rien n'y est flouté.
+5. À chaque changement de plan, ou quand l'objet est perdu (caché, sorti de l'image), le suivi
+   s'arrête : il ne glisse plus sur un autre objet (un rétroviseur, par exemple). La
+   vérification le signale (« n'est plus suivi ici ») : remontrez l'objet (point 6).
+   Si vous cochez « Rechercher l'objet tout seul après une coupure » (onglet « Réglages »,
+   partie « Objets suivis »), le logiciel cherche l'objet dans le nouveau plan et reprend le
+   suivi s'il le retrouve. Il peut alors se tromper d'objet : ces morceaux sont marqués
+   « retrouvé par le logiciel » dans la liste des flous (« Retirer » les supprime) et
+   « retrouvé automatiquement » à la vérification. Ce réglage est décoché au départ.
 6. Pour corriger un plan, cliquez « Montrer « compteur » ici » sur la carte de vérification (ou
    recommencez l'étape 2 avec le même nom) et entourez l'objet : son suivi est refait sur ce plan
    seulement, jusqu'au changement de plan suivant ; le reste est conservé. Pour tout
@@ -408,6 +471,8 @@ en cherchant vos objets automatiquement.
 | Forme | ellipse pour les visages, rectangle arrondi pour les plaques par défaut |
 | Contre-vérifier les flous douteux | coché par défaut : un objet douteux est remontré au détecteur en plus grand ; s'il n'y est pas retrouvé, il n'est pas flouté (arbre, reflet, sac pris pour un visage…). Il reste dans « Non floutés à regarder ». Décochez si un vrai visage ou une vraie plaque manque |
 | Stabiliser les flous | coché par défaut : le flou ne tremble plus et ne change plus de taille à chaque image, sans jamais découvrir l'objet |
+| Flous automatiques | « Visages » et « Plaques » : ce que le logiciel cherche et floute tout seul. « Aucun : je pose tout à la main » : plus rien d'automatique, seul ce que vous entourez est flouté (voir « Tout à la main ») |
+| Rechercher l'objet tout seul après une coupure | décoché par défaut : un objet suivi n'est plus recherché après un changement de plan ou une perte ; une alerte vous demande de le remontrer. Coché : le logiciel le cherche seul, au risque de se tromper d'objet (un rétroviseur pris pour le compteur). S'applique aux prochains suivis |
 | Moins de faux flous ↔ Moins de risques | un seul curseur à cinq crans, qui règle le score minimal des visages et des plaques. Vers la droite, le logiciel floute davantage dans le doute. Le changement s'applique tout de suite, sans réanalyse |
 | Réglages experts (repliés) | les curseurs détaillés ci-dessous, et toute la partie « Détection » (modèles, tuiles, seuils) |
 | Score minimal des visages, des plaques | un objet n'est flouté que si elle atteint ce minimum (0,40 pour les visages, 0,25 pour les plaques au départ). Plus haut : moins de faux flous, mais un vrai visage peu net peut être manqué. Le changement s'applique tout de suite, sans réanalyse ; le nombre de détections écartées s'affiche sous le curseur |
