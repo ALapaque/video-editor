@@ -226,6 +226,9 @@ hors de moto-blur : [docs/ENTRAINEMENT.md](docs/ENTRAINEMENT.md).
    tuile, avec un seuil de confiance bas. Un suivi relie les détections d'une image à l'autre
    en « pistes ». Le résultat est écrit dans le fichier projet, indexé sur le temps du fichier
    source : modifier le montage n'invalide jamais l'analyse.
+   Les objets douteux qui seraient floutés sont ensuite remontrés au même détecteur, en plus
+   grand (contre-vérification) : celui qui n'est retrouvé sur aucune de ses meilleures images
+   n'est pas flouté, mais reste listé parmi les objets non floutés.
 2. **Zones de flou.** Pour chaque piste : interpolation dans les trous de détection,
    prolongation avant et après, union avec les images voisines, marge. Ces zones sont
    recalculées à chaque rendu à partir des pistes et des réglages de flou.
@@ -263,6 +266,12 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
   il protège moins qu'un rectangle large (un contour serré laisse voir ce qui dépasse), revient
   de lui-même à la forme habituelle quand il n'est pas fiable, et doit être vérifié sur la vidéo.
   Sa vitesse sur Mac et sur Radeon n'a pas été mesurée.
+- La contre-vérification écarte des fausses détections (4 sur 125 objets sur la scène de rue
+  d'essai, sans perdre de vrai visage), mais elle n'a pas été mesurée sur de vraies vidéos de
+  moto : on ne sait pas encore si elle écarte les arbres pris pour des visages, ni si elle
+  perd de vrais visages lointains. Elle se coupe dans les réglages de flou.
+- La vérification ne demande plus de valider les flous : un flou inutile peut donc rester dans
+  la vidéo si vous ne le retirez pas pendant la relecture. Rien ne fuit pour autant.
 - Les préréglages « Conditions difficiles » et « Rapide » n'ont pas été évalués sur de vraies
   vidéos : leur effet réel sur les plaques manquées est inconnu. « Rapide » est par construction
   moins sûr.

@@ -124,7 +124,7 @@ l'analyse ne porte que sur la partie gardée.
    cette partie », ou « Ne rien couper ».
 4. **Comment est votre vidéo ?** « Normal » convient presque toujours. « Conditions
    difficiles » (nuit, pluie, contre-jour, plaques lointaines) cherche plus finement : analyse
-   nettement plus longue, davantage de flous à vérifier. « Rapide » divise environ par deux la
+   nettement plus longue, davantage de flous en trop. « Rapide » divise environ par deux la
    durée, mais peut manquer un visage ou une plaque furtifs.
 
    **Analyse.** « Combien de temps ça va prendre ? » mesure la vitesse sur quelques images et
@@ -133,34 +133,46 @@ l'analyse ne porte que sur la partie gardée.
    une longue vidéo) ; le temps restant s'affiche après quelques secondes. Au tout premier
    lancement, les modèles de détection sont téléchargés (environ 65 Mo). Vous pouvez laisser
    l'ordinateur travailler ; à la fin, l'assistant passe seul à la suite.
-5. **Vérification.** D'abord **« Voici tout ce qui sera flouté »** : une vignette par flou, les
-   plus douteux en premier. Touchez ceux qui ne doivent pas l'être (un reflet, une affiche), puis
-   « Retirer les N flous choisis », ou simplement « Continuer ».
+5. **Vérification.** Il n'y a rien à valider : **tout ce que le logiciel a trouvé est flouté**.
+   Il reste à regarder la vidéo une fois, seul moyen de repérer ce que le logiciel n'a jamais
+   vu. Cliquez « Regarder la vidéo ». Elle est lue deux fois plus vite (« Vitesse : Normale /
+   2× » sous la vidéo ; « 5 s » revient cinq secondes en arrière ; la barre d'espace met en
+   pause). La règle du jeu tient en deux lignes :
+   - **Un flou en trop ?** Cliquez dessus sur la vidéo : il disparaît, la lecture continue. Un
+     bandeau « Flou retiré » propose « Annuler » pendant quelques secondes et, si le logiciel
+     se trompe plusieurs fois au même endroit, « Retirer aussi les N flous au même endroit » et
+     « Ne plus jamais flouter cet endroit » (attention : un visage ou une plaque qui s'y
+     tiendrait ne serait plus flouté non plus).
+   - **Quelque chose reste lisible ?** Appuyez sur « Il manque un flou ici » (ou la touche S).
+     La lecture continue : vous réglerez chaque endroit signalé juste après.
 
-   Ensuite, le logiciel vous montre **ses flous douteux un par un** : le flou concerné ressort
-   sur la vidéo (le reste de l'image est assombri), avec sa vignette, son niveau de confiance et
-   la question « Faut-il flouter ceci ? ». « Oui, le flouter », « Non, ne pas le flouter » (« Le
-   remettre » annule) ou « Plus tard ». Dans une scène chargée, la planche du passage s'affiche
-   d'abord, puis seulement les flous les plus douteux. Sous la vidéo, une petite barre et les
-   boutons « Image précédente / suivante » (touches ← →) permettent de regarder de près ; la
-   molette zoome.
+   Si vous vous arrêtez en route (« Retour »), l'assistant propose ensuite « Reprendre à … ».
+   « Passer cette étape » va directement à l'enregistrement, qui vous rappellera que la vidéo
+   n'a pas été regardée.
 
-   Pour un endroit signalé ou un objet suivi, la question reste « Tout ce qui doit être flouté
-   l'est-il ? » :
-   - « Oui, c'est bon » : on passe au suivant.
-   - « Il manque un flou » : entourez sur la vidéo ce qui doit être caché ; le flou **suit**
-     ensuite ce que vous avez entouré, jusqu'au prochain changement de plan.
+   Après la relecture, chaque **endroit signalé** tourne en boucle : « Entourer ce qui manque »,
+   puis entourez sur la vidéo ce qui doit être caché ; le flou **suit** ensuite ce que vous avez
+   entouré, jusqu'au prochain changement de plan. « C'est réglé » passe au suivant. Sous la
+   vidéo, une petite barre et les boutons « Image précédente / suivante » (touches ← →)
+   permettent de se placer sur la bonne image ; la molette zoome.
+
+   S'il y en a, viennent enfin les **alertes** : les rares endroits où quelque chose peut rester
+   visible, par exemple un objet suivi que le logiciel a perdu. La question est « Tout ce qui
+   doit être flouté l'est-il ? » :
+   - « Oui, c'est bon » : on passe à la suite.
+   - « Montrer « compteur » ici » : entourez l'objet ; il est suivi de nouveau sur ce plan.
+   - « Il manque un flou » : entourez ce qui doit être caché ; le flou le suit.
    - « Un flou est en trop » : cliquez-le sur la vidéo ; il est retiré.
-   - « Plus tard » : on y reviendra.
+   - « Plus tard » : l'enregistrement vous le rappellera.
 
-   Ensuite vient la question **« Voulez-vous tout regarder une dernière fois ? »**. Répondez oui
-   si la vidéo doit être publiée : c'est le seul moyen de repérer ce que le logiciel n'a jamais
-   vu. Pendant la lecture, appuyez sur « Signaler un problème ici » (ou la touche S) dès que
-   quelque chose reste lisible ; vous corrigerez chaque endroit signalé juste après. La vitesse
-   peut passer à 2×. Si vous vous arrêtez en route, l'assistant propose ensuite de reprendre là
-   où vous en étiez.
-6. **Enregistrer la vidéo.** Un résumé rappelle la durée, ce qui est flouté et ce qui reste à
-   revoir. Choisissez le format : « Comme l'original » (par défaut), « YouTube », « Réseaux
+   Sur le premier écran de l'étape, « Retirer des flous en trop d'un coup » ouvre une planche
+   facultative : **les flous qui se voient le plus** (gros ou longs), en vignettes. Touchez ceux
+   qui sont en trop (un reflet, une affiche), puis « Retirer les N flous choisis ». « Voir tous
+   les flous » montre aussi les petits.
+6. **Enregistrer la vidéo.** Un résumé rappelle la durée et ce qui est flouté. S'il reste un
+   endroit signalé ou une alerte, le logiciel le dit et demande de cocher « Je crée la vidéo
+   quand même » ; si la vidéo n'a pas été regardée en entier, il le rappelle sans bloquer.
+   Choisissez le format : « Comme l'original » (par défaut), « YouTube », « Réseaux
    sociaux » ou « Fichier léger ». « Essayer d'abord sur 10 secondes » crée un court extrait pour
    contrôler le résultat réel. Cliquez « Créer la vidéo floutée ». À la fin, « Ouvrir le
    dossier » montre le fichier, enregistré à côté de votre vidéo d'origine.
@@ -201,10 +213,9 @@ tester vite.
    secondes, l'accélération matérielle contre le processeur et garde le plus rapide. À la fin,
    la fenêtre de progression indique la vitesse en images par seconde, ce qui a servi (`CoreML`, `Dml` ou
    `CPU`) et les deux temps mesurés. **Notez cette ligne**, elle m'intéresse.
-5. **Vérifier.** Cliquez « Commencer la vérification ». Le logiciel vous montre un par un les
-   passages où il a hésité : chacun tourne en boucle avec le flou affiché, et vous répondez à
-   une seule question, « Tout ce qui doit être flouté l'est-il ? ». Faites ensuite la
-   « Relecture complète » (détails plus bas, partie « Vérification »).
+5. **Vérifier.** Cliquez « Commencer la relecture ». Tout ce que le logiciel a trouvé est déjà
+   flouté ; vous regardez la vidéo une fois, à 2× : un clic sur un flou en trop le retire,
+   la touche S signale ce qui reste lisible (détails plus bas, partie « Vérification »).
 6. **Exporter.** Cliquez « Passer à l'export » puis « Exporter… », gardez les réglages, validez.
    La vidéo est écrite dans le dossier du projet.
 
@@ -256,58 +267,64 @@ des bandes noires si le rapport d'image diffère) et leurs images sont dupliqué
 
 ### Vérification
 
-La vérification se fait dans l'onglet **« Vérification »** (étape 3), en deux temps. Tout ce
-que vous validez ou signalez est enregistré dans le fichier projet : vous pouvez fermer le
-logiciel et reprendre plus tard.
+**Il n'y a plus rien à valider.** Tout ce que le logiciel a détecté est flouté, sans question :
+un flou douteux qui reste en place ne fait courir aucun risque, il est au pire inutile. L'onglet
+**« Vérification »** (étape 3) propose, par ordre d'importance :
 
-**Important :** le logiciel ne signale que ce qu'il a détecté. Un visage ou une plaque qu'il
-n'a jamais vu n'apparaît dans aucune liste. Pour ne rien laisser passer, faites les deux temps.
-
-#### Planche des flous
-
-« Planche des flous » montre une vignette par flou, les plus douteux en premier. Cliquez ceux qui
-ne doivent pas être floutés (Maj + clic pour une série), puis « Retirer les N flous cochés ». L'œil
-d'une vignette montre le flou dans la vidéo. C'est le moyen le plus rapide de nettoyer une scène
-de foule ; Ctrl+Z remet tout d'un coup.
-
-#### 1. Passages douteux
-
-Ce sont les endroits où le logiciel a hésité : objet très petit, vu très brièvement, perdu un
-instant, coupé par le bord de l'image… Ils sont floutés comme les autres, et marqués en orange
-sous la timeline (en rose pour le compteur).
-
-1. Cliquez « Commencer la vérification » (ou « Passages douteux »).
-2. Le premier passage tourne en boucle, flou affiché ; ses zones sont entourées. Une phrase
-   explique pourquoi le logiciel a hésité. Ralentissez si besoin : « Vitesse » 1×, 0,5× ou 0,25×.
-3. Répondez à la question « Tout ce qui doit être flouté l'est-il ? » :
-
-| Réponse | Effet |
+| Entrée | À quoi elle sert |
 |---|---|
-| « Oui, c'est bon » (touche Entrée) | le passage est validé, le suivant s'affiche |
-| « Il manque un flou » | la lecture s'arrête ; tracez un rectangle sur l'image, puis choisissez « Suivre ce que j'ai entouré » (le flou suit l'objet jusqu'au changement de plan) ou « Flou fixe » (le rectangle couvre tout le passage). La boucle reprend pour que vous contrôliez. Si le logiciel a vu à cet endroit des objets trop peu sûrs pour les flouter, il propose de les afficher : « Flouter quand même » suffit alors |
-| « Un flou est en trop » | la lecture s'arrête ; cliquez le flou à retirer dans l'image. « Rétablir » l'annule |
-| « Plus tard » | passe au suivant sans valider ; le passage reste « à revoir » |
-| « Précédent » | revient au passage d'avant |
+| **Relecture** (bouton orange) | La seule étape qui protège vraiment : elle seule montre ce que le logiciel n'a jamais détecté |
+| Signalements à traiter | Les endroits que vous avez signalés pendant la relecture |
+| Alertes | Les endroits où quelque chose peut rester visible (un objet suivi perdu, par exemple). Rares |
+| Flous gênants | Facultatif : retirer d'un coup les flous inutiles qui se voient |
+| Non floutés à regarder | Facultatif : ce que le logiciel a vu mais n'a pas flouté, faute de certitude |
 
-4. À la fin, un bilan indique combien de passages sont validés et combien restent à revoir.
+Tout est enregistré dans le fichier projet : vous pouvez fermer le logiciel et reprendre plus
+tard.
 
-Pendant la vérification (passages douteux ou relecture), le montage est verrouillé : « Couper
-ici », « Supprimer le passage », « Déplacer », « Muet » et leurs touches (C, Suppr, M) sont
-inactifs, pour éviter une coupe par erreur. « Quitter » les rend.
+#### Relecture
 
-Si vous corrigez les zones d'un passage déjà validé (flou retiré ou rétabli), il vous est
-redemandé : c'est voulu.
+1. Cliquez « Commencer la relecture » (« Reprendre à … » si vous l'aviez interrompue). Tout le
+   montage est lu, flou affiché, à 2× (la vitesse se règle).
+2. **Un flou en trop ? Cliquez dessus** : il disparaît et la lecture continue. Un bandeau propose
+   alors « Annuler », « Retirer aussi les N flous au même endroit » (la même fausse détection
+   qui revient) et « Ne plus jamais flouter cet endroit » (voir plus bas).
+3. **Quelque chose reste lisible ? Touche S** (ou « Signaler ici »). La lecture ne s'arrête pas ;
+   un repère apparaît sur la timeline.
+4. À la fin, traitez les signalements : chacun tourne en boucle, de 1,5 s avant à 1,5 s après.
+   « Il manque un flou » : tracez un rectangle, puis « Suivre ce que j'ai entouré » (le flou suit
+   l'objet jusqu'au changement de plan) ou « Flou fixe ». « C'est réglé » retire le signalement.
 
-#### 2. Relecture complète
+Pendant la relecture, le montage est verrouillé (« Couper ici », « Supprimer le passage »… et
+leurs touches), pour éviter une coupe par erreur. « Quitter » le rend.
 
-1. Cliquez « Relecture complète ». Tout le montage est lu, flou affiché (ralentissez avec
-   « Vitesse » si la scène est chargée). Si une relecture a été interrompue, « Reprendre à … »
-   repart de là.
-2. Dès qu'un visage, une plaque ou le compteur reste lisible, cliquez « Signaler ici » ou
-   appuyez sur **S**. La lecture ne s'arrête pas ; un repère rouge apparaît sur la timeline.
-3. À la fin (ou après « Arrêter la relecture »), cliquez « Traiter les signalements ». Chaque
-   signalement tourne en boucle, de 1,5 s avant à 1,5 s après, avec les mêmes boutons que pour
-   les passages douteux. « C'est réglé » retire le signalement.
+#### Alertes
+
+Une alerte signale un endroit où quelque chose peut rester visible : l'objet que vous faites
+suivre (compteur, téléphone…) a été perdu, ou retrouvé automatiquement après un changement de
+plan. Le passage tourne en boucle et vous répondez à « Tout ce qui doit être flouté l'est-il ? » :
+« Oui, c'est bon », « Il manque un flou », « Un flou est en trop », « Montrer « compteur » ici »
+ou « Plus tard ».
+
+#### Flous gênants et non floutés
+
+« Flous gênants » ouvre une planche de vignettes limitée aux flous qui se voient (gros ou
+longs), les plus gênants d'abord. Cochez ceux qui n'ont pas lieu d'être (Maj + clic pour une
+série), puis « Retirer les N flous cochés » ; Ctrl+Z remet tout. « Tous les flous » montre aussi
+les petits.
+
+« Non floutés à regarder » montre ce que le logiciel a vu sans le flouter : objets trop peu
+sûrs, ou que la contre-vérification n'a pas retrouvés (voir « Réglages »). Si un vrai visage
+s'y trouve, cochez-le puis « Flouter quand même ».
+
+#### Ne jamais flouter un endroit
+
+Si le logiciel prend toujours le même morceau de votre moto pour un visage ou une plaque :
+onglet « Flous », « Ne jamais flouter ici… », tracez un rectangle. Les flous automatiques qui
+s'y tiennent sont retirés, maintenant et après une nouvelle analyse. Un objet qui ne fait que
+traverser la zone reste flouté. **Attention** : un vrai visage ou une vraie plaque qui se
+tiendrait dans cette zone ne serait pas flouté. La liste « Endroits jamais floutés » permet de
+retirer une zone.
 
 #### Voir une image de près, exporter
 
@@ -316,9 +333,9 @@ image exacte, floutée ». C'est exactement ce que produira l'export pour cette 
 exacte, sans flou » montre l'original, utile pour chercher une plaque que le logiciel aurait
 manquée. Zoomez à la molette pour regarder de près.
 
-L'étape « 4 Export » résume la vérification (par exemple « 12 passages validés, 0 à revoir,
-0 signalement »). S'il reste des passages à revoir ou des signalements, le logiciel le dit et
-vous demande de cocher « J'exporte quand même, sans avoir tout vérifié » avant d'exporter.
+L'étape « 4 Export » dit ce qui reste : relecture non faite, signalements à traiter, alertes à
+regarder. Dans ce cas seulement, le logiciel vous demande de cocher « J'exporte quand même »
+avant d'exporter.
 
 #### Travail libre sur les flous
 
@@ -389,6 +406,7 @@ en cherchant vos objets automatiquement.
 | Garder le flou avant et après | en secondes : durée de flou ajoutée avant l'apparition et après la disparition d'un objet |
 | Type de flou | mosaïque lissée, ou aplat de couleur (le plus sûr) |
 | Forme | ellipse pour les visages, rectangle arrondi pour les plaques par défaut |
+| Contre-vérifier les flous douteux | coché par défaut : un objet douteux est remontré au détecteur en plus grand ; s'il n'y est pas retrouvé, il n'est pas flouté (arbre, reflet, sac pris pour un visage…). Il reste dans « Non floutés à regarder ». Décochez si un vrai visage ou une vraie plaque manque |
 | Stabiliser les flous | coché par défaut : le flou ne tremble plus et ne change plus de taille à chaque image, sans jamais découvrir l'objet |
 | Moins de faux flous ↔ Moins de risques | un seul curseur à cinq crans, qui règle le score minimal des visages et des plaques. Vers la droite, le logiciel floute davantage dans le doute. Le changement s'applique tout de suite, sans réanalyse |
 | Réglages experts (repliés) | les curseurs détaillés ci-dessous, et toute la partie « Détection » (modèles, tuiles, seuils) |

@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import av
 import numpy as np
 
-from . import dash, intervals
+from . import confirm, dash, intervals
 from . import project as pj
 from .detect import Detector, gpu_has_worked
 from .models import batchable, ensure_model, get_spec
@@ -106,6 +106,7 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
     # chronomètre donc les deux façons sur une image d'essai et on garde la plus rapide.
     on_gpu = any(d.provider != "CPUExecutionProvider" for d in detectors.values())
     if not on_gpu or len(detectors) < 2:
+        one_by_one.detectors = detectors  # pour la contre-vérification, avec les mêmes modèles
         return one_by_one, notes
     pool = ThreadPoolExecutor(max_workers=len(detectors))
 
@@ -130,6 +131,7 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
         f"  par image : {1000 * alone:.0f} ms l'un après l'autre, {1000 * both:.0f} ms en parallèle "
         f"-> {chosen}"
     )
+    detect.detectors = detectors
     return detect, notes
 
 
@@ -186,6 +188,33 @@ def analyze_range(
     return tracks, reached, timings
 
 
+def _confirm_clip(project: pj.Project, clip: pj.Clip, device: str, detect: DetectFn | None = None) -> bool:
+    """Contre-vérifie les objets douteux du clip (voir `confirm.py`). False si interrompu."""
+    if not confirm.pending(project, clip):
+        if clip.id in project.analysis:
+            project.analysis[clip.id].confirmed = True
+        return True
+    if detect is None:
+        detect, _ = make_detect_fn(project, clip, device)
+    detectors = getattr(detect, "detectors", None)
+    if not detectors:
+        return True
+    try:
+        result = confirm.confirm_tracks(project, clip, detectors)
+    except KeyboardInterrupt:
+        print("\nContre-vérification interrompue : elle reprendra à la prochaine analyse.", file=sys.stderr)
+        return False
+    project.analysis[clip.id].confirmed = True
+    refresh_review(project)
+    pj.save(project)
+    if result["examined"]:
+        note = (f"{result['examined']} objets douteux revus de plus près, "
+                f"{result['unconfirmed']} non retrouvés et donc non floutés")
+        print(f"{clip.id} : {note}.")
+        project.notes = [*getattr(project, "notes", []), note[0].upper() + note[1:] + "."]
+    return True
+
+
 def analyze_project(project: pj.Project, device: str = "auto", detect_fn: DetectFn | None = None) -> bool:
     """Analyse tout ce qui manque dans le projet. Renvoie False si l'analyse a été interrompue."""
     settings = project.analysis_settings
@@ -207,6 +236,9 @@ def analyze_project(project: pj.Project, device: str = "auto", detect_fn: Detect
             pj.save(project)
         if not todo:
             print(f"{clip.id} ({clip.path}) : déjà analysé, rien à faire.")
+            if detect_fn is None and not _confirm_clip(project, clip, device):
+                complete = False
+                break
             continue
         video = clip.video
         if video.rotation:
@@ -250,9 +282,31 @@ def analyze_project(project: pj.Project, device: str = "auto", detect_fn: Detect
             )
         if not complete:
             break
+        if detect_fn is None and not _confirm_clip(project, clip, device, detect):
+            complete = False
+            break
     refresh_review(project)
     pj.save(project)
     return complete
+
+
+def apply_ignore_zones(project: pj.Project, clip_id: str | None = None) -> int:
+    """Retire les flous automatiques situés dans une zone à ne jamais flouter. Renvoie leur nombre.
+
+    Appelé quand une zone est posée et après chaque analyse (les nouvelles détections aussi).
+    """
+    from .postprocess import in_ignore_zone
+
+    count = 0
+    for cid, zones in project.ignore.items():
+        state = project.analysis.get(cid)
+        if not state or (clip_id is not None and cid != clip_id):
+            continue
+        for t in state.tracks:
+            if t.source == "auto" and not t.disabled and in_ignore_zone(t, zones):
+                t.disabled = True
+                count += 1
+    return count
 
 
 def refresh_review(project: pj.Project) -> None:

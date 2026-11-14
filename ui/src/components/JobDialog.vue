@@ -53,7 +53,7 @@ const phase = computed(() => {
 const after = computed(() => {
   switch (j.value.kind) {
     case "proxy": return "Ensuite, la lecture sera fluide. Ce n'est fait qu'une fois par vidéo.";
-    case "analyze": return "L'analyse terminée, vous pourrez vérifier le floutage.";
+    case "analyze": return "L'analyse terminée, tout ce qui a été détecté sera flouté : il restera à regarder la vidéo une fois.";
     case "dash": return "Le suivi terminé, l'objet sera flouté sur tout le clip ; regardez le résultat en lecture.";
     case "render": return "La vidéo sera écrite dans le dossier du projet. Vos fichiers d'origine ne sont pas modifiés.";
     case "follow": return "Le suivi s'arrête seul à un changement de plan.";

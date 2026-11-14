@@ -149,6 +149,11 @@ class BlurSettings:
     # Stabiliser les flous : position lissée et taille maintenue sur quelques images, pour
     # qu'une zone ne tremble pas. La zone lissée contient toujours la détection de l'image.
     smooth: bool = True
+    # Contre-vérification : un objet douteux, que le détecteur ne retrouve pas quand on le lui
+    # remontre en plus grand, n'est pas flouté (arbre, reflet, sac pris pour un visage…). Il
+    # reste listé parmi les objets non floutés, d'où il peut être flouté quand même.
+    confirm: bool = True
+    confirm_min: float = 0.10
     # Nombre d'images où une détection doit atteindre le score minimal pour être floutée. Un vrai
     # visage ou une vraie plaque reste plusieurs images à l'écran ; une fausse détection
     # (feuillage, reflet, carénage) clignote. Exception : une détection très nette (score
@@ -194,6 +199,9 @@ class Track:
     # les points étant exprimés par rapport à la boîte observée à cet instant (0 = bord gauche ou
     # haut, 1 = bord droit ou bas ; un point peut en sortir un peu). None = forme habituelle.
     outline: list[list[float]] | None = None
+    # Contre-vérification d'un objet douteux : meilleur score obtenu quand le détecteur le revoit
+    # en plus grand. None = pas examiné (objet sûr, ou vérification pas encore faite).
+    confirm: float | None = None
 
     @property
     def name(self) -> str:
@@ -208,6 +216,8 @@ class ClipAnalysis:
     signature: str = ""
     analyzed: list[list[int]] = field(default_factory=list)  # intervalles de PTS
     tracks: list[Track] = field(default_factory=list)
+    # La contre-vérification des objets douteux a été faite au moins une fois pour ce clip.
+    confirmed: bool = False
 
 
 @dataclass
@@ -232,6 +242,9 @@ class Project:
     preset: str = "normal"
     # Relecture complète : position atteinte dans le montage (secondes) et si elle est terminée.
     sweep: dict = field(default_factory=lambda: {"position": 0.0, "done": False})
+    # Zones à ne jamais flouter (un morceau de la moto pris pour un visage, par exemple) :
+    # identifiant du clip -> rectangles [x1, y1, x2, y2] en pixels de l'image source.
+    ignore: dict[str, list[list[int]]] = field(default_factory=dict)
     path: Path | None = None
 
     def clip(self, clip_id: str) -> Clip:
@@ -318,6 +331,8 @@ def _track_to_json(t: Track) -> str:
         doc["reacquired_at"] = int(t.reacquired_at)
     if t.span is not None:
         doc["span"] = [int(t.span[0]), int(t.span[1])]
+    if t.confirm is not None:
+        doc["confirm"] = round(float(t.confirm), 3)
     if t.outline:
         doc["outline"] = [[int(row[0]), *[round(float(x), 3) for x in row[1:]]] for row in t.outline]
     doc["obs"] = obs
@@ -338,6 +353,7 @@ def dumps(project: Project) -> str:
         "conform": project.conform,
         "preset": project.preset,
         "sweep": project.sweep,
+        "ignore": project.ignore,
         "review_done": project.review_done,
         "marks": project.marks,
         "review": project.review,
@@ -350,6 +366,7 @@ def dumps(project: Project) -> str:
             f"    {json.dumps(clip_id)}: {{\n"
             f'      "signature": {json.dumps(a.signature)},\n'
             f'      "analyzed": {json.dumps(a.analyzed)},\n'
+            f'      "confirmed": {json.dumps(a.confirmed)},\n'
             f'      "tracks": [\n{tracks}\n      ]\n'
             "    }"
         )
@@ -388,10 +405,13 @@ def load(path: Path) -> Project:
                 t["id"], t["kind"], t["obs"], t.get("source", "auto"), t.get("disabled", False),
                 t.get("forced", False), t.get("extend_before_s"), t.get("extend_after_s"),
                 t.get("label", ""), t.get("reacquired_at"), t.get("span"), t.get("outline"),
+                t.get("confirm"),
             )
             for t in a.get("tracks", [])
         ]
-        analysis[clip_id] = ClipAnalysis(a.get("signature", ""), a.get("analyzed", []), tracks)
+        analysis[clip_id] = ClipAnalysis(
+            a.get("signature", ""), a.get("analyzed", []), tracks, bool(a.get("confirmed", False))
+        )
     return Project(
         clips=clips,
         timeline=[Segment(**s) for s in doc.get("timeline", [])],
@@ -407,6 +427,7 @@ def load(path: Path) -> Project:
         ],
         conform=doc.get("conform", ""),
         preset=doc.get("preset", "normal"),
+        ignore={k: [[int(x) for x in box] for box in v] for k, v in doc.get("ignore", {}).items()},
         sweep={"position": float(doc.get("sweep", {}).get("position", 0.0)),
                "done": bool(doc.get("sweep", {}).get("done", False))},
         path=path,

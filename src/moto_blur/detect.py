@@ -331,6 +331,21 @@ class Detector:
             results.append(rows[:, [1, 2, 3, 4, 6]])
         return results
 
+    def examine(self, views: list[np.ndarray]) -> list[np.ndarray]:
+        """Détections (n, 5) dans chacune des vues données, déjà à la taille d'entrée du modèle.
+
+        Sert à revoir un objet en plus grand. Le modèle chargé pour l'analyse est réutilisé tel
+        quel : son lot a une taille fixe, on complète donc le dernier avec des vues grises."""
+        size = self.spec.input_size
+        out: list[np.ndarray] = []
+        step = max(1, self.batch)
+        for i in range(0, len(views), step):
+            chunk = list(views[i : i + step])
+            real = len(chunk)
+            chunk += [np.full((size, size, 3), 114, dtype=np.uint8)] * (step - real)
+            out.extend(self._decode(self._run(self._blob(chunk)))[:real])
+        return out
+
     def detect(self, rgb: np.ndarray) -> np.ndarray:
         """Détections (n, 5) x1,y1,x2,y2,score dans le repère de l'image entière."""
         size = self.spec.input_size

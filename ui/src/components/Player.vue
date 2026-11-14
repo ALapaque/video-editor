@@ -5,16 +5,18 @@
 // Zoom : molette (ou pincement), centré sur la souris ; glisser pour se déplacer une fois zoomé.
 // Le calque est dessiné avec le même cadrage que la vidéo : tracés, clics, contours et aperçu du
 // flou restent justes à tous les niveaux de zoom.
+// Relecture (`state.clickRemoves`, dans les deux modes) : le flou sous la souris ressort, le curseur
+// devient une main, et un clic le retire aussitôt sans arrêter la lecture, même zoomé.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import type { ZoneTuple } from "../api";
 import Icon from "./Icon.vue";
-import { confidence, confidenceInfo, snapshot } from "../extras";
+import { addIgnoreZone, confidence, confidenceInfo, removeBlur, snapshot } from "../extras";
 import { displayName, panels } from "../blurs";
 import { loop, objectHere, outline, rate, removeZone, resume, review, speeds } from "../review";
 import {
   start,
   current, droppedNow, duration, formatTime, kindLabel, notify, objectNames, player, project, saveManual, seekTime, segments,
-  state, time, trackById, zonesNow,
+  state, time, trackById, zonesSteady,
 } from "../store";
 
 const props = defineProps<{ simple?: boolean }>();
@@ -82,8 +84,14 @@ function sync(): void {
   const target = mediaTime(state.frame, s.fps);
   if (Math.abs(el.currentTime - target) > 0.25 / s.fps) el.currentTime = target;
   el.muted = muted.value || userMuted.value;
+  played = { seg: state.seg, frame: state.frame };
   draw();
 }
+
+// Dernière position donnée par la lecture elle-même. Si la tête de lecture est ailleurs, c'est
+// qu'on l'a déplacée (clic sur la timeline pendant la relecture, pour revoir un passage) : la
+// vidéo doit suivre, sans s'arrêter.
+let played = { seg: -1, frame: -1 };
 
 function onVideoFrame(_now: number, meta: { mediaTime: number }): void {
   const el = video.value;
@@ -104,7 +112,10 @@ function onVideoFrame(_now: number, meta: { mediaTime: number }): void {
         state.frame = s.outFrame - 1;
       }
     } else if (frame >= s.inFrame) {
-      state.frame = frame;
+      if (state.frame === played.frame && state.seg === played.seg) {
+        state.frame = frame;
+        played.frame = frame;
+      }
       // vérification guidée : le passage affiché tourne en boucle (simple comparaison, aucune mise en page)
       if (loop.value && time.value >= loop.value.to) restartLoop();
     }
@@ -278,10 +289,13 @@ function labelOf(clipId: string, id: number, kind: string): string {
   return `${displayName(track)} · ${confidenceInfo[confidence(track)].label}`;
 }
 
-let hoverId: number | null = null; // flou survolé à la souris (mode avancé)
+let hoverId: number | null = null; // flou survolé à la souris (mode avancé, et relecture dans les deux modes)
+let pointer: { x: number; y: number } | null = null; // dernière position de la souris sur l'image (pixels de la fenêtre)
+// Flous qu'un clic vient de retirer : ils quittent l'image tout de suite, sans attendre le moteur.
+const hiding = new Set<string>();
 
 // Légende : ce qui est réellement dessiné sur l'image. Mise à jour seulement quand elle change.
-type LegendKey = "blur" | "face" | "plate" | "dash" | "manual" | "dashed" | "gray" | "selected" | "drawing";
+type LegendKey = "blur" | "face" | "plate" | "dash" | "manual" | "dashed" | "gray" | "selected" | "drawing" | "ignore";
 const legend = ref<LegendKey[]>([]);
 const seen = new Set<LegendKey>();
 let legendSignature = "";
@@ -296,8 +310,9 @@ const legendInfo: Record<LegendKey, { label: string; help: string }> = {
   gray: { label: "Gris : non flouté", help: "Trop peu sûr pour être flouté. Vous pouvez le flouter quand même depuis la liste." },
   selected: { label: "Trait épais : sélectionné", help: "Le flou sélectionné dans l'image ou dans la liste." },
   drawing: { label: "Jaune : rectangle tracé", help: "Le rectangle que vous venez de tracer." },
+  ignore: { label: "Hachures : jamais flouté ici", help: "Endroit à ne jamais flouter. Il se retire dans l'onglet « Flous »." },
 };
-const legendOrder: LegendKey[] = ["blur", "face", "plate", "dash", "manual", "dashed", "gray", "selected", "drawing"];
+const legendOrder: LegendKey[] = ["blur", "face", "plate", "dash", "manual", "dashed", "gray", "selected", "drawing", "ignore"];
 function publishLegend(): void {
   if (props.simple) return;
   // pendant la lecture, la légende ne fait que s'enrichir pendant 2 s (elle ne clignote pas d'une
@@ -343,7 +358,10 @@ function draw(): void {
   const u = 1 / view.s;
   const k = rect.width / s.clip.width;
   const top = -view.y / view.s; // haut de la partie visible, dans le repère du dessin
-  const zones = state.preview === "off" ? [] : (zonesNow(s.clip.id, state.frame, draw) ?? []);
+  let zones = state.preview === "off" ? [] : (zonesSteady(s.clip.id, state.frame, draw) ?? []);
+  if (hiding.size) zones = zones.filter((z) => !hiding.has(`${s.clip.id}:${z[7]}`));
+  // relecture : le flou qui passe sous la souris immobile ressort, lui aussi
+  if (state.clickRemoves && state.playing && pointer) hoverAt(pointer.x, pointer.y);
   // vérification guidée : les flous du passage affiché sont entourés par-dessus l'aperçu du flou ;
   // tous le sont quand il faut en cliquer un pour le retirer
   const marked = outline.value && outline.value.clip === s.clip.id ? outline.value.ids : null;
@@ -389,12 +407,54 @@ function draw(): void {
     ctx.restore();
   }
 
+  // endroits à ne jamais flouter : hachures grises discrètes, en vue « contours » (ou pendant
+  // qu'on en trace un, ou quand la liste de l'onglet « Flous » en fait ressortir un)
+  const ignored = project.value?.ignore?.[s.clip.id] ?? [];
+  if (ignored.length && state.preview !== "off" && (state.preview === "boxes" || panels.ignoring || panels.ignoreHover !== null)) {
+    ignored.forEach(([x1, y1, x2, y2], i) => {
+      const strong = panels.ignoreHover === i;
+      const [ax, ay, aw, ah] = [x1 * k, y1 * k, (x2 - x1) * k, (y2 - y1) * k];
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(ax, ay, aw, ah);
+      ctx.clip();
+      ctx.lineWidth = 1 * u;
+      ctx.strokeStyle = strong ? "rgba(255, 255, 255, .6)" : "rgba(195, 201, 209, .34)";
+      ctx.beginPath();
+      for (let d = -ah; d < aw; d += 9 * u) {
+        ctx.moveTo(ax + d, ay + ah);
+        ctx.lineTo(ax + d + ah, ay);
+      }
+      ctx.stroke();
+      ctx.restore();
+      ctx.lineWidth = (strong ? 2 : 1) * u;
+      ctx.strokeStyle = strong ? "#fff" : "rgba(195, 201, 209, .7)";
+      ctx.setLineDash([3 * u, 3 * u]);
+      ctx.strokeRect(ax, ay, aw, ah);
+      ctx.setLineDash([]);
+    });
+    seen.add("ignore");
+  }
+
   const labels: { text: string; x: number; y: number; color: string }[] = [];
   for (const z of zones) {
     const [x1, y1, , , , , kind, id, score] = z;
     const selected = state.selectedTrack?.id === id && state.selectedTrack.clip === s.clip.id;
     const isFocused = !!focus && zoneIn(z, focus);
     const hovered = hoverId === id;
+    if (hovered && state.clickRemoves) {
+      // relecture : le flou sous la souris ressort, même en aperçu du flou — un clic le retire
+      ctx.lineWidth = 5 * u;
+      ctx.strokeStyle = "rgba(0, 0, 0, .6)";
+      shapePath(ctx, z, k);
+      ctx.stroke();
+      ctx.lineWidth = 2.5 * u;
+      ctx.strokeStyle = "#fff";
+      ctx.stroke();
+      const track = trackById(s.clip.id, id);
+      labels.push({ text: `Cliquez pour retirer${track ? ` · ${displayName(track)}` : ""}`, x: x1 * k, y: Math.max(top + 14 * u, y1 * k - 5 * u), color: "#fff" });
+      continue;
+    }
     if (state.preview === "boxes" || selected || outlineAll || isFocused || (marked && marked.has(id))) {
       const color = colors[kind] ?? "#fff";
       if (isFocused) {
@@ -424,12 +484,15 @@ function draw(): void {
   }
   if (labels.length) {
     ctx.font = `${11.5 * u}px system-ui, sans-serif`;
+    const leftEdge = -view.x / view.s; // partie visible de l'image, dans le repère du dessin
+    const rightEdge = leftEdge + rect.width / view.s;
     for (const l of labels) {
       const tw = ctx.measureText(l.text).width + 8 * u;
+      const lx = Math.max(leftEdge + 2 * u, Math.min(l.x, rightEdge - tw - 2 * u)); // l'étiquette reste entière dans l'image
       ctx.fillStyle = "rgba(0,0,0,.72)";
-      ctx.fillRect(l.x, l.y - 12 * u, tw, 15 * u);
+      ctx.fillRect(lx, l.y - 12 * u, tw, 15 * u);
       ctx.fillStyle = l.color;
-      ctx.fillText(l.text, l.x + 4 * u, l.y - 1 * u);
+      ctx.fillText(l.text, lx + 4 * u, l.y - 1 * u);
     }
   }
   if (state.showDropped) {
@@ -476,7 +539,7 @@ watch(() => state.focus, () => {
 // --- Tracé à la souris, sélection, déplacement de l'image zoomée --------------
 
 /** Point de l'image source sous le pointeur, cadrage du zoom compris. */
-function toSource(event: PointerEvent): { x: number; y: number } {
+function toSource(event: { clientX: number; clientY: number }): { x: number; y: number } {
   const s = current.value!;
   const rect = canvas.value!.getBoundingClientRect();
   const fx = (event.clientX - rect.left - view.x) / view.s;
@@ -487,13 +550,38 @@ function toSource(event: PointerEvent): { x: number; y: number } {
   };
 }
 
-/** Flous sous le point, le plus petit d'abord. */
-function hitsAt(p: { x: number; y: number }): ZoneTuple[] {
+/** Flous sous le point (à `pad` pixels source près) sur l'image `frame`, le plus petit d'abord. */
+function hitsAt(p: { x: number; y: number }, pad = 0, frame = state.frame): ZoneTuple[] {
   const s = current.value;
   if (!s) return [];
-  return (zonesNow(s.clip.id, state.frame) ?? [])
-    .filter((z) => p.x >= z[0] && p.x <= z[2] && p.y >= z[1] && p.y <= z[3])
+  return (zonesSteady(s.clip.id, frame) ?? [])
+    .filter((z) => p.x >= z[0] - pad && p.x <= z[2] + pad && p.y >= z[1] - pad && p.y <= z[3] + pad && !hiding.has(`${s.clip.id}:${z[7]}`))
     .sort((a, b) => (a[2] - a[0]) * (a[3] - a[1]) - (b[2] - b[0]) * (b[3] - b[1]));
+}
+
+/** Relecture : flou visé par la souris. Un flou petit et qui bouge se vise mal pendant la lecture :
+ *  on accepte quelques pixels d'écart, et la place qu'il occupait un instant plus tôt. */
+function hitsNear(p: { x: number; y: number }): ZoneTuple[] {
+  const s = current.value;
+  const rect = canvas.value?.getBoundingClientRect();
+  let hits = hitsAt(p);
+  if (hits.length || !s || !rect?.width) return hits;
+  const pad = (12 * s.clip.width) / (rect.width * view.s); // 12 pixels à l'écran
+  hits = hitsAt(p, pad);
+  for (let back = 1; back <= 8 && !hits.length && state.playing && state.frame - back >= s.inFrame; back++) hits = hitsAt(p, pad, state.frame - back);
+  return hits;
+}
+
+/** Relecture : flou automatique (le seul qu'un clic retire) sous la souris, à faire ressortir. */
+function hoverAt(clientX: number, clientY: number): void {
+  const s = current.value;
+  if (!s || !canvas.value) return;
+  const hit = hitsNear(toSource({ clientX, clientY })).find((z) => trackById(s.clip.id, z[7])?.source === "auto");
+  const id = hit ? hit[7] : null;
+  if (id !== hoverId) {
+    hoverId = id;
+    setCursor();
+  }
 }
 
 /** Clic simple sans outil : sélectionne le flou sous le pointeur, ou le retire (« Un flou est en trop »). */
@@ -506,6 +594,28 @@ function clickAt(p: { x: number; y: number }): void {
     else notify("Cliquez directement sur un flou entouré dans l'image.");
     return;
   }
+  if (state.clickRemoves) {
+    // Relecture : un clic sur un flou le retire aussitôt, la lecture continue.
+    const near = hitsNear(p);
+    const hit = near.find((z) => trackById(s.clip.id, z[7])?.source === "auto") ?? near[0];
+    if (!hit) return;
+    const key = `${s.clip.id}:${hit[7]}`;
+    // il quitte l'image tout de suite (sauf s'il est réuni à d'autres flous, qui restent)
+    // Mode avancé : les flous réunis dans la même tache partent ensemble (l'assistant fait de
+    // même de son côté). La tache quitte l'image tout de suite si elle ne contient que des
+    // flous automatiques.
+    const group = state.mode === "simple" ? [] : (hit[9] ?? []);
+    const allAuto = group.length > 1 && group.every((g) => trackById(s.clip.id, g)?.source === "auto");
+    if (trackById(s.clip.id, hit[7])?.source === "auto" && ((hit[9]?.length ?? 0) <= 1 || allAuto)) hiding.add(key);
+    hoverId = null;
+    setCursor();
+    if (!state.playing) draw();
+    void removeBlur(s.clip.id, hit[7], group).finally(() => {
+      hiding.delete(key);
+      if (!state.playing) draw();
+    });
+    return;
+  }
   if (state.mode === "simple") return; // pas de sélection de flou dans l'assistant
   state.selectedTrack = hits.length ? { clip: s.clip.id, id: hits[0][7] } : null;
   draw();
@@ -516,7 +626,7 @@ function setCursor(): void {
   if (!cv) return;
   let cursor = "";
   if (pan?.moved) cursor = "grabbing";
-  else if (state.tool === "none" && review.sub !== "extra") cursor = hoverId !== null && !props.simple ? "pointer" : zoomed.value ? "grab" : "";
+  else if (state.tool === "none" && review.sub !== "extra") cursor = hoverId !== null && (!props.simple || state.clickRemoves) ? "pointer" : zoomed.value ? "grab" : "";
   if (cv.style.cursor !== cursor) cv.style.cursor = cursor;
 }
 
@@ -562,6 +672,14 @@ function pointerMove(event: PointerEvent): void {
     draw();
     return;
   }
+  pointer = { x: event.clientX, y: event.clientY };
+  if (state.clickRemoves && state.tool === "none" && review.sub !== "extra" && current.value) {
+    // relecture : le flou qu'un clic retirerait ressort, dans les deux modes
+    const before = hoverId;
+    hoverAt(event.clientX, event.clientY);
+    if (before !== hoverId && !state.playing) draw();
+    return;
+  }
   // survol : l'étiquette du flou sous la souris s'affiche (mode avancé)
   if (props.simple || state.tool !== "none" || !current.value) return;
   const hit = hitsAt(toSource(event))[0];
@@ -574,6 +692,7 @@ function pointerMove(event: PointerEvent): void {
 }
 
 function pointerLeave(): void {
+  pointer = null;
   if (hoverId !== null) {
     hoverId = null;
     if (!state.playing) draw();
@@ -593,12 +712,24 @@ async function pointerUp(event: PointerEvent): Promise<void> {
   const box = [Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1), Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1)].map(Math.round);
   drag = null;
   const tool = state.tool;
+  const ignoring = panels.ignoring && tool === "manual"; // outil « Ne jamais flouter ici »
+  panels.ignoring = false;
   state.tool = "none";
   draw();
   const guidedLoop = review.sub === "missing" ? loop.value : null;
   if (box[2] - box[0] < 6 || box[3] - box[1] < 6) {
     notify("Rectangle trop petit : maintenez le bouton et tracez un rectangle.");
     if (guidedLoop) state.tool = "manual"; // on reste sur « Il manque un flou » : nouvel essai
+    return;
+  }
+  if (ignoring) {
+    const before = project.value?.ignore?.[s.clip.id]?.length ?? 0;
+    const n = await addIgnoreZone(s.clip.id, box);
+    if (n === undefined) return;
+    notify(n ? `Cet endroit ne sera plus flouté. ${n > 1 ? `${n} flous retirés` : "1 flou retiré"}. Pour revenir en arrière : « Annuler » (Ctrl+Z).` : "Cet endroit ne sera plus flouté. Aucun flou ne s'y tenait pour l'instant.");
+    // la zone ressort un instant, même en aperçu du flou : on voit ce qu'on vient de tracer
+    panels.ignoreHover = before;
+    window.setTimeout(() => panels.ignoreHover === before && (panels.ignoreHover = null), 3000);
     return;
   }
   const t = state.frame / s.fps;
@@ -661,6 +792,7 @@ function onKey(event: KeyboardEvent): void {
   else if (event.code === "End") seekTime(duration.value);
   else if (event.code === "Escape") {
     state.tool = "none";
+    panels.ignoring = false;
     drag = null;
     if (review.sub !== "ask") resume(); // abandon de la correction : retour à la question
     draw();
@@ -676,16 +808,21 @@ watch(() => [state.seg, state.frame, state.data.version, state.preview, state.se
   if (!state.playing) {
     if (exact.value) exactLoading.value = true;
     sync();
-  }
+  } else if (state.frame !== played.frame || state.seg !== played.seg) sync(); // tête déplacée pendant la lecture : la vidéo suit
 });
 watch(() => current.value?.clip.proxy, () => nextTick(sync));
 watch(exact, (value) => (exactLoading.value = !!value));
 watch(rate, (value) => video.value && (video.value.playbackRate = value));
-watch(() => [review.sub, review.current, state.showDropped, state.pendingDash, state.pendingBlur, state.tool], () => {
+watch(() => [review.sub, review.current, state.showDropped, state.pendingDash, state.pendingBlur, state.tool, state.clickRemoves, panels.ignoring, panels.ignoreHover], () => {
   hoverId = null;
   setCursor();
   draw();
 });
+// l'outil « Ne jamais flouter ici » s'arrête avec le tracé (autre outil choisi, Échap, tracé fait)
+watch(() => state.tool, (tool) => {
+  if (tool !== "manual") panels.ignoring = false;
+});
+watch(() => project.value?.ignore, () => !state.playing && draw(), { deep: true });
 
 // Capture : l'image affichée est enregistrée en PNG pleine résolution à côté du projet, floutée
 // comme à l'export (nette seulement si la qualité de l'aperçu est « image exacte, sans flou »).
@@ -782,7 +919,7 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
           <Transition name="hint">
             <div v-if="state.tool !== 'none' && simple" class="hint tool">{{ state.tool === "dash" ? "Entourez l'objet avec la souris" : "Entourez avec la souris ce qui doit être flouté" }}</div>
             <div v-else-if="state.tool !== 'none'" class="hint tool">
-              {{ state.tool === "dash" ? "Tracez un rectangle autour de l'objet à flouter" : "Tracez un rectangle sur ce qui doit être flouté" }} — Échap pour annuler
+              {{ panels.ignoring ? "Tracez un rectangle sur l'endroit à ne jamais flouter" : state.tool === "dash" ? "Tracez un rectangle autour de l'objet à flouter" : "Tracez un rectangle sur ce qui doit être flouté" }} — Échap pour annuler
             </div>
             <div v-else-if="review.sub === 'extra'" class="hint tool">{{ simple ? "Cliquez sur le flou à retirer" : "Cliquez le flou à retirer — Échap pour annuler" }}</div>
             <div v-else-if="exactLoading && exact && !state.playing" class="hint"><span class="spinner small"></span>Chargement de l'image exacte…</div>
@@ -868,6 +1005,10 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
 .sw-gray { border-top: 1px dashed #c3c9d1; }
 .sw-selected { border-top-width: 3px; border-color: var(--text); }
 .sw-drawing { border-top-style: dashed; border-color: #fde047; }
+.sw-ignore {
+  width: 12px; height: 10px; border: 1px dashed rgba(195, 201, 209, .7); border-radius: 1px;
+  background: repeating-linear-gradient(135deg, transparent 0 2px, rgba(195, 201, 209, .5) 2px 3px);
+}
 .sw-blur {
   width: 12px; height: 10px; border: 0; border-radius: 2px;
   background: linear-gradient(90deg, #6b7380 0 33%, #8a929e 33% 66%, #5b626d 66%), #6b7380;

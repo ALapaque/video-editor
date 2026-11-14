@@ -49,6 +49,9 @@ const paths = {
   grip: '<path d="M6 4v.1M10 4v.1M6 8v.1M10 8v.1M6 12v.1M10 12v.1" stroke-width="2"/>',
   user: '<circle cx="8" cy="5.6" r="2.6"/><path d="M2.9 13.4a5.2 5.2 0 0 1 10.2 0"/>',
   /* === fin des ajouts du mode avancé === */
+  /* === nouveau flux, mode avancé === */
+  ban: '<circle cx="8" cy="8" r="5.75"/><path d="m3.95 3.95 8.1 8.1"/>',
+  /* === fin : nouveau flux, mode avancé === */
 } as const;
 export type IconName = keyof typeof paths;
 </script>

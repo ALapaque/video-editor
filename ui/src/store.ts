@@ -43,6 +43,11 @@ export const state = reactive({
   // Flou mis en évidence sur la vidéo (vérification objet par objet, survol d'une vignette…) :
   // le lecteur le fait ressortir et assombrit le reste de l'image. null : rien de mis en évidence.
   focus: null as { clip: string; ids: number[] } | null,
+  // Pendant la relecture : un clic sur un flou le retire aussitôt, sans arrêter la lecture.
+  clickRemoves: false,
+  // Dernier retrait fait d'un clic : de quoi proposer « Annuler », « Retirer aussi les N flous au
+  // même endroit » et « Ne plus jamais flouter cet endroit ». null : rien à proposer.
+  lastRemoved: null as { clip: string; ids: number[]; name: string; similar: number[] } | null,
 });
 
 // --- Mode simple ou avancé ----------------------------------------------------
@@ -460,3 +465,69 @@ export interface PendingBlur {
 }
 
 /* === fin des ajouts du mode avancé === */
+
+/* === nouveau flux, mode avancé === */
+
+// Flous d'une image, sans à-coup. Chaque correction change la version du projet et oblige à
+// redemander les flous au moteur : `zonesNow` ne renvoie alors plus rien le temps de la réponse, et
+// tous les flous disparaissaient un instant de l'image. Ici, tant que la réponse n'est pas arrivée,
+// on garde les flous de la version précédente (sans ceux qui viennent d'être retirés) ; la suite
+// est demandée dès la moitié du morceau en cours, et chaque morceau n'est demandé qu'une fois.
+const steady = new Map<string, { version: number; frames: Record<string, ZoneTuple[]> }>();
+const steadyAsked = new Map<string, "pending" | "done">();
+function steadyKey(clip: string, index: number): string {
+  return `${project.value?.path}|${clip}:${index}`; // « c1 » désigne un autre fichier dans un autre projet
+}
+let steadyOff = { version: -1, clip: "", ids: new Set<number>() };
+
+function askSteady(clip: string, index: number, onLoad?: () => void): void {
+  if (index < 0) return;
+  const version = state.data.version;
+  const key = `${version}:${clip}:${index}`;
+  const asked = steadyAsked.get(key);
+  if (asked === "pending" || (asked === "done" && ready.has(key))) return;
+  if (steadyAsked.size > 300) steadyAsked.clear();
+  steadyAsked.set(key, "pending");
+  const slot = steadyKey(clip, index);
+  void chunkOf(clip, index).then((frames) => {
+    steadyAsked.set(key, "done");
+    if (version === state.data.version) {
+      if (ready.size > 40) ready.clear();
+      ready.set(key, frames);
+    }
+    const kept = steady.get(slot);
+    if (!kept || kept.version <= version) {
+      if (steady.size > 60) steady.clear();
+      steady.set(slot, { version, frames });
+    }
+    onLoad?.();
+  });
+}
+
+/** Comme `zonesNow`, mais pendant un rechargement on garde les flous connus au lieu de ne rien
+ *  montrer. `undefined` seulement si l'on ne sait encore rien de cette partie du clip. */
+export function zonesSteady(clip: string, frame: number, onLoad?: () => void): ZoneTuple[] | undefined {
+  const index = Math.floor(frame / CHUNK);
+  if (frame % CHUNK > CHUNK / 2) askSteady(clip, index + 1); // la suite, bien avant d'y arriver
+  const loaded = ready.get(`${state.data.version}:${clip}:${index}`);
+  if (loaded) {
+    const kept = steady.get(steadyKey(clip, index));
+    if (!kept || kept.version < state.data.version) steady.set(steadyKey(clip, index), { version: state.data.version, frames: loaded });
+    return loaded[String(frame)] ?? [];
+  }
+  askSteady(clip, index, onLoad);
+  const old = steady.get(steadyKey(clip, index));
+  if (!old) return undefined;
+  if (steadyOff.version !== state.data.version || steadyOff.clip !== clip) {
+    const ids = new Set<number>();
+    for (const t of project.value?.tracks[clip] ?? []) if (t.disabled) ids.add(t.id);
+    steadyOff = { version: state.data.version, clip, ids };
+  }
+  const off = steadyOff.ids;
+  const zones = old.frames[String(frame)] ?? [];
+  if (!off.size) return zones;
+  // un flou retiré ne reste pas affiché ; des flous réunis en une zone la gardent tant qu'il en reste un
+  return zones.filter((z) => !(off.has(z[7]) && (z[9] ?? []).every((id) => off.has(id))));
+}
+
+/* === fin : nouveau flux, mode avancé === */

@@ -594,8 +594,10 @@ def build_dash_review(clip: pj.Clip, tracks: list[pj.Track]) -> list[dict]:
     out = []
 
     def item(start: int, end: int, ids: list[int], reason: str) -> dict:
+        # « risk » : ici, quelque chose peut rester visible (objet perdu, ou flou posé sur un
+        # autre objet). C'est une alerte à regarder, pas un simple doute.
         return {"clip": clip.id, "start_pts": int(start), "end_pts": int(end), "kinds": ["dash"],
-                "reasons": [reason], "tracks": ids}
+                "reasons": [reason], "tracks": ids, "risk": True}
 
     followed = [t for t in tracks if t.kind == "dash" and t.source == "tracker" and t.obs and not t.disabled]
     two_s = 2 / clip.video.tb

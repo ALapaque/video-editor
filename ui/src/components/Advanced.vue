@@ -8,13 +8,14 @@ import Icon from "./Icon.vue";
 import Logo from "./Logo.vue";
 import Player from "./Player.vue";
 import PresetChoice from "./PresetChoice.vue";
+import RemovedBar from "./RemovedBar.vue";
 import Shortcuts from "./Shortcuts.vue";
 import SidePanel from "./SidePanel.vue";
 import Timeline from "./Timeline.vue";
 import WelcomeArt from "./WelcomeArt.vue";
 import { followBlur, formatDuration, measureEstimate, redo, undo } from "../extras";
 import { panels } from "../blurs";
-import { addMark, doubtDone, doubtEntries, doubtLeft, guided, leave, markEntries, pending, resume, review, startQueue, summary, validate } from "../review";
+import { addMark, allClear, guided, leave, remaining, remainingList, resume, resumeSweep, review, startQueue, sweepResume, validate } from "../review";
 import {
   addMute, busy, current, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, project, refresh, saveManual, segments, send,
   setMode, splitAtPlayhead, start, state, time,
@@ -42,16 +43,19 @@ const steps = [
 ];
 const analysing = computed(() => busy.value && job.value?.kind === "analyze");
 const analysed = computed(() => segments.value.length > 0 && !needsAnalysis.value);
+// Projet analysé avant la contre-vérification : « Analyser » ne fait que revoir les flous douteux.
+const recheck = computed(() => needsAnalysis.value && !!project.value?.recheck_only);
+const recheckText = "Le logiciel peut revoir de plus près ses flous douteux pour retirer ceux qui n'ont pas lieu d'être (arbre, reflet…). C'est court : rien n'est analysé à nouveau.";
 /** Étape déduite de l'état du projet. */
 const autoStep = computed(() => {
   if (analysing.value) return 2;
   if (!analysed.value) return 1;
-  return pending.value > 0 ? 3 : 4;
+  return allClear.value ? 4 : 3; // relecture à faire, alertes ou signalements : on reste à la vérification
 });
 const step = computed(() => state.step || autoStep.value);
 function stepDone(id: number): boolean {
   if (id <= 2) return analysed.value && !analysing.value;
-  if (id === 3) return analysed.value && pending.value === 0;
+  if (id === 3) return analysed.value && allClear.value;
   return false;
 }
 function goStep(id: number): void {
@@ -63,10 +67,27 @@ function analyse(): void {
   state.step = 2;
   void start("/api/analyze");
 }
+/** Vers la vérification : l'écran de choix, qui met la relecture en avant. Rien ne démarre seul. */
 function beginReview(): void {
+  if (review.mode !== "home") leave();
   goStep(3);
-  if (doubtLeft.value > 0) startQueue("doubt");
 }
+/** La chose à faire maintenant : la relecture, puis les signalements, puis les alertes. */
+const nextTodo = computed<"sweep" | "marks" | "alerts" | "">(() => {
+  const r = remaining.value;
+  return !r.swept ? "sweep" : r.marks ? "marks" : r.risks ? "alerts" : "";
+});
+function doNext(): void {
+  goStep(3);
+  if (nextTodo.value === "sweep") resumeSweep();
+  else if (nextTodo.value === "marks") startQueue("marks");
+  else if (nextTodo.value === "alerts") startQueue("doubt");
+}
+const nextLabel = computed(() => {
+  if (nextTodo.value === "sweep") return sweepResume.value !== null ? "Reprendre la relecture" : "Commencer la relecture";
+  if (nextTodo.value === "marks") return remaining.value.marks > 1 ? "Traiter les signalements" : "Traiter le signalement";
+  return remaining.value.risks > 1 ? "Regarder les alertes" : "Regarder l'alerte";
+});
 // un autre projet : le guide repart de l'étape déduite
 watch(() => project.value?.path, () => {
   state.step = 0;
@@ -79,28 +100,39 @@ const guide = computed(() => {
   if (empty) return { text: "Le montage est vide. Ajoutez un clip pour commencer.", action: "add" };
   switch (step.value) {
     case 1:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       return needsAnalysis.value
         ? { text: "Coupez ce que vous ne voulez pas garder, puis lancez l'analyse.", action: "analyse" }
         : { text: "Le montage est analysé. Si vous ajoutez un passage, il faudra relancer l'analyse.", action: "continue" };
     case 2:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       return needsAnalysis.value
         ? { text: "Des passages gardés n'ont pas encore été analysés : ils sortiraient sans flou.", action: "analyse", warn: true }
         : { text: "Analyse terminée. Vérifiez maintenant le floutage.", action: "review" };
     case 3:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       if (needsAnalysis.value) return { text: "Analysez d'abord le montage : la vérification porte sur ce que l'analyse a trouvé.", action: "analyse", warn: true };
       if (review.mode === "queue") return { text: "Regardez le passage en boucle et répondez dans le panneau de droite : tout ce qui doit être flouté l'est-il ?", action: "" };
-      if (review.mode === "end") return { text: "Vérification terminée. Choisissez la suite dans le panneau de droite.", action: "" };
-      if (review.mode === "sweep") return { text: "Relecture complète : appuyez sur S dès que quelque chose reste lisible. La lecture continue.", action: "" };
-      if (doubtLeft.value) return { text: `${plural(doubtLeft.value, "passage douteux reste", "passages douteux restent")} à vérifier.`, action: "review" };
-      if (markEntries.value.length) return { text: `${plural(markEntries.value.length, "signalement reste", "signalements restent")} à traiter.`, action: "marks" };
-      return { text: doubtEntries.value.length ? "Tous les passages douteux sont validés. Faites une relecture complète, ou passez à l'export." : "Aucun passage douteux. Faites une relecture complète, ou passez à l'export.", action: "toExport" };
+      if (review.mode === "end") return { text: allClear.value ? "Relecture faite : vous pouvez exporter." : "Choisissez la suite dans le panneau de droite.", action: allClear.value ? "toExport" : "" };
+      if (review.mode === "sweep") return { text: "Cliquez un flou en trop pour le retirer. Touche S si quelque chose reste lisible.", action: "" };
+      return { text: todoText(plural), action: allClear.value ? "toExport" : "todo" };
     default:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       if (needsAnalysis.value) return { text: "Des passages gardés n'ont pas encore été analysés : ils sortiraient sans flou.", action: "analyse", warn: true };
-      return pending.value
-        ? { text: `${summary()}. Tout n'est pas vérifié.`, action: "resume", warn: true }
-        : { text: `${summary()}. Vous pouvez exporter.`, action: "export" };
+      return allClear.value
+        ? { text: "Relecture faite : vous pouvez exporter.", action: "export" }
+        : { text: `Avant d'exporter : ${remainingList().join(", ")}.`, action: "resume", warn: true };
   }
 });
+/** Étape 3 : ce qui reste vraiment, en une phrase. */
+function todoText(plural: (n: number, one: string, many: string) => string): string {
+  const r = remaining.value;
+  const parts: string[] = [];
+  if (!r.swept) parts.push(sweepResume.value !== null ? "Finissez de regarder la vidéo avant d'exporter." : "Regardez la vidéo une fois avant d'exporter.");
+  if (r.marks) parts.push(`${plural(r.marks, "signalement", "signalements")} à traiter.`);
+  if (r.risks) parts.push(`${plural(r.risks, "alerte", "alertes")} à regarder.`);
+  return parts.length ? parts.join(" ") : "Relecture faite : vous pouvez exporter.";
+}
 
 async function picked(path: string): Promise<void> {
   const mode = picker.value;
@@ -224,7 +256,7 @@ function cancelJob(): void {
   } else void send("POST", "/api/cancel");
 }
 
-/** Pendant la vérification guidée, le montage ne se modifie pas : aucun risque de couper par erreur. */
+/** Pendant la relecture, les alertes et les signalements, le montage ne se modifie pas : aucun risque de couper par erreur. */
 const locked = computed(() => guided.value);
 const lockedTip = "Quittez la vérification pour modifier le montage";
 const muteTip = "Couper le son d'un passage : posez le début, puis la fin (M)";
@@ -259,7 +291,7 @@ function onKey(event: KeyboardEvent): void {
   }
   if (busy.value) return;
   if (event.ctrlKey || event.metaKey || event.altKey) return; // Ctrl+Z, Ctrl+C… ne sont pas des raccourcis de montage
-  // vérification guidée : Entrée valide le passage affiché, S pose un signalement pendant la relecture
+  // Entrée répond « Oui, c'est bon » à l'alerte ou au signalement affiché, S pose un signalement pendant la relecture
   if (event.key === "Enter" && review.mode === "queue" && target.tagName !== "BUTTON" && target.tagName !== "A") {
     event.preventDefault();
     void validate();
@@ -388,6 +420,8 @@ onBeforeUnmount(() => {
               <span class="job-label">{{ job.state === "error" ? "Le traitement a échoué" : job.state === "cancelled" ? "Traitement annulé" : "Traitement terminé" }} : afficher le résultat</span>
             </button>
           </template>
+          <!-- relecture : après un clic qui retire un flou, la ligne propose la suite, sans rien bloquer -->
+          <RemovedBar v-else-if="state.lastRemoved" />
           <template v-else>
             <span class="guide-step">Étape {{ step }}</span>
             <p class="guide-text">{{ guide.text }}</p>
@@ -398,12 +432,12 @@ onBeforeUnmount(() => {
               <button class="primary" title="Détecter les visages et les plaques dans les passages gardés qui ne l'ont pas encore été" @click="analyse"><Icon name="scan" />Analyser</button>
             </template>
             <button v-else-if="guide.action === 'continue'" class="primary" @click="goStep(autoStep)">Continuer<Icon name="arrowRight" /></button>
-            <button v-else-if="guide.action === 'review'" class="primary" @click="beginReview">{{ doubtDone ? "Reprendre la vérification" : "Commencer la vérification" }}<Icon name="arrowRight" /></button>
-            <button v-else-if="guide.action === 'marks'" class="primary" @click="goStep(3), startQueue('marks')">Traiter les signalements<Icon name="arrowRight" /></button>
+            <button v-else-if="guide.action === 'review'" class="primary" @click="beginReview">Vérifier le floutage<Icon name="arrowRight" /></button>
+            <button v-else-if="guide.action === 'todo'" class="primary" data-next @click="doNext">{{ nextLabel }}<Icon name="arrowRight" /></button>
             <button v-else-if="guide.action === 'toExport'" class="primary" @click="goStep(4)">Passer à l'export<Icon name="arrowRight" /></button>
             <template v-else-if="guide.action === 'resume'">
               <button @click="exporting = true">Exporter quand même…</button>
-              <button class="primary" @click="beginReview">Reprendre la vérification<Icon name="arrowRight" /></button>
+              <button class="primary" data-next @click="doNext">{{ nextLabel }}<Icon name="arrowRight" /></button>
             </template>
             <button v-else-if="guide.action === 'export'" class="primary" @click="exporting = true"><Icon name="export" />Exporter…</button>
           </template>
@@ -528,4 +562,7 @@ onBeforeUnmount(() => {
 .left.portrait .group-name { flex-basis: 100%; }
 .left.portrait .guide { flex-wrap: wrap; }
 .left.portrait .guide-text { flex-basis: 200px; }
+/* bandeau après un retrait : sur une ligne sous la vidéo horizontale (elle ne bouge pas), replié à côté de la vidéo verticale */
+.left.portrait .removed-bar { flex-wrap: wrap; }
+.left.portrait .removed-bar .spacer { display: none; }
 </style>
