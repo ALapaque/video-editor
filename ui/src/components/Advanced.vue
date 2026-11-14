@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Mode avancé : toute l'interface de montage (timeline, panneau latéral, dialogues).
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import BatchDialog from "./BatchDialog.vue";
 import ExportDialog from "./ExportDialog.vue";
 import FilePicker from "./FilePicker.vue";
 import JobDialog from "./JobDialog.vue";
@@ -13,6 +14,7 @@ import Shortcuts from "./Shortcuts.vue";
 import SidePanel from "./SidePanel.vue";
 import Timeline from "./Timeline.vue";
 import WelcomeArt from "./WelcomeArt.vue";
+import { batch, batchItemText, batchJob, batchRunning, openBatch } from "../batch";
 import { followBlur, formatDuration, measureEstimate, redo, undo } from "../extras";
 import { panels } from "../blurs";
 import { addMark, allClear, guided, leave, remaining, remainingList, resume, resumeSweep, review, startQueue, sweepResume, validate } from "../review";
@@ -247,10 +249,30 @@ const estimateText = computed(() => {
   return `Analyse : ${formatDuration(e.seconds)}${speed}`;
 });
 
+// --- File d'attente : plusieurs vidéos analysées à la suite ---------------------------------
+// Elle a son propre dialogue. Tant qu'elle tourne, le moteur est occupé : le bouton de la barre
+// du haut et l'indicateur (ligne de guide, ou écran d'accueil sans projet) disent où elle en est.
+const batchLabel = computed(() => {
+  const item = batchJob.value?.item;
+  if (batchRunning.value) return item ? `File : vidéo ${item[0]} sur ${item[1]}` : "File en cours…";
+  return batch.last ? "Résultat de la file" : "File d'attente…";
+});
+/** Libellé de l'indicateur de progression : pour la file, la vidéo en cours plutôt que l'étape technique. */
+const jobLabel = computed(() => (batchRunning.value ? `File d'attente · ${batchItemText.value}` : (job.value?.label ?? "")));
+function openJob(): void {
+  if (job.value?.kind === "batch") openBatch();
+  else state.jobOpen = true;
+}
+/** Ouvre une vidéo analysée par la file, depuis la liste des résultats. */
+async function openAnalysed(path: string): Promise<void> {
+  if (await send("POST", "/api/open", { path })) void refresh();
+}
+
 /** « Annuler » de l'indicateur réduit : l'analyse et l'export demandent une confirmation, dans le dialogue. */
 function cancelJob(): void {
   const kind = job.value?.kind;
-  if (kind === "analyze" || kind === "render") {
+  if (kind === "batch") openBatch(true);
+  else if (kind === "analyze" || kind === "render") {
     state.jobConfirm = true;
     state.jobOpen = true;
   } else void send("POST", "/api/cancel");
@@ -283,7 +305,7 @@ function onKey(event: KeyboardEvent): void {
     return;
   }
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
-  if (picker.value || exporting.value || state.pendingDash || state.pendingBlur || review.sheet || state.jobOpen || panels.shortcuts) return; // un dialogue est ouvert
+  if (picker.value || exporting.value || state.pendingDash || state.pendingBlur || review.sheet || state.jobOpen || panels.shortcuts || batch.open) return; // un dialogue est ouvert
   if (event.key === "?" && !event.ctrlKey && !event.metaKey) {
     event.preventDefault();
     panels.shortcuts = true;
@@ -376,6 +398,12 @@ onBeforeUnmount(() => {
       <button class="icon-btn keys-btn" title="Raccourcis clavier (?)" aria-label="Raccourcis clavier" @click="panels.shortcuts = true">?</button>
       <button :disabled="busy" @click="picker = 'open'"><Icon name="folder" />Ouvrir…</button>
       <button v-if="project" :disabled="busy" @click="picker = 'add'"><Icon name="plus" />Ajouter un clip…</button>
+      <button
+        class="batch-btn" :class="{ on: batchRunning }" data-batch
+        :aria-label="batchRunning ? `${batchLabel} : afficher la file` : batch.last ? 'Résultat de la dernière file d\'attente' : 'File d\'attente : analyser plusieurs vidéos à la suite'"
+        :title="batchRunning ? 'Des vidéos sont en cours d\'analyse : afficher la file' : batch.last ? 'Afficher le résultat de la dernière file' : 'Analyser plusieurs vidéos à la suite, sans rester devant l\'écran'"
+        @click="openBatch()"
+      ><span v-if="batchRunning" class="spinner small"></span><Icon v-else name="layers" /><span class="batch-btn-label"><template v-if="batchRunning && batchJob?.item">File : <span class="batch-btn-long">vidéo </span>{{ batchJob.item[0] }} sur {{ batchJob.item[1] }}</template><template v-else>{{ batchLabel }}</template></span></button>
       <button class="mode-switch" title="L'assistant pas à pas, une question à la fois. Le projet ouvert est conservé." @click="toSimple"><Icon name="steps" />Passer en mode simple</button>
     </header>
 
@@ -404,9 +432,9 @@ onBeforeUnmount(() => {
         <!-- Guide : une phrase sur ce qu'il y a à faire maintenant, et le bouton de l'action suivante -->
         <div class="guide" :class="{ warn: guide.warn && !busy }">
           <template v-if="job && job.state === 'running'">
-            <button class="job" title="Afficher le détail de la progression" @click="state.jobOpen = true">
+            <button class="job" title="Afficher le détail de la progression" @click="openJob">
               <span class="job-text">
-                <span class="job-label">{{ job.label }}</span>
+                <span class="job-label">{{ jobLabel }}</span>
                 <span class="job-num">{{ percent }} %</span>
                 <span class="job-meta"><template v-if="job.fps">{{ job.fps }} i/s</template><template v-if="job.fps && eta"> · </template><template v-if="eta">{{ eta }}</template></span>
               </span>
@@ -467,7 +495,20 @@ onBeforeUnmount(() => {
       <WelcomeArt />
       <h1>moto-blur</h1>
       <p class="lead">Floutage automatique des visages, des plaques et du compteur, avec un montage simple. Tout reste sur cette machine.</p>
-      <button class="primary large" @click="picker = 'open'"><Icon name="folder" />Ouvrir une vidéo ou un projet…</button>
+      <button class="primary large" :disabled="busy" @click="picker = 'open'"><Icon name="folder" />Ouvrir une vidéo ou un projet…</button>
+      <!-- sans projet ouvert, pas de ligne de guide : la file en cours se montre ici -->
+      <div v-if="batchRunning && job" class="guide welcome-job">
+        <button class="job" title="Afficher le détail de la file" @click="openJob">
+          <span class="job-text">
+            <span class="job-label">{{ jobLabel }}</span>
+            <span class="job-num">{{ percent }} %</span>
+            <span class="job-meta"><template v-if="eta">{{ eta }}</template></span>
+          </span>
+          <span class="bar"><span :style="{ transform: `scaleX(${percent / 100})` }"></span></span>
+        </button>
+        <button @click="cancelJob">Annuler</button>
+      </div>
+      <button v-else class="quiet welcome-batch" data-batch-welcome @click="openBatch()"><Icon name="layers" />{{ batch.last ? "Voir le résultat de la dernière file" : "Analyser plusieurs vidéos à la suite…" }}</button>
       <ul class="points">
         <li><Icon name="face" />Visages</li>
         <li><Icon name="plate" />Plaques</li>
@@ -486,7 +527,10 @@ onBeforeUnmount(() => {
       <FilePicker v-if="picker" :title="picker === 'open' ? 'Ouvrir une vidéo ou un projet' : 'Ajouter un clip au montage'" @pick="picked" @close="picker = ''" />
     </Transition>
     <Transition name="modal">
-      <JobDialog v-if="job && state.jobOpen" @review="beginReview" />
+      <JobDialog v-if="job && state.jobOpen && job.kind !== 'batch'" @review="beginReview" />
+    </Transition>
+    <Transition name="modal">
+      <BatchDialog v-if="batch.open" @open="openAnalysed" />
     </Transition>
     <Transition name="modal">
       <ExportDialog v-if="exporting" @close="exporting = false" />
@@ -543,6 +587,18 @@ onBeforeUnmount(() => {
   .tools .zoom input { width: 64px; }
 }
 .keys-btn { font-weight: 650; font-size: 14px; color: var(--dim); }
+/* file d'attente : bouton de la barre du haut, indicateur de l'écran d'accueil */
+.batch-btn { flex: none; white-space: nowrap; }
+.batch-btn .spinner { margin: 0 2px; }
+/* fenêtre étroite : l'icône seule au repos, « File : 1 sur 3 » pendant la file ; le nom du logiciel ne se replie pas */
+.top .brand, .top .icon-btn { flex: none; white-space: nowrap; }
+@media (max-width: 1420px) {
+  .batch-btn:not(.on) .batch-btn-label, .batch-btn.on .batch-btn-long { display: none; }
+  .batch-btn:not(.on) { width: 32px; padding: 0; }
+}
+.welcome .welcome-job { align-self: stretch; text-align: left; }
+.welcome .welcome-batch { height: 32px; color: var(--dim); }
+.welcome .welcome-batch .icon { color: var(--faint); }
 /* Vidéo verticale : la vidéo occupe toute la hauteur ; la consigne, les barres « Lecture » et
    « Montage », la légende et la timeline se rangent dans la colonne à sa droite. */
 .left.portrait {

@@ -18,8 +18,11 @@ export const wiz = reactive({
   profileSaved: "", // projet dont les réglages viennent d'être enregistrés comme réglages habituels
   format: "source" as ExportPreset, // format choisi pour la vidéo à créer
   extract: "", // chemin du dernier extrait d'essai créé
-  dropReady: false, // glisser-déposer déjà installé sur la fenêtre
 });
+
+/** Glisser-déposer : ce que l'assistant fait des fichiers déposés tant qu'il est à l'écran
+ *  (null en mode avancé). L'écoute de la fenêtre est posée une fois, par l'application. */
+export const drop = { target: null as ((paths: string[]) => void) | null };
 
 const VIDEO = /\.(mp4|mov|mkv|m4v|avi|mts|webm)$/i;
 

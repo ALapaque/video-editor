@@ -2,7 +2,7 @@
 // flou ajouté qui suit, relecture mémorisée, capture, vignettes, récents, ménage, profil.
 // Couche commune aux deux modes : les composants l'importent, sans la dupliquer.
 
-import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track } from "./api";
+import { call, type ExportPreset, type Preset, type Recent, type RenderOptions, type Storage, type State, type Track, type Tune } from "./api";
 import { computed } from "vue";
 import { busy, mapRange, notify, project, refresh, send, start, state, trackById } from "./store";
 
@@ -219,6 +219,34 @@ export async function saveProfile(): Promise<void> {
  *  chaque clip (traitement "profile" ; son message final dit ce qui a été retrouvé ou non). */
 export async function applyProfile(): Promise<void> {
   await start("/api/profile/apply");
+}
+
+// --- Régler d'après mes corrections ---------------------------------------------------------
+// Les flous que l'utilisateur a retirés sont des erreurs du logiciel. Le moteur cherche, sans rien
+// réanalyser, les réglages de flou qui n'en produiraient plus le plus grand nombre, sans perdre un
+// seul flou gardé. La proposition s'applique comme un réglage de flou ordinaire (annulable).
+
+/** Proposition du moteur (réponse immédiate). `undefined` si le moteur ne répond pas. */
+export async function tuneSuggestion(): Promise<Tune | undefined> {
+  try {
+    return await call<Tune>("GET", "/api/tune");
+  } catch {
+    return undefined;
+  }
+}
+
+/** « 14 des 18 flous que vous avez retirés ne seraient plus produits » (sans majuscule ni point). */
+export function tuneGain(tune: Tune): string {
+  const n = tune.best.wrong_avoided;
+  const total = tune.corrections;
+  if (total <= 1) return "le flou que vous avez retiré ne serait plus produit";
+  if (n >= total) return `les ${total} flous que vous avez retirés ne seraient plus produits`;
+  return `${n} des ${total} flous que vous avez retirés ne ${n > 1 ? "seraient plus produits" : "serait plus produit"}`;
+}
+
+/** Applique les réglages proposés. Vrai si le moteur les a acceptés. */
+export async function applyTune(tune: Tune): Promise<boolean> {
+  return !!(await send("PUT", "/api/settings", { blur: tune.settings }));
 }
 
 // --- Glisser-déposer (application installée) ---------------------------------------------
