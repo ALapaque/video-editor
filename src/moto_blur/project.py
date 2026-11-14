@@ -24,7 +24,8 @@ from pathlib import Path
 PROJECT_VERSION = 1
 KINDS = ("face", "plate")  # catégories détectées automatiquement
 DEFAULT_OBJECT = "compteur"  # nom d'un objet suivi quand aucun n'est donné
-KIND_LABELS = {"face": "visage", "plate": "plaque", "dash": "compteur", "manual": "flou ajouté"}
+KIND_LABELS = {"face": "visage", "plate": "plaque", "dash": "compteur", "manual": "flou ajouté",
+               "context": "contexte"}
 
 
 @dataclass
@@ -111,9 +112,19 @@ class AnalysisSettings:
     detect_every: int = 1
     # Durée maximale pendant laquelle une piste perdue peut être retrouvée (trou comblé).
     max_gap_s: float = 1.0
+    # Tuiles fines une image sur N ; la passe d'ensemble (image entière) reste faite sur toutes.
+    # 1 = tuiles sur chaque image. 2 : presque deux fois plus rapide ; un petit objet lointain,
+    # que seules les tuiles voient, doit alors rester à l'écran un peu plus longtemps pour être vu.
+    tile_every: int = 1
 
     def signature(self) -> str:
-        blob = json.dumps(asdict(self), sort_keys=True).encode()
+        values = asdict(self)
+        # Réglages ajoutés après coup : absents de l'empreinte tant qu'ils gardent leur valeur
+        # d'origine, pour qu'un projet analysé avant leur existence ne soit pas réanalysé.
+        for name, default in (("tile_every", 1),):
+            if values.get(name) == default:
+                del values[name]
+        blob = json.dumps(values, sort_keys=True).encode()
         return hashlib.sha1(blob).hexdigest()[:12]
 
 
@@ -154,6 +165,10 @@ class BlurSettings:
     # reste listé parmi les objets non floutés, d'où il peut être flouté quand même.
     confirm: bool = True
     confirm_min: float = 0.10
+    # Vérification par le contexte : un visage douteux sans personne dessous, une plaque douteuse
+    # hors de tout véhicule, n'est pas flouté, sauf si le gros plan l'a nettement retrouvé.
+    context_min: float = 0.20
+    confirm_strong: float = 0.50
     # Nombre d'images où une détection doit atteindre le score minimal pour être floutée. Un vrai
     # visage ou une vraie plaque reste plusieurs images à l'écran ; une fausse détection
     # (feuillage, reflet, carénage) clignote. Exception : une détection très nette (score
@@ -202,6 +217,9 @@ class Track:
     # Contre-vérification d'un objet douteux : meilleur score obtenu quand le détecteur le revoit
     # en plus grand. None = pas examiné (objet sûr, ou vérification pas encore faite).
     confirm: float | None = None
+    # Vérification par le contexte d'un objet douteux : assurance qu'un visage est sur une
+    # personne, une plaque sur un véhicule. None = pas examiné.
+    context: float | None = None
 
     @property
     def name(self) -> str:
@@ -216,8 +234,9 @@ class ClipAnalysis:
     signature: str = ""
     analyzed: list[list[int]] = field(default_factory=list)  # intervalles de PTS
     tracks: list[Track] = field(default_factory=list)
-    # La contre-vérification des objets douteux a été faite au moins une fois pour ce clip.
-    confirmed: bool = False
+    # Version de la contre-vérification des objets douteux déjà faite pour ce clip (0 : jamais ;
+    # 1 : gros plan seul ; 2 : gros plan et contexte).
+    confirmed: int = 0
 
 
 @dataclass
@@ -333,6 +352,8 @@ def _track_to_json(t: Track) -> str:
         doc["span"] = [int(t.span[0]), int(t.span[1])]
     if t.confirm is not None:
         doc["confirm"] = round(float(t.confirm), 3)
+    if t.context is not None:
+        doc["context"] = round(float(t.context), 3)
     if t.outline:
         doc["outline"] = [[int(row[0]), *[round(float(x), 3) for x in row[1:]]] for row in t.outline]
     doc["obs"] = obs
@@ -405,12 +426,12 @@ def load(path: Path) -> Project:
                 t["id"], t["kind"], t["obs"], t.get("source", "auto"), t.get("disabled", False),
                 t.get("forced", False), t.get("extend_before_s"), t.get("extend_after_s"),
                 t.get("label", ""), t.get("reacquired_at"), t.get("span"), t.get("outline"),
-                t.get("confirm"),
+                t.get("confirm"), t.get("context"),
             )
             for t in a.get("tracks", [])
         ]
         analysis[clip_id] = ClipAnalysis(
-            a.get("signature", ""), a.get("analyzed", []), tracks, bool(a.get("confirmed", False))
+            a.get("signature", ""), a.get("analyzed", []), tracks, int(a.get("confirmed", 0))
         )
     return Project(
         clips=clips,

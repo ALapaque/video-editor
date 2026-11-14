@@ -189,3 +189,87 @@ def export_dataset(
     )
     (out / "LISEZMOI.txt").write_text(README, encoding="utf-8")
     return {"path": str(out), "images": images, "labels": labels, "negatives": negatives}
+
+
+# --- Entraînement : une seule commande -------------------------------------------------------
+#
+# L'entraînement utilise Ultralytics (licence AGPL-3.0), qui n'est pas une dépendance de
+# moto-blur : il est lancé à part, par « uvx », qui l'installe dans un coin la première fois
+# (téléchargement de plusieurs centaines de Mo, puis du modèle de départ). C'est un outil que
+# vous lancez exprès : l'analyse et le rendu, eux, ne font toujours aucun appel réseau.
+
+RUNNER = ["uvx", "--from", "ultralytics", "--with", "onnx", "--with", "onnxslim", "--with", "onnxruntime", "yolo"]
+MIN_PLATES = 50  # en dessous, l'entraînement n'a aucune chance d'apporter quoi que ce soit
+
+
+def _runner() -> list[str]:
+    import os
+    import shlex
+
+    custom = os.environ.get("MOTO_BLUR_TRAIN_RUNNER")
+    return shlex.split(custom) if custom else list(RUNNER)
+
+
+def train_device() -> str:
+    """Accélération pour l'entraînement : la puce Apple si elle est là, sinon le processeur
+    (PyTorch ne sait pas utiliser simplement une Radeon)."""
+    import platform
+
+    return "mps" if platform.system() == "Darwin" and platform.machine() == "arm64" else "cpu"
+
+
+def train(
+    projects: list[pj.Project], name: str, epochs: int = 80, base: str = "yolo11s",
+    device: str = "auto", imgsz: int = 640, out_dir: Path | None = None, force: bool = False,
+) -> dict:
+    """Exporte les images des projets vérifiés, entraîne un modèle de plaques, le convertit et
+    l'installe comme modèle personnel. Renvoie {"model", "path", "dataset", "images", "labels"}."""
+    import shutil
+    import subprocess
+
+    from .models import custom_dir, get_spec
+
+    if not name or any(c in name for c in "/\\ ") or name.endswith(".onnx"):
+        raise ValueError("donnez un nom simple au modèle, sans espace ni barre : mes-plaques, par exemple.")
+    if not base.startswith("yolo11"):
+        raise ValueError("modèle de départ : yolo11n, yolo11s ou yolo11m (moto-blur lit la sortie de cette famille).")
+    if not projects or projects[0].path is None:
+        raise ValueError("indiquez au moins un projet vérifié.")
+    out = (Path(out_dir) if out_dir else projects[0].path.parent / f"entrainement_{name}").resolve()
+    totals = {"images": 0, "labels": 0}
+    for project in projects:
+        result = export_dataset(project, out)
+        totals["images"] += result["images"]
+        totals["labels"] += result["labels"]
+    if totals["labels"] < MIN_PLATES and not force:
+        raise ValueError(
+            f"seulement {totals['labels']} plaques vérifiées dans ces projets : c'est trop peu pour "
+            f"entraîner un modèle (il en faut au moins {MIN_PLATES}, et plutôt plusieurs centaines, "
+            "prises sur plusieurs sorties). Ajoutez des projets vérifiés."
+        )
+    device = train_device() if device == "auto" else device
+    runs = out / "runs"
+    common = _runner()
+    print(f"\nEntraînement sur {totals['images']} images ({totals['labels']} plaques), {epochs} passes, sur « {device} ».")
+    print("La première fois, l'outil d'entraînement est téléchargé (plusieurs centaines de Mo).\n")
+    subprocess.run(
+        [*common, "detect", "train", f"data={out / 'data.yaml'}", f"model={base}.pt", f"imgsz={imgsz}",
+         f"epochs={epochs}", f"device={device}", f"project={runs}", f"name={name}", "exist_ok=True",
+         "plots=False", "single_cls=True"],
+        check=True, cwd=out,
+    )
+    best = runs / name / "weights" / "best.pt"
+    if not best.exists():
+        raise RuntimeError(f"l'entraînement n'a pas produit de modèle ({best}).")
+    subprocess.run(
+        [*common, "export", f"model={best}", "format=onnx", "dynamic=True", f"imgsz={imgsz}", "opset=17"],
+        check=True, cwd=out,
+    )
+    exported = best.with_suffix(".onnx")
+    if not exported.exists():
+        raise RuntimeError(f"la conversion n'a pas produit de fichier ({exported}).")
+    target = custom_dir("plate") / f"{name}.onnx"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(exported, target)
+    get_spec(name, "plate")  # vérifie qu'il est bien reconnu comme modèle personnel
+    return {"model": name, "path": str(target), "dataset": str(out), **totals}

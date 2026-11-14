@@ -70,6 +70,13 @@ MODELS: dict[str, ModelSpec] = {
             "2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d",
             0.7, 0, "tracker", False, "Apache-2.0",
         ),
+        ModelSpec(
+            "yolox-s", "context",
+            "https://huggingface.co/opencv/object_detection_yolox/resolve/"
+            "78c368f74ce73ee28fc7a1be418a598c71b58b52/object_detection_yolox_2022nov.onnx",
+            "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
+            35.9, 640, "yolox", False, "Apache-2.0",
+        ),
     ]
 }
 

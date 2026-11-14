@@ -215,6 +215,7 @@ class Detector:
         tile_overlap: float = 0.2,
         full_pass: bool = True,
         device: str = "auto",
+        light: bool = False,
     ):
         import onnxruntime as ort
 
@@ -252,15 +253,28 @@ class Detector:
             _gpu_has_worked = True
         if device == "auto" and self.provider != "CPUExecutionProvider":
             self._keep_fastest(model_path)
+        # Passe allégée (image entière seule, sans les tuiles), pour une image sur deux quand le
+        # réglage le demande. Le lot du modèle ayant une taille fixe, il lui faut sa propre
+        # session ; si elle ne se charge pas, on fait simplement la passe complète à chaque fois.
+        self.light_session = None
+        whole = self.crops[-1]
+        if light and len(self.crops) > 1 and (whole.w, whole.h) == (width, height):
+            try:
+                self.light_session = ort.InferenceSession(
+                    str(model_path), self._options(self.provider == "DmlExecutionProvider", batch=1),
+                    providers=self.session.get_providers(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"Passe allégée indisponible pour {spec.name} ({exc}).", file=sys.stderr)
 
-    def _options(self, directml: bool):
+    def _options(self, directml: bool, batch: int | None = None):
         import onnxruntime as ort
 
         options = ort.SessionOptions()
         options.log_severity_level = 3
         if self.spec.dynamic:
             # Dimensions figées : CoreML et DirectML sont nettement plus rapides ainsi.
-            options.add_free_dimension_override_by_name("batch", self.batch)
+            options.add_free_dimension_override_by_name("batch", batch or self.batch)
             options.add_free_dimension_override_by_name("height", self.spec.input_size)
             options.add_free_dimension_override_by_name("width", self.spec.input_size)
         if directml:  # exigences documentées de DirectML
@@ -346,19 +360,25 @@ class Detector:
             out.extend(self._decode(self._run(self._blob(chunk)))[:real])
         return out
 
-    def detect(self, rgb: np.ndarray) -> np.ndarray:
-        """Détections (n, 5) x1,y1,x2,y2,score dans le repère de l'image entière."""
+    def detect(self, rgb: np.ndarray, light: bool = False) -> np.ndarray:
+        """Détections (n, 5) x1,y1,x2,y2,score dans le repère de l'image entière.
+
+        `light` : image entière seule, sans les tuiles (si la passe allégée est chargée)."""
         size = self.spec.input_size
-        images = [render_crop(rgb, c, size) for c in self.crops]
+        crops = self.crops
         per_crop: list[np.ndarray] = []
-        if self.batch == len(images):
+        if light and self.light_session is not None:
+            crops = self.crops[-1:]
+            images = [render_crop(rgb, crops[0], size)]
+            per_crop = self._decode(self._run(self._blob(images), self.light_session))
+        elif self.batch == len(images := [render_crop(rgb, c, size) for c in self.crops]):
             output = self._run(self._blob(images))
             per_crop = self._decode(output)
         else:
             for image in images:
                 output = self._run(self._blob([image]))
                 per_crop.extend(self._decode(output))
-        found = [to_frame_coords(b, c) for b, c in zip(per_crop, self.crops, strict=False) if len(b)]
+        found = [to_frame_coords(b, c) for b, c in zip(per_crop, crops, strict=False) if len(b)]
         if not found:
             return np.zeros((0, 5), dtype=np.float32)
         boxes = merge_detections(np.concatenate(found))

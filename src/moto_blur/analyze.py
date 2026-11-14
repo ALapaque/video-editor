@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import av
 import numpy as np
 
-from . import confirm, dash, intervals
+from . import confirm, context, dash, intervals
 from . import project as pj
 from .detect import Detector, gpu_has_worked
 from .models import batchable, ensure_model, get_spec
@@ -56,7 +56,7 @@ def _load(spec, size, s: pj.AnalysisSettings, device: str, worked_before: bool) 
     dans cette session, ne répond plus : mieux vaut une erreur claire qu'une analyse qui passe
     sans prévenir sur le processeur et dure des heures."""
     spec, path = batchable(spec, ensure_model(spec))
-    args = (spec, path, size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device)
+    args = (spec, path, size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device, s.tile_every > 1)
     detector = Detector(*args)
     if detector.fell_back and worked_before:
         del detector
@@ -80,7 +80,7 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
     wanted = {}
     for kind in s.kinds:
         spec = get_spec(s.face_model if kind == "face" else s.plate_model, kind)
-        key = (kind, spec.name, size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device)
+        key = (kind, spec.name, size, s.conf_keep, s.tile_size, s.tile_overlap, s.full_pass, device, s.tile_every > 1)
         wanted[key] = (kind, spec)
     # Les modèles déjà chargés sont réutilisés d'une analyse à l'autre : c'est plus rapide, et
     # recharger un modèle sur la carte graphique alors que l'ancien y est encore peut échouer.
@@ -101,12 +101,17 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
     def one_by_one(rgb: np.ndarray) -> dict[str, np.ndarray]:
         return {kind: d.detect(rgb) for kind, d in detectors.items()}
 
+    def light(rgb: np.ndarray) -> dict[str, np.ndarray]:
+        """Passe allégée : image entière seule, sans les tuiles."""
+        return {kind: d.detect(rgb, light=True) for kind, d in detectors.items()}
+
     # Avec une carte graphique, faire travailler les deux modèles en même temps (chacun dans son
     # fil d'exécution) peut aller plus vite... ou moins vite, selon la carte et son pilote. On
     # chronomètre donc les deux façons sur une image d'essai et on garde la plus rapide.
     on_gpu = any(d.provider != "CPUExecutionProvider" for d in detectors.values())
     if not on_gpu or len(detectors) < 2:
         one_by_one.detectors = detectors  # pour la contre-vérification, avec les mêmes modèles
+        one_by_one.light = light
         return one_by_one, notes
     pool = ThreadPoolExecutor(max_workers=len(detectors))
 
@@ -132,6 +137,7 @@ def make_detect_fn(project: pj.Project, clip: pj.Clip, device: str) -> tuple[Det
         f"-> {chosen}"
     )
     detect.detectors = detectors
+    detect.light = light
     return detect, notes
 
 
@@ -157,6 +163,9 @@ def analyze_range(
     reached = end_pts
     index = 0
     frame = None
+    # Tuiles fines une image sur N : les autres images ne reçoivent que la passe d'ensemble.
+    light = getattr(detect, "light", None) if s.tile_every > 1 else None
+    every = max(1, s.detect_every)
     with av.open(str(project.clip_path(clip))) as container:
         frames = iter_frames(container, start_pts, end_pts)
         try:
@@ -169,7 +178,8 @@ def analyze_range(
                 rgb = frame.to_ndarray(format="rgb24") if run else None
                 t1 = time.perf_counter()
                 if run:
-                    for kind, dets in detect(rgb).items():
+                    full = light is None or (index // every) % s.tile_every == 0
+                    for kind, dets in (detect if full else light)(rgb).items():
                         trackers[kind].update(frame.pts, dets)
                 timings["decode"] += t1 - t0
                 timings["detect"] += time.perf_counter() - t1
@@ -192,7 +202,7 @@ def _confirm_clip(project: pj.Project, clip: pj.Clip, device: str, detect: Detec
     """Contre-vérifie les objets douteux du clip (voir `confirm.py`). False si interrompu."""
     if not confirm.pending(project, clip):
         if clip.id in project.analysis:
-            project.analysis[clip.id].confirmed = True
+            project.analysis[clip.id].confirmed = confirm.VERSION
         return True
     if detect is None:
         detect, _ = make_detect_fn(project, clip, device)
@@ -200,16 +210,21 @@ def _confirm_clip(project: pj.Project, clip: pj.Clip, device: str, detect: Detec
     if not detectors:
         return True
     try:
-        result = confirm.confirm_tracks(project, clip, detectors)
+        around = context.load()
+    except Exception as exc:  # noqa: BLE001 - modèle indisponible (hors ligne) : gros plan seul
+        print(f"Vérification par le contexte indisponible ({exc}) : gros plan seul.", file=sys.stderr)
+        around = None
+    try:
+        result = confirm.confirm_tracks(project, clip, detectors, context=around)
     except KeyboardInterrupt:
         print("\nContre-vérification interrompue : elle reprendra à la prochaine analyse.", file=sys.stderr)
         return False
-    project.analysis[clip.id].confirmed = True
+    project.analysis[clip.id].confirmed = confirm.VERSION
     refresh_review(project)
     pj.save(project)
     if result["examined"]:
         note = (f"{result['examined']} objets douteux revus de plus près, "
-                f"{result['unconfirmed']} non retrouvés et donc non floutés")
+                f"{result['unconfirmed']} écartés et donc non floutés")
         print(f"{clip.id} : {note}.")
         project.notes = [*getattr(project, "notes", []), note[0].upper() + note[1:] + "."]
     return True
@@ -414,7 +429,12 @@ def estimate(project: pj.Project, device: str = "auto", samples: int = 8) -> dic
             rgb = frame.to_ndarray(format="rgb24") if run else None
             t1 = time.perf_counter()
             if run:
-                detect(rgb)
+                lighter = getattr(detect, "light", None)
+                tiles = max(1, project.analysis_settings.tile_every)
+                # première image : passe complète (mise en route, non comptée) ; ensuite, la
+                # même alternance que l'analyse, à commencer par une passe complète
+                full = lighter is None or tiles == 1 or detections == 0 or (detections - 1) % tiles == 0
+                (detect if full else lighter)(rgb)
                 detections += 1
                 if detections > 1:  # la première image paie la mise en route : on ne la compte pas
                     detect_s += time.perf_counter() - t1

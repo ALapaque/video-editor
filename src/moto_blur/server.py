@@ -24,7 +24,7 @@ from pathlib import Path
 import av
 import cv2
 
-from . import confirm, contour, dash, library, media, progress, training
+from . import batch, confirm, contour, dash, library, media, progress, training, tuning
 from . import project as pj
 from .analyze import (
     PRESETS,
@@ -55,7 +55,7 @@ from .render import RenderError, check_ready, formats_differ, render_project, us
 from .timeline import pts_to_sec, resolve_segments, sec_to_pts
 from .video import iter_frames, probe
 
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".mts", ".webm"}
+VIDEO_EXTENSIONS = batch.VIDEO_EXTENSIONS
 UI_DIR = Path(__file__).parent / "ui"
 
 # Préréglages d'export : valeurs par défaut, que la requête peut surcharger champ par champ.
@@ -86,12 +86,15 @@ class Job:
         self.message = ""
         self.cancel = False
         self.created: int | None = None  # identifiant de la zone créée par le traitement
+        # File d'attente : rang de la vidéo en cours, nombre de vidéos, son nom, et les résultats.
+        self.item: list | None = None
+        self.results: list[dict] | None = None
 
     def to_json(self) -> dict:
         return {
             "kind": self.kind, "label": self.label, "done": self.done, "total": self.total,
             "fps": round(self.fps, 1), "state": self.state, "message": self.message,
-            "created": self.created,
+            "created": self.created, "item": self.item, "results": self.results,
         }
 
 
@@ -901,6 +904,32 @@ class Engine:
 
         self.start("contour", f"Contour précis : {name}", work, undo=f"contour précis de « {name} »")
 
+    def start_batch(self, body: dict) -> None:
+        """File d'attente : analyse plusieurs vidéos (ou projets) à la suite."""
+        paths = [Path(str(p)) for p in body.get("paths", []) if str(p).strip()]
+        if not paths:
+            raise ApiError("ajoutez au moins une vidéo à la file.")
+        preset = body.get("preset")
+        if preset is not None and preset not in PRESETS:
+            raise ApiError("préréglage inconnu.")
+        use_profile = bool(body.get("profile", False))
+        device = body.get("device", "auto")
+
+        def work(job: Job) -> str:
+            job.results = []
+
+            def on_item(index: int, total: int, name: str) -> None:
+                job.item = [index + 1, total, name]
+
+            results = batch.run_batch(paths, preset, use_profile, device, on_item, self.project)
+            job.results = results
+            if self.project is not None:
+                self.history.clear()  # le projet ouvert a pu être réanalysé
+                refresh_review(self.project)
+            return batch.summary(results, len(paths))
+
+        self.start("batch", "File d'attente", work)
+
     def start_dataset(self) -> None:
         project = self.require()
 
@@ -1165,6 +1194,11 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     engine.start_contour(body)
                     self._json(engine.state())
+            elif route == "/api/batch" and method == "POST":
+                engine.start_batch(self._body())
+                self._json(engine.state())
+            elif route == "/api/tune" and method == "GET":
+                self._json(tuning.suggest(engine.require()))
             elif route == "/api/dataset" and method == "POST":
                 engine.start_dataset()
                 self._json(engine.state())

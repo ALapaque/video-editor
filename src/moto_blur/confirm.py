@@ -42,6 +42,18 @@ def is_doubtful(track: pj.Track) -> bool:
     return float(np.median([o[5] for o in track.obs])) < DOUBT_SCORE
 
 
+VERSION = 2  # 1 : gros plan seul ; 2 : gros plan et contexte (personne, véhicule)
+
+
+def _needs_zoom(track: pj.Track) -> bool:
+    return track.confirm is None
+
+
+def _needs_context(track: pj.Track, blur: pj.BlurSettings) -> bool:
+    # Inutile si le gros plan a nettement retrouvé l'objet : le contexte ne changerait rien.
+    return track.context is None and (track.confirm is None or track.confirm < blur.confirm_strong)
+
+
 def pending(project: pj.Project, clip: pj.Clip) -> list[pj.Track]:
     """Objets douteux du clip à réexaminer : pas encore revus, et qui seraient floutés.
 
@@ -55,16 +67,18 @@ def pending(project: pj.Project, clip: pj.Clip) -> list[pj.Track]:
     blur = project.blur_settings
     return [
         t for t in state.tracks
-        if t.confirm is None and t.kind in kinds and is_doubtful(t) and is_blurred(t, blur)
+        if t.kind in kinds and (_needs_zoom(t) or _needs_context(t, blur))
+        and is_doubtful(t) and is_blurred(t, blur)
     ]
 
 
 def due(project: pj.Project, clip: pj.Clip) -> bool:
-    """Vrai si la contre-vérification n'a encore jamais été faite pour ce clip et qu'il y a de
-    quoi faire. Une fois faite, on ne redemande pas d'analyse pour un réglage de flou modifié :
-    les objets qui deviendraient floutés sans avoir été revus le sont à la prochaine analyse."""
+    """Vrai si la contre-vérification (dans sa version actuelle) n'a pas encore été faite pour ce
+    clip et qu'il y a de quoi faire. Une fois faite, on ne redemande pas d'analyse pour un réglage
+    de flou modifié : les objets qui deviendraient floutés sans avoir été revus le sont à la
+    prochaine analyse."""
     state = project.analysis.get(clip.id)
-    return bool(state) and not state.confirmed and bool(pending(project, clip))
+    return bool(state) and state.confirmed < VERSION and bool(pending(project, clip))
 
 
 def zoom_view(rgb: np.ndarray, box, size: int, target: int) -> tuple[np.ndarray, tuple[float, ...]]:
@@ -96,13 +110,20 @@ def _found(detections: np.ndarray, box: tuple[float, ...]) -> float:
 
 def confirm_tracks(
     project: pj.Project, clip: pj.Clip, detectors: dict[str, Detector],
-    progress: Progress | None = None,
+    progress: Progress | None = None, context=None,
 ) -> dict:
-    """Réexamine les objets douteux du clip. Renvoie {"examined", "unconfirmed"}."""
+    """Réexamine les objets douteux du clip : gros plan, puis contexte si `context` (un
+    `context.ContextDetector`) est donné. Renvoie {"examined", "unconfirmed"}."""
+    from . import context as ctx
+    from .postprocess import is_blurred
+
     video = clip.video
-    tracks = [t for t in pending(project, clip) if t.kind in detectors]
+    blur = project.blur_settings
+    tracks = [t for t in pending(project, clip) if t.kind in detectors or context is not None]
     if not tracks:
         return {"examined": 0, "unconfirmed": 0}
+    zoom = {t.id for t in tracks if _needs_zoom(t) and t.kind in detectors}
+    around = {t.id for t in tracks if context is not None and _needs_context(t, blur)}
     wanted: dict[int, list[tuple[pj.Track, list[float]]]] = {}
     for t in tracks:
         for o in sorted(t.obs, key=lambda o: -o[5])[:SAMPLES]:
@@ -110,6 +131,7 @@ def confirm_tracks(
     moments = sorted(wanted)
     progress = progress or Progress(f"Contre-vérification {clip.id}", len(moments), 0, unit="images")
     best: dict[int, float] = {t.id: 0.0 for t in tracks}
+    near: dict[int, float] = {t.id: 0.0 for t in tracks}
     half = round(float(video.frame_pts) / 2)
     gap = RUN_GAP_S / float(video.tb)
     runs: list[list[int]] = []
@@ -132,16 +154,21 @@ def confirm_tracks(
                 rgb = frame.to_ndarray(format="rgb24")
                 by_kind: dict[str, list] = {}
                 for t, o in wanted[run[index]]:
-                    for target in ZOOMS:
-                        view, box = zoom_view(rgb, o[1:5], detectors[t.kind].spec.input_size, target)
-                        by_kind.setdefault(t.kind, []).append((t, view, box))
+                    if t.id in zoom:
+                        for target in ZOOMS:
+                            view, box = zoom_view(rgb, o[1:5], detectors[t.kind].spec.input_size, target)
+                            by_kind.setdefault(t.kind, []).append((t, view, box))
+                    if t.id in around and near[t.id] < ctx.ENOUGH:
+                        near[t.id] = max(near[t.id], ctx.score(context, rgb, t.kind, o[1:5]))
                 for kind, items in by_kind.items():
                     results = detectors[kind].examine([view for _, view, _ in items])
                     for (t, _, box), detections in zip(items, results, strict=True):
                         best[t.id] = max(best[t.id], _found(detections, box))
                 index += 1
                 progress.step()
-    minimum = project.blur_settings.confirm_min
     for t in tracks:
-        t.confirm = round(best[t.id], 3)
-    return {"examined": len(tracks), "unconfirmed": sum(1 for t in tracks if best[t.id] < minimum)}
+        if t.id in zoom:
+            t.confirm = round(best[t.id], 3)
+        if t.id in around:
+            t.context = round(near[t.id], 3)
+    return {"examined": len(tracks), "unconfirmed": sum(1 for t in tracks if not is_blurred(t, blur))}
