@@ -321,6 +321,9 @@ class Engine:
                     "history": self.history.labels(),
                     "estimate": self._current_estimate(),
                     "mismatch": formats_differ(used_clips(project, resolve_segments(project))),
+                    # Rien à analyser, seulement des flous douteux à revoir de plus près : court.
+                    "recheck_only": frames_to_analyze(project) == 0
+                    and any(confirm.due(project, c) for c in project.clips),
                     "tracks": tracks,
                     "problem": problem,
                 },

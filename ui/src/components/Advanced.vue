@@ -43,6 +43,9 @@ const steps = [
 ];
 const analysing = computed(() => busy.value && job.value?.kind === "analyze");
 const analysed = computed(() => segments.value.length > 0 && !needsAnalysis.value);
+// Projet analysé avant la contre-vérification : « Analyser » ne fait que revoir les flous douteux.
+const recheck = computed(() => needsAnalysis.value && !!project.value?.recheck_only);
+const recheckText = "Le logiciel peut revoir de plus près ses flous douteux pour retirer ceux qui n'ont pas lieu d'être (arbre, reflet…). C'est court : rien n'est analysé à nouveau.";
 /** Étape déduite de l'état du projet. */
 const autoStep = computed(() => {
   if (analysing.value) return 2;
@@ -97,20 +100,24 @@ const guide = computed(() => {
   if (empty) return { text: "Le montage est vide. Ajoutez un clip pour commencer.", action: "add" };
   switch (step.value) {
     case 1:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       return needsAnalysis.value
         ? { text: "Coupez ce que vous ne voulez pas garder, puis lancez l'analyse.", action: "analyse" }
         : { text: "Le montage est analysé. Si vous ajoutez un passage, il faudra relancer l'analyse.", action: "continue" };
     case 2:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       return needsAnalysis.value
         ? { text: "Des passages gardés n'ont pas encore été analysés : ils sortiraient sans flou.", action: "analyse", warn: true }
         : { text: "Analyse terminée. Vérifiez maintenant le floutage.", action: "review" };
     case 3:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       if (needsAnalysis.value) return { text: "Analysez d'abord le montage : la vérification porte sur ce que l'analyse a trouvé.", action: "analyse", warn: true };
       if (review.mode === "queue") return { text: "Regardez le passage en boucle et répondez dans le panneau de droite : tout ce qui doit être flouté l'est-il ?", action: "" };
       if (review.mode === "end") return { text: allClear.value ? "Relecture faite : vous pouvez exporter." : "Choisissez la suite dans le panneau de droite.", action: allClear.value ? "toExport" : "" };
       if (review.mode === "sweep") return { text: "Cliquez un flou en trop pour le retirer. Touche S si quelque chose reste lisible.", action: "" };
       return { text: todoText(plural), action: allClear.value ? "toExport" : "todo" };
     default:
+      if (recheck.value) return { text: recheckText, action: "analyse" };
       if (needsAnalysis.value) return { text: "Des passages gardés n'ont pas encore été analysés : ils sortiraient sans flou.", action: "analyse", warn: true };
       return allClear.value
         ? { text: "Relecture faite : vous pouvez exporter.", action: "export" }

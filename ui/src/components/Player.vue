@@ -601,11 +601,16 @@ function clickAt(p: { x: number; y: number }): void {
     if (!hit) return;
     const key = `${s.clip.id}:${hit[7]}`;
     // il quitte l'image tout de suite (sauf s'il est réuni à d'autres flous, qui restent)
-    if (trackById(s.clip.id, hit[7])?.source === "auto" && (hit[9]?.length ?? 0) <= 1) hiding.add(key);
+    // Mode avancé : les flous réunis dans la même tache partent ensemble (l'assistant fait de
+    // même de son côté). La tache quitte l'image tout de suite si elle ne contient que des
+    // flous automatiques.
+    const group = state.mode === "simple" ? [] : (hit[9] ?? []);
+    const allAuto = group.length > 1 && group.every((g) => trackById(s.clip.id, g)?.source === "auto");
+    if (trackById(s.clip.id, hit[7])?.source === "auto" && ((hit[9]?.length ?? 0) <= 1 || allAuto)) hiding.add(key);
     hoverId = null;
     setCursor();
     if (!state.playing) draw();
-    void removeBlur(s.clip.id, hit[7]).finally(() => {
+    void removeBlur(s.clip.id, hit[7], group).finally(() => {
       hiding.delete(key);
       if (!state.playing) draw();
     });

@@ -575,6 +575,8 @@ const estimateText = computed(() => {
 const measuringText = computed(() => (job.value?.label.startsWith("Téléchargement") ? "Téléchargement des modèles… (une seule fois)" : "Mesure de la durée sur quelques images de votre vidéo…"));
 const measureFailed = ref(false);
 /** La mesure n'a de sens que s'il reste des visages ou des plaques à chercher, et tant qu'elle n'est pas faite. */
+/** Rien à analyser : seulement des flous douteux à revoir de plus près (projet d'avant). */
+const recheckOnly = computed(() => !!p.value?.recheck_only);
 const canMeasure = computed(() => kinds.value.length > 0 && needsAnalysis.value && !estimateText.value);
 /** « Combien de temps ça va prendre ? » : mesure sur quelques images. Rien n'en dépend : si elle
  *  échoue, on le dit et l'analyse se lance comme avant. Rien ne se passe sans ce clic. */
@@ -1430,10 +1432,12 @@ onBeforeUnmount(() => {
           </template>
           <template v-else>
             <span class="wiz-icon"><Icon name="scan" :size="34" /></span>
-            <h1>{{ analyseView === "stopped" ? "L'analyse a été arrêtée" : "Lançons l'analyse" }}</h1>
-            <p v-if="analyseView === 'stopped'" class="wiz-lead">Ce qui est déjà fait est conservé : l'analyse reprendra là où elle s'est arrêtée.</p>
+            <h1>{{ analyseView === "stopped" ? "L'analyse a été arrêtée" : recheckOnly ? "Une vérification rapide" : "Lançons l'analyse" }}</h1>
+            <p v-if="analyseView !== 'stopped' && recheckOnly" class="wiz-lead" data-recheck>Le logiciel va revoir de plus près les flous dont il doute, pour retirer ceux qui n'ont pas lieu d'être (un arbre, un reflet…). C'est court : votre vidéo n'est pas analysée à nouveau.</p>
+            <p v-else-if="analyseView === 'stopped'" class="wiz-lead">Ce qui est déjà fait est conservé : l'analyse reprendra là où elle s'est arrêtée.</p>
             <p v-else class="wiz-lead">Le logiciel va regarder votre vidéo ({{ human(duration) }}) image par image pour y trouver {{ looksFor || "vos objets" }}.</p>
-            <p v-if="estimateText" class="wiz-lead wiz-estimate" data-estimate><Icon name="clock" />L'analyse prendra <strong>{{ estimateText }}</strong> sur cet ordinateur. Le temps restant s'affichera pendant qu'elle avance.</p>
+            <p v-if="recheckOnly" hidden></p>
+            <p v-else-if="estimateText" class="wiz-lead wiz-estimate" data-estimate><Icon name="clock" />L'analyse prendra <strong>{{ estimateText }}</strong> sur cet ordinateur. Le temps restant s'affichera pendant qu'elle avance.</p>
             <p v-else class="wiz-lead dim"><Icon name="clock" />La durée dépend de votre ordinateur : de quelques minutes à plus d'une heure pour une longue vidéo. Le temps restant s'affichera après quelques secondes.</p>
             <p class="wiz-measure" :class="{ shown: measuring || measureFailed }" role="status">
               <template v-if="measuring"><span class="spinner small"></span>{{ measuringText }}</template>
@@ -1441,8 +1445,8 @@ onBeforeUnmount(() => {
               <template v-else>&nbsp;</template>
             </p>
             <div class="wiz-actions">
-              <button class="primary big" data-primary :disabled="busy && !measuring" @click="analyse"><Icon name="scan" :size="18" />{{ analyseView === "stopped" ? "Reprendre l'analyse" : "Lancer l'analyse" }}</button>
-              <button v-if="canMeasure" class="big" data-measure :disabled="busy" @click="measure"><Icon name="clock" :size="18" />Combien de temps ça va prendre ?</button>
+              <button class="primary big" data-primary :disabled="busy && !measuring" @click="analyse"><Icon name="scan" :size="18" />{{ analyseView === "stopped" ? "Reprendre l'analyse" : recheckOnly ? "Lancer la vérification" : "Lancer l'analyse" }}</button>
+              <button v-if="canMeasure && !recheckOnly" class="big" data-measure :disabled="busy" @click="measure"><Icon name="clock" :size="18" />Combien de temps ça va prendre ?</button>
             </div>
           </template>
         </template>

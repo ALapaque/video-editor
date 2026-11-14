@@ -314,21 +314,27 @@ export const beforeExport = computed(() => ({
 
 /** Retire un flou d'un clic (relecture, liste, planche) et prépare les suites possibles dans
  *  `state.lastRemoved` : annuler, retirer les flous au même endroit, ne plus jamais flouter là. */
-export async function removeBlur(clip: string, id: number): Promise<void> {
+export async function removeBlur(clip: string, id: number, group: number[] = []): Promise<void> {
   const track = trackById(clip, id);
   if (!track || track.disabled) return;
   if (track.source !== "auto") {
     notify("Ce flou a été ajouté par vous : supprimez-le depuis la liste des flous.");
     return;
   }
-  if (!(await send("PATCH", "/api/tracks", { clip, id, disabled: true }))) return;
+  // `group` : les flous réunis à l'écran dans la même tache que celui-ci. On les retire ensemble,
+  // en une seule action, pour que « cliquez dessus, il disparaît » soit vrai.
+  const others = group.filter((g) => {
+    const t = trackById(clip, g);
+    return g !== id && !!t && t.source === "auto" && !t.disabled;
+  });
+  if (!(await send("PATCH", "/api/tracks", { clip, ids: [id, ...others], disabled: true }))) return;
   let similar: number[] = [];
   try {
     similar = (await call<{ ids: number[] }>("GET", `/api/similar?clip=${encodeURIComponent(clip)}&id=${id}`)).ids;
   } catch {
     /* sans gravité : pas de proposition */
   }
-  state.lastRemoved = { clip, ids: [id], name: blurName(track), similar };
+  state.lastRemoved = { clip, ids: [id, ...others], name: blurName(track), similar: similar.filter((s) => !others.includes(s)) };
 }
 
 /** « Retirer aussi les N flous au même endroit ». */

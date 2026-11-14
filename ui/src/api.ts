@@ -100,6 +100,8 @@ export interface Project {
   preset: Preset;
   /** Relecture complète : position atteinte (secondes du montage) et relecture terminée ou non. */
   sweep: { position: number; done: boolean };
+  /** « Analyser » ne fera que revoir de plus près les flous douteux (court) : rien n'est à analyser. */
+  recheck_only: boolean;
   /** Zones à ne jamais flouter, par clip : rectangles [x1, y1, x2, y2] en pixels de l'image source. */
   ignore: Record<string, number[][]>;
   /** Nom de la modification que « Annuler » / « Rétablir » défera ou refera (null : rien). */
