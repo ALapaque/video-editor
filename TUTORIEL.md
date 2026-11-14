@@ -1,4 +1,4 @@
-# Tutoriel : démarrer et utiliser moto-blur
+# Tutoriel : démarrer et utiliser Flouto
 
 Ce guide part de zéro et mène jusqu'à une première vidéo floutée. Comptez 10 minutes
 d'installation, puis un premier essai sur un extrait court.
@@ -53,7 +53,7 @@ Sans `git`, vous pouvez aussi télécharger le projet en ZIP depuis la page GitH
 ### Vérifier la machine
 
 ```sh
-uv run moto-blur info
+uv run flouto info
 ```
 
 Regardez la ligne « ONNX Runtime » :
@@ -72,7 +72,7 @@ Créez un dossier `samples` dans `video-editor` et mettez-y une vidéo (ce dossi
 envoyé sur GitHub). Puis :
 
 ```sh
-uv run moto-blur ui
+uv run flouto ui
 ```
 
 Le navigateur s'ouvre sur l'interface. Laissez le terminal ouvert : c'est lui qui fait tourner
@@ -81,7 +81,7 @@ le moteur. `Ctrl+C` dans le terminal arrête tout. Utilisez Chrome, Edge ou Safa
 Vous pouvez aussi ouvrir directement une vidéo ou un projet :
 
 ```sh
-uv run moto-blur ui samples/ma-video.mp4
+uv run flouto ui samples/ma-video.mp4
 ```
 
 Au premier lancement, le logiciel demande comment vous voulez travailler :
@@ -198,7 +198,7 @@ ne porte que sur les passages gardés : il suffit donc de ne garder qu'un court 
 tester vite.
 
 1. **Ouvrir.** Cliquez « Ouvrir une vidéo ou un projet… », naviguez jusqu'à `samples`, cliquez
-   la vidéo. Un fichier projet `ma-video.motoblur.json` est créé à côté d'elle. Vos vidéos
+   la vidéo. Un fichier projet `ma-video.flouto.json` est créé à côté d'elle. Vos vidéos
    d'origine ne sont jamais modifiées.
 2. **Attendre l'aperçu.** Le logiciel fabrique une copie légère de la vidéo pour une lecture
    fluide. Une fenêtre de progression s'ouvre : pourcentage, images traitées, vitesse, temps
@@ -454,12 +454,12 @@ de progression affiche le résultat (pour un export : le chemin du fichier écri
 Tout ce que fait l'interface existe aussi en commandes, pour traiter une vidéo sans y toucher :
 
 ```sh
-uv run moto-blur probe samples/a.mp4                          # caractéristiques de la vidéo
-uv run moto-blur run samples/a.mp4 -o samples/a_floute.mp4    # analyse + rendu
-uv run moto-blur run samples/a.mp4 -o samples/a_debug.mp4 --debug
-uv run moto-blur run samples/a.mp4 -o samples/out.mp4 --trim-start 12.5 --trim-end 8
-uv run moto-blur report samples/a.motoblur.json               # passages à vérifier
-uv run moto-blur dash samples/a.motoblur.json --at 0:05 --box 1500,1700,600,300
+uv run flouto probe samples/a.mp4                          # caractéristiques de la vidéo
+uv run flouto run samples/a.mp4 -o samples/a_floute.mp4    # analyse + rendu
+uv run flouto run samples/a.mp4 -o samples/a_debug.mp4 --debug
+uv run flouto run samples/a.mp4 -o samples/out.mp4 --trim-start 12.5 --trim-end 8
+uv run flouto report samples/a.flouto.json               # passages à vérifier
+uv run flouto dash samples/a.flouto.json --at 0:05 --box 1500,1700,600,300
 ```
 
 Le détail des options est dans le [README](README.md).
@@ -471,15 +471,15 @@ Le détail des options est dans le [README](README.md).
 | `uv : commande introuvable` | fermez et rouvrez le terminal après l'installation de uv |
 | La page ne s'ouvre pas | copiez dans le navigateur l'adresse `http://127.0.0.1:…` affichée dans le terminal |
 | La vidéo reste noire dans l'interface | l'aperçu est encore en préparation (barre en haut) ; sinon essayez Chrome ou Edge |
-| L'analyse est très lente et le bandeau dit `CPU` | l'accélération n'a pas été utilisée ; envoyez-moi la sortie de `uv run moto-blur info` et les messages du terminal |
+| L'analyse est très lente et le bandeau dit `CPU` | l'accélération n'a pas été utilisée ; envoyez-moi la sortie de `uv run flouto info` et les messages du terminal |
 | « un traitement est déjà en cours » | attendez la fin, ou cliquez « Annuler » |
 | L'export refuse : « passages non analysés » | cliquez l'étape « 2 Analyse » puis « Analyser » |
 | Les couleurs de l'aperçu sont ternes (vidéo HDR) | seul l'aperçu est concerné ; l'export garde les couleurs de la source |
 | Trop de faux flous | dans « Réglages », montez « Score minimal des visages » ou « Images sûres exigées » ; l'effet est immédiat, sans réanalyse (au prix d'un risque de fuite plus élevé) |
 
-Fichiers créés à côté de votre vidéo : `nom.motoblur.json` (le projet), `nom.motoblur.proxies/`
-(aperçus, supprimables), `nom.motoblur.report.txt` (rapport, en ligne de commande). Les modèles
-sont dans `~/.moto-blur/models`.
+Fichiers créés à côté de votre vidéo : `nom.flouto.json` (le projet), `nom.flouto.proxies/`
+(aperçus, supprimables), `nom.flouto.report.txt` (rapport, en ligne de commande). Les modèles
+sont dans `~/.flouto/models`.
 
 Pour mettre à jour le logiciel : `git pull` puis `uv sync` dans le dossier `video-editor`.
 
@@ -494,29 +494,29 @@ navigateur, et sans rien installer d'autre (ni uv, ni Python).
    (pas besoin de compte GitHub).
 2. Téléchargez :
    - **Windows** : le fichier qui finit par `_x64-setup.exe`, puis lancez-le ;
-   - **Mac (puce Apple)** : le fichier `.dmg`, ouvrez-le et glissez moto-blur dans Applications.
+   - **Mac (puce Apple)** : le fichier `.dmg`, ouvrez-le et glissez Flouto dans Applications.
 3. L'application n'est pas signée (la signature est payante), d'où un avertissement la
    première fois seulement :
    - **Windows** : « Windows a protégé votre ordinateur » : cliquez « Informations
      complémentaires », puis « Exécuter quand même » ;
    - **Mac** : au premier lancement, le système refuse de l'ouvrir. Ouvrez Réglages Système,
-     « Confidentialité et sécurité », descendez jusqu'au message concernant moto-blur et
+     « Confidentialité et sécurité », descendez jusqu'au message concernant Flouto et
      cliquez « Ouvrir quand même ». Si le message dit que l'application est « endommagée »,
-     tapez dans le Terminal : `xattr -cr /Applications/moto-blur.app`, puis relancez-la.
+     tapez dans le Terminal : `xattr -cr /Applications/Flouto.app`, puis relancez-la.
 
 ### Mises à jour
 
-Au démarrage, moto-blur regarde s'il existe une version plus récente sur la page des versions.
+Au démarrage, Flouto regarde s'il existe une version plus récente sur la page des versions.
 Si oui, il propose « Mettre à jour » ou « Plus tard » ; rien n'est téléchargé sans votre
 accord. Le paquet est vérifié par sa signature avant d'être installé, puis l'application
 redémarre ; vos projets sont conservés. C'est le seul appel réseau en dehors du premier
 téléchargement des modèles : le traitement des vidéos reste entièrement local. Pour
-désactiver cette vérification, lancez l'application avec la variable `MOTO_BLUR_NO_UPDATE=1`.
+désactiver cette vérification, lancez l'application avec la variable `FLOUTO_NO_UPDATE=1`.
 
 ### Si l'application ne démarre pas
 
 L'application installée n'a été essayée que sous Linux, jamais sur un vrai Mac ni un vrai
-PC. Si elle ne démarre pas, utilisez `uv run moto-blur ui` (section 2), qui offre exactement
+PC. Si elle ne démarre pas, utilisez `uv run flouto ui` (section 2), qui offre exactement
 la même interface, et dites-moi ce qui s'affiche.
 
 ### Publier une nouvelle version (pour le développeur)
@@ -556,7 +556,7 @@ cd desktop && npm install && TAURI_SIGNING_PRIVATE_KEY="$(cat chemin/vers/la/cle
 
 Sur chacune des deux machines, avec un extrait court :
 
-1. La sortie de `uv run moto-blur info` et de `uv run moto-blur probe samples/votre-video.mp4`.
+1. La sortie de `uv run flouto info` et de `uv run flouto probe samples/votre-video.mp4`.
 2. Le bandeau affiché à la fin de l'analyse (vitesse et accélération utilisée).
 3. La ligne « Encodeur vidéo » affichée dans le terminal pendant l'export.
 4. Ce que le logiciel a manqué : plaques ou visages lisibles sans cadre dans la vidéo de

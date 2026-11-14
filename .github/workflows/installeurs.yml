@@ -96,15 +96,15 @@ jobs:
           cat > notes.md <<'NOTES'
           **Windows** : téléchargez le fichier qui finit par `_x64-setup.exe` ci-dessous et lancez-le. Si Windows affiche « Windows a protégé votre ordinateur », cliquez « Informations complémentaires », puis « Exécuter quand même ».
 
-          **Mac (puce Apple)** : téléchargez le fichier `.dmg`, ouvrez-le et glissez moto-blur dans Applications. Au premier lancement, ouvrez Réglages Système > Confidentialité et sécurité et cliquez « Ouvrir quand même ». Si macOS dit que l'application est « endommagée », tapez dans le Terminal : `xattr -cr /Applications/moto-blur.app`
+          **Mac (puce Apple)** : téléchargez le fichier `.dmg`, ouvrez-le et glissez Flouto dans Applications. Au premier lancement, ouvrez Réglages Système > Confidentialité et sécurité et cliquez « Ouvrir quand même ». Si macOS dit que l'application est « endommagée », tapez dans le Terminal : `xattr -cr /Applications/Flouto.app`
 
-          Une fois installé, moto-blur propose lui-même les versions suivantes au démarrage.
+          Une fois installé, Flouto propose lui-même les versions suivantes au démarrage.
           NOTES
           sed -i 's/^          //' notes.md
           # L'identifiant est pris dans la réponse de la création : relire la liste juste après
           # ne le montre pas toujours encore.
           ID=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
-            -f name="moto-blur $TAG" -F body=@notes.md -F draft=true --jq '.id')
+            -f name="Flouto $TAG" -F body=@notes.md -F draft=true --jq '.id')
           if [ -z "$ID" ]; then
             echo "::error::Le brouillon de la version $TAG n'a pas pu être créé."
             exit 1
@@ -147,7 +147,7 @@ jobs:
         run: |
           uv sync --no-dev
           uv run --with pyinstaller pyinstaller desktop/engine.spec --distpath desktop/engine-dist --workpath desktop/engine-build -y
-          ./desktop/engine-dist/moto-blur-engine/moto-blur-engine info
+          ./desktop/engine-dist/flouto-engine/flouto-engine info
 
       # Essai réel du moteur sur ce système : accélération (CoreML, DirectML), encodeur retenu,
       # suivi du compteur. Informatif : un échec ici n'empêche pas de produire l'installeur.
@@ -156,11 +156,11 @@ jobs:
         continue-on-error: true
         run: |
           uv run python desktop/make_sample.py essai.mp4
-          ENGINE=./desktop/engine-dist/moto-blur-engine/moto-blur-engine
+          ENGINE=./desktop/engine-dist/flouto-engine/flouto-engine
           $ENGINE probe essai.mp4
           $ENGINE run essai.mp4 -o essai_floute.mp4 --keep 0-1
-          $ENGINE dash essai.motoblur.json --at 0.2 --box 300,400,400,120
-          $ENGINE render essai.motoblur.json -o essai_hevc.mp4 --codec hevc
+          $ENGINE dash essai.flouto.json --at 0.2 --box 300,400,400,120
+          $ENGINE render essai.flouto.json -o essai_hevc.mp4 --codec hevc
           $ENGINE probe essai_floute.mp4 essai_hevc.mp4
 
       - name: Dépendances de l'application
@@ -194,7 +194,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: needs.preparation.outputs.publish != 'true'
         with:
-          name: moto-blur-${{ matrix.os }}
+          name: flouto-${{ matrix.os }}
           path: |
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/release/bundle/nsis/*.exe

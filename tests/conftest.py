@@ -9,7 +9,7 @@ import av
 import numpy as np
 import pytest
 
-from moto_blur import project as pj
+from flouto import project as pj
 
 W, H, FPS = 320, 180, 30
 
@@ -17,7 +17,7 @@ W, H, FPS = 320, 180, 30
 @pytest.fixture(autouse=True)
 def isolated_app_dir(tmp_path_factory, monkeypatch):
     """Projets récents et profil rangés dans un dossier temporaire, jamais dans le vrai."""
-    monkeypatch.setenv("MOTO_BLUR_HOME", str(tmp_path_factory.mktemp("moto-blur-home")))
+    monkeypatch.setenv("FLOUTO_HOME", str(tmp_path_factory.mktemp("flouto-home")))
 
 
 def object_box(i: int) -> tuple[int, int, int, int]:
@@ -96,9 +96,9 @@ def video_info() -> pj.VideoInfo:
 
 
 def make_project(tmp_path: Path, *videos: Path) -> pj.Project:
-    from moto_blur.video import probe
+    from flouto.video import probe
 
-    project = pj.Project(path=tmp_path / "test.motoblur.json")
+    project = pj.Project(path=tmp_path / "test.flouto.json")
     for v in videos:
         video, audio = probe(v)
         clip = pj.add_clip(project, v, video, audio)

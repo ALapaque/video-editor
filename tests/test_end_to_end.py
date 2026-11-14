@@ -16,10 +16,10 @@ from conftest import (
     read_audio,
     read_frames,
 )
-from moto_blur import project as pj
-from moto_blur.analyze import analyze_project, needed_intervals
-from moto_blur.blur import blur_frame
-from moto_blur.render import RenderError, _gain, render_project
+from flouto import project as pj
+from flouto.analyze import analyze_project, needed_intervals
+from flouto.blur import blur_frame
+from flouto.render import RenderError, _gain, render_project
 
 
 @pytest.fixture(scope="module")
@@ -259,7 +259,7 @@ def test_hevc_output_and_debug_mode(project, tmp_path, source):
 
 
 def test_report_lists_doubtful_passages(project):
-    from moto_blur.report import build_report
+    from flouto.report import build_report
 
     analyze_project(project, detect_fn=FakeDetector(score=0.25, skip=set(range(30, 45))))
     text = build_report(project)
@@ -309,7 +309,7 @@ def test_fps_constant_is_consistent():
 
 
 def test_ellipse_blur_hides_the_box_and_keeps_far_corners(tmp_path):
-    from moto_blur.postprocess import Zone
+    from flouto.postprocess import Zone
 
     rng = np.random.default_rng(0)
     frame = av.VideoFrame.from_ndarray(rng.integers(0, 255, (180, 320, 3), dtype=np.uint8), format="rgb24").reformat(format="yuv420p")
@@ -322,7 +322,7 @@ def test_ellipse_blur_hides_the_box_and_keeps_far_corners(tmp_path):
 
 
 def test_zone_partly_outside_the_frame_is_clipped(tmp_path):
-    from moto_blur.postprocess import Zone
+    from flouto.postprocess import Zone
 
     frame = av.VideoFrame.from_ndarray(np.random.default_rng(0).integers(0, 255, (180, 320, 3), dtype=np.uint8), format="rgb24").reformat(format="yuv420p")
     blur_frame(frame, [Zone("face", (-40, -30, 60, 50), "ellipse"), Zone("plate", (280, 150, 360, 200), "rounded", 8)])

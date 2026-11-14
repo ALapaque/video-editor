@@ -9,7 +9,7 @@ Ce module découpe les images en tuiles, comme le fait la détection, et écrit 
 au format YOLO. Rien n'est envoyé nulle part : les images restent sur cette machine. Elles
 montrent des plaques NON floutées : ne les publiez pas.
 
-L'entraînement lui-même ne fait pas partie de moto-blur : voir docs/ENTRAINEMENT.md.
+L'entraînement lui-même ne fait pas partie de Flouto : voir docs/ENTRAINEMENT.md.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import av
 import cv2
 import numpy as np
 
+from . import names
 from . import project as pj
 from .detect import make_crops
 from .models import get_spec
@@ -29,7 +30,7 @@ from .progress import Progress
 from .video import iter_frames
 
 MIN_VISIBLE = 0.4  # part d'une plaque qui doit être dans la tuile pour y être étiquetée
-README = """Images d'entraînement moto-blur (plaques)
+README = """Images d'entraînement Flouto (plaques)
 ===========================================
 
 images/  tuiles découpées dans vos vidéos (plaques NON floutées : ne publiez pas ce dossier)
@@ -40,7 +41,7 @@ data.yaml  description du jeu de données pour l'entraînement
 Les tuiles sans plaque sont voulues : elles apprennent au modèle ce qui n'est PAS une plaque
 (dont les fausses détections que vous avez retirées pendant la vérification).
 
-Suite : docs/ENTRAINEMENT.md dans le dépôt de moto-blur.
+Suite : docs/ENTRAINEMENT.md dans le dépôt de Flouto.
 """
 
 
@@ -74,7 +75,7 @@ def export_dataset(
     """Écrit le jeu de données. Renvoie {"path", "images", "labels", "negatives"}."""
     if project.path is None:
         raise ValueError("le projet doit être enregistré.")
-    name = project.path.name.replace(".motoblur.json", "").replace(".json", "")
+    name = names.project_name(project.path)
     out = (Path(out_dir) if out_dir else project.path.parent / f"{name}_entrainement").resolve()
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)
@@ -194,7 +195,7 @@ def export_dataset(
 # --- Entraînement : une seule commande -------------------------------------------------------
 #
 # L'entraînement utilise Ultralytics (licence AGPL-3.0), qui n'est pas une dépendance de
-# moto-blur : il est lancé à part, par « uvx », qui l'installe dans un coin la première fois
+# Flouto : il est lancé à part, par « uvx », qui l'installe dans un coin la première fois
 # (téléchargement de plusieurs centaines de Mo, puis du modèle de départ). C'est un outil que
 # vous lancez exprès : l'analyse et le rendu, eux, ne font toujours aucun appel réseau.
 
@@ -203,10 +204,9 @@ MIN_PLATES = 50  # en dessous, l'entraînement n'a aucune chance d'apporter quoi
 
 
 def _runner() -> list[str]:
-    import os
     import shlex
 
-    custom = os.environ.get("MOTO_BLUR_TRAIN_RUNNER")
+    custom = names.env("TRAIN_RUNNER")
     return shlex.split(custom) if custom else list(RUNNER)
 
 
@@ -232,7 +232,7 @@ def train(
     if not name or any(c in name for c in "/\\ ") or name.endswith(".onnx"):
         raise ValueError("donnez un nom simple au modèle, sans espace ni barre : mes-plaques, par exemple.")
     if not base.startswith("yolo11"):
-        raise ValueError("modèle de départ : yolo11n, yolo11s ou yolo11m (moto-blur lit la sortie de cette famille).")
+        raise ValueError("modèle de départ : yolo11n, yolo11s ou yolo11m (Flouto lit la sortie de cette famille).")
     if not projects or projects[0].path is None:
         raise ValueError("indiquez au moins un projet vérifié.")
     out = (Path(out_dir) if out_dir else projects[0].path.parent / f"entrainement_{name}").resolve()

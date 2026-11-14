@@ -15,13 +15,13 @@ Prudence (exigence « zéro fuite ») : un contour serré protège moins qu'un r
 
 from __future__ import annotations
 
-import os
 import sys
 
 import av
 import cv2
 import numpy as np
 
+from . import names
 from . import project as pj
 from .models import ensure_files
 from .progress import Progress
@@ -57,7 +57,7 @@ class Segmenter:
         import onnxruntime as ort
 
         folder = ensure_files("sam2.1-tiny", SAM_FILES)
-        device = os.environ.get("MOTO_BLUR_CONTOUR_DEVICE", device)
+        device = (names.env("CONTOUR_DEVICE") or device)
         options = ort.SessionOptions()
         options.log_severity_level = 3
         providers = ["CPUExecutionProvider"]

@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 
 from conftest import FakeDetector, detail, make_project, make_video, object_box, read_frames
-from moto_blur import dash
-from moto_blur import project as pj
-from moto_blur.analyze import analyze_project
-from moto_blur.render import RenderError, render_project
+from flouto import dash
+from flouto import project as pj
+from flouto.analyze import analyze_project
+from flouto.render import RenderError, render_project
 
 
 @pytest.fixture
@@ -204,7 +204,7 @@ def test_tracking_stops_at_a_cut_finds_the_object_again_and_never_follows_the_mi
     # pas de flou prolongé de part et d'autre des coupes
     first = next(t for t in tracks if t.reacquired_at is None)
     assert first.extend_after_s == 0.0 and found[0].extend_before_s == 0.0 and found[0].extend_after_s == 0.0
-    from moto_blur.postprocess import ZoneIndex
+    from flouto.postprocess import ZoneIndex
 
     index = ZoneIndex(project.analysis[clip.id].tracks, project.blur_settings, clip.video)
     # juste après la coupe : aucun flou à l'ancienne place du compteur, un seul sur sa nouvelle place
@@ -250,7 +250,7 @@ def test_by_default_nothing_is_guessed_after_a_cut(shots, tracker_available):
     assert frames[0] == 0 and frames[-1] == 29  # tout le plan A, pas au-delà
     assert all(_iou(o[1:5], truth[round(o[0] / f)]) > 0.6 for o in tracks[0].obs)
     assert tracks[0].extend_after_s == 0.0
-    from moto_blur.postprocess import ZoneIndex
+    from flouto.postprocess import ZoneIndex
 
     index = ZoneIndex(project.analysis[clip.id].tracks, project.blur_settings, clip.video)
     assert all(not index.shaped(round(i * f)) for i in range(31, 90))  # plans B et C : aucun flou
@@ -278,7 +278,7 @@ def test_a_guessed_piece_can_be_removed_and_becomes_an_alert(shots, tracker_avai
     tracks = dash.track_from_click(project, clip, round(10 * f), truth[10], reacquire=True)
     guessed = next(t for t in tracks if t.reacquired_at is not None)
     guessed.disabled = True
-    from moto_blur.postprocess import ZoneIndex
+    from flouto.postprocess import ZoneIndex
 
     index = ZoneIndex(project.analysis[clip.id].tracks, project.blur_settings, clip.video)
     assert not index.shaped(round(45 * f))  # plus de flou dans le plan B

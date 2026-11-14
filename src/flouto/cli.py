@@ -1,13 +1,13 @@
-"""Ligne de commande de moto-blur.
+"""Ligne de commande de Flouto.
 
-    moto-blur analyze VIDEO [VIDEO…]   analyse et écrit le fichier projet
-    moto-blur render  PROJET -o SORTIE produit la vidéo finale
-    moto-blur run     VIDEO… -o SORTIE enchaîne les deux
-    moto-blur ui      [VIDEO|PROJET]   ouvre l'interface de montage et de vérification
-    moto-blur dash    PROJET --box …   floute le compteur (zone fixe ou suivi)
-    moto-blur report  PROJET           affiche les passages à vérifier
-    moto-blur probe   VIDEO            affiche les caractéristiques d'une vidéo
-    moto-blur info                     affiche l'accélération disponible sur cette machine
+    flouto analyze VIDEO [VIDEO…]   analyse et écrit le fichier projet
+    flouto render  PROJET -o SORTIE produit la vidéo finale
+    flouto run     VIDEO… -o SORTIE enchaîne les deux
+    flouto ui      [VIDEO|PROJET]   ouvre l'interface de montage et de vérification
+    flouto dash    PROJET --box …   floute le compteur (zone fixe ou suivi)
+    flouto report  PROJET           affiche les passages à vérifier
+    flouto probe   VIDEO            affiche les caractéristiques d'une vidéo
+    flouto info                     affiche l'accélération disponible sur cette machine
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, names
 from . import project as pj
 from .timeline import format_time, parse_time, resolve_segments, timeline_duration
 
@@ -27,7 +27,7 @@ def _project_path(args: argparse.Namespace) -> Path:
     first = Path(args.inputs[0])
     if first.suffix.lower() == ".json":
         return first
-    return first.with_name(first.stem + ".motoblur.json")
+    return names.project_for(first)
 
 
 def _open_or_create(args: argparse.Namespace) -> pj.Project:
@@ -227,7 +227,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     print(f"\nModèle « {result['model']} » installé : {result['path']}")
     print("Il apparaît dans la liste « Modèle de plaques » des réglages experts.")
     print("Avant de l'adopter, mesurez-le sur une vidéo vérifiée qui n'a PAS servi à l'entraînement :")
-    print(f"  uv run moto-blur measure AUTRE-PROJET.motoblur.json --plate-model {result['model']}")
+    print(f"  uv run flouto measure AUTRE-PROJET.flouto.json --plate-model {result['model']}")
     print("Ne le gardez que s'il ne perd aucun flou et produit moins de faux flous.")
     return 0
 
@@ -331,7 +331,7 @@ def cmd_info(args: argparse.Namespace) -> int:
 
     from .models import MODELS, models_dir
 
-    print(f"moto-blur {__version__} — Python {platform.python_version()} — {platform.system()} {platform.machine()}")
+    print(f"flouto {__version__} — Python {platform.python_version()} — {platform.system()} {platform.machine()}")
     print(f"ONNX Runtime {ort.__version__} : {', '.join(p.replace('ExecutionProvider', '') for p in ort.get_available_providers())}")
     names = ["h264_videotoolbox", "hevc_videotoolbox", "h264_amf", "hevc_amf", "h264_nvenc", "hevc_nvenc", "libx264", "libx265"]
     present = []
@@ -362,7 +362,7 @@ def _add_edit_options(p: argparse.ArgumentParser) -> None:
 def _add_analysis_options(p: argparse.ArgumentParser) -> None:
     g = p.add_argument_group("analyse")
     g.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto", help="accélération (défaut : auto)")
-    g.add_argument("--face-model", help="modèle de visages (voir « moto-blur info »)")
+    g.add_argument("--face-model", help="modèle de visages (voir « flouto info »)")
     g.add_argument("--plate-model", help="modèle de plaques")
     g.add_argument("--only", choices=list(pj.KINDS), help="ne détecter qu'une catégorie")
     g.add_argument("--conf-new", type=float, help="score minimal pour créer une piste (défaut 0.20)")
@@ -389,13 +389,13 @@ def _add_render_options(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="moto-blur", description="Floutage automatique et montage simple pour vidéos moto.")
-    parser.add_argument("--version", action="version", version=f"moto-blur {__version__}")
+    parser = argparse.ArgumentParser(prog="flouto", description="Floutage automatique (visages, plaques, objets) et montage simple de vidéos.")
+    parser.add_argument("--version", action="version", version=f"flouto {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("analyze", help="analyser (détection + suivi) et écrire le fichier projet")
     p.add_argument("inputs", nargs="+", metavar="VIDEO|PROJET", help="vidéos dans l'ordre du montage, ou un fichier projet existant")
-    p.add_argument("-p", "--project", help="fichier projet (défaut : <première vidéo>.motoblur.json)")
+    p.add_argument("-p", "--project", help="fichier projet (défaut : <première vidéo>.flouto.json)")
     _add_edit_options(p)
     _add_analysis_options(p)
     p.set_defaults(func=cmd_analyze)

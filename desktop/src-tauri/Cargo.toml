@@ -1,12 +1,12 @@
 [package]
-name = "moto-blur-desktop"
+name = "flouto-desktop"
 version = "0.1.0"
-description = "moto-blur : floutage automatique et montage simple pour vidéos moto"
+description = "Flouto : floutage automatique et montage simple de vidéos"
 license = "AGPL-3.0-or-later"
 edition = "2021"
 
 [lib]
-name = "moto_blur_desktop_lib"
+name = "flouto_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

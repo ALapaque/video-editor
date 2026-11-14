@@ -15,8 +15,8 @@ jobs:
       # Les tests téléchargent quelques modèles (dont celui du contour précis, 155 Mo) : on les garde.
       - uses: actions/cache@v4
         with:
-          path: ~/.moto-blur/models
-          key: modeles-${{ hashFiles('src/moto_blur/models.py', 'src/moto_blur/contour.py') }}
+          path: ~/.flouto/models
+          key: modeles-${{ hashFiles('src/flouto/models.py', 'src/flouto/contour.py') }}
       - run: uv run ruff check src tests
       - run: uv run pytest -q
 
@@ -48,5 +48,5 @@ jobs:
         run: |
           # Le moteur autonome n'est fabriqué qu'avec les installeurs : un dossier vide suffit
           # ici, la configuration exigeant seulement qu'il existe.
-          mkdir -p ../engine-dist/moto-blur-engine
+          mkdir -p ../engine-dist/flouto-engine
           cargo check --locked

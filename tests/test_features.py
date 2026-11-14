@@ -19,14 +19,14 @@ from conftest import (
     object_box,
     read_frames,
 )
-from moto_blur import dash, library, media
-from moto_blur import project as pj
-from moto_blur.analyze import analyze_project, apply_preset, frames_to_analyze
-from moto_blur.history import History
-from moto_blur.postprocess import TrackZones, build_review, smooth_boxes
-from moto_blur.render import clip_to_window, render_project
-from moto_blur.server import Engine, make_server
-from moto_blur.timeline import resolve_segments
+from flouto import dash, library, media
+from flouto import project as pj
+from flouto.analyze import analyze_project, apply_preset, frames_to_analyze
+from flouto.history import History
+from flouto.postprocess import TrackZones, build_review, smooth_boxes
+from flouto.render import clip_to_window, render_project
+from flouto.server import Engine, make_server
+from flouto.timeline import resolve_segments
 
 F = 512
 
@@ -216,7 +216,7 @@ def test_recent_projects_and_preview_cleanup(tmp_path):
     other = tmp_path / "vieux.motoblur.proxies"
     other.mkdir()
     (other / "c1.mp4").write_bytes(b"x" * 5000)
-    mine = tmp_path / "test.motoblur.proxies"
+    mine = tmp_path / "test.flouto.proxies"
     mine.mkdir()
     (mine / "c1.mp4").write_bytes(b"x" * 100)
     listing = {p["name"]: p for p in library.storage(a)["previews"]}
@@ -380,8 +380,8 @@ def test_followed_blur_over_the_api_can_be_undone(tmp_path, tracker_available):
 
 def test_plate_model_converted_for_batches_gives_the_same_boxes():
     """La version « par lot » du modèle de plaques détecte comme l'original, tuile par tuile."""
-    from moto_blur.detect import Detector
-    from moto_blur.models import batchable, ensure_model, get_spec
+    from flouto.detect import Detector
+    from flouto.models import batchable, ensure_model, get_spec
 
     spec = get_spec("yolo-v9-t-640", "plate")
     try:
@@ -423,7 +423,7 @@ def _contour_project(tmp_path):
 
 def test_contour_zone_covers_both_neighbouring_outlines(video_info):
     """Entre deux images de référence, le flou couvre la réunion des deux contours, grossie."""
-    from moto_blur.blur import contour_mask, zone_outline
+    from flouto.blur import contour_mask, zone_outline
 
     square = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
     lozenge = [0.5, -0.1, 1.1, 0.5, 0.5, 1.1, -0.1, 0.5]
@@ -455,9 +455,9 @@ def test_contour_zone_covers_both_neighbouring_outlines(video_info):
 
 
 def test_precise_contour_never_uncovers_the_object(tmp_path, tracker_available):
-    from moto_blur import contour
-    from moto_blur.blur import contour_mask
-    from moto_blur.postprocess import ZoneIndex
+    from flouto import contour
+    from flouto.blur import contour_mask
+    from flouto.postprocess import ZoneIndex
 
     try:
         segmenter = contour.Segmenter(device="cpu")
@@ -493,7 +493,7 @@ def test_precise_contour_never_uncovers_the_object(tmp_path, tracker_available):
 
 
 def test_contour_routes_and_undo(tmp_path, tracker_available, monkeypatch):
-    from moto_blur import contour
+    from flouto import contour
 
     project, clip, tracks, truth = _contour_project(tmp_path)
 
@@ -528,7 +528,7 @@ def test_contour_routes_and_undo(tmp_path, tracker_available, monkeypatch):
 
 
 def test_training_images_from_a_reviewed_project(tmp_path):
-    from moto_blur.training import export_dataset
+    from flouto.training import export_dataset
 
     project = make_project(tmp_path, make_video(tmp_path / "v.mp4", frames=60))
     with pytest.raises(ValueError, match="aucune plaque"):
@@ -573,13 +573,13 @@ def test_training_images_from_a_reviewed_project(tmp_path):
 def test_personal_model_is_listed_and_loaded(tmp_path, monkeypatch):
     import shutil
 
-    from moto_blur import models
+    from flouto import models
 
     try:
         source = models.ensure_model(models.get_spec("yolo11n-face", "face"))
     except (urllib.error.URLError, OSError) as exc:
         pytest.skip(f"modèle indisponible : {exc}")
-    monkeypatch.setenv("MOTO_BLUR_MODELS", str(tmp_path / "modeles"))
+    monkeypatch.setenv("FLOUTO_MODELS", str(tmp_path / "modeles"))
     target = tmp_path / "modeles" / "perso" / "plate" / "mes-plaques.onnx"
     target.parent.mkdir(parents=True)
     shutil.copy(source, target)
@@ -625,8 +625,8 @@ def test_hand_made_detection_settings_show_as_custom(api):
 
 
 def test_nuisance_similar_blurs_and_ignore_zones(video_info):
-    from moto_blur.analyze import apply_ignore_zones
-    from moto_blur.postprocess import footprint, in_ignore_zone, nuisance, similar_tracks
+    from flouto.analyze import apply_ignore_zones
+    from flouto.postprocess import footprint, in_ignore_zone, nuisance, similar_tracks
 
     def blur(i, x, y, w, h, frames, kind="face"):
         return pj.Track(i, kind, [[k * F, x, y, x + w, y + h, 0.5] for k in range(frames)])
@@ -717,8 +717,8 @@ class FakeExaminer:
 
 
 def test_doubtful_object_not_found_again_is_not_blurred(tmp_path):
-    from moto_blur import confirm
-    from moto_blur.postprocess import below_min_score, is_blurred
+    from flouto import confirm
+    from flouto.postprocess import below_min_score, is_blurred
 
     project = make_project(tmp_path, make_video(tmp_path / "v.mp4", frames=60))
     analyze_project(project, detect_fn=FakeDetector(score=0.32))  # le carré blanc, vu sans assurance
@@ -762,8 +762,8 @@ def test_doubtful_object_not_found_again_is_not_blurred(tmp_path):
 
 
 def test_examine_reuses_the_loaded_model_whatever_its_batch_size():
-    from moto_blur.detect import Detector
-    from moto_blur.models import batchable, ensure_model, get_spec
+    from flouto.detect import Detector
+    from flouto.models import batchable, ensure_model, get_spec
 
     spec = get_spec("yolo-v9-t-640", "plate")
     try:
@@ -790,8 +790,8 @@ def test_examine_reuses_the_loaded_model_whatever_its_batch_size():
 def test_doubtful_object_without_context_is_not_blurred(tmp_path, monkeypatch):
     """Un « visage » douteux sans personne dessous n'est pas flouté, sauf s'il est nettement
     retrouvé en gros plan."""
-    from moto_blur import confirm, context
-    from moto_blur.postprocess import is_blurred
+    from flouto import confirm, context
+    from flouto.postprocess import is_blurred
 
     project = make_project(tmp_path, make_video(tmp_path / "v.mp4", frames=40))
     analyze_project(project, detect_fn=none())
@@ -839,7 +839,7 @@ def test_doubtful_object_without_context_is_not_blurred(tmp_path, monkeypatch):
 
 
 def test_context_detector_finds_people_and_vehicles():
-    from moto_blur import context
+    from flouto import context
 
     try:
         detector = context.load()
@@ -870,7 +870,7 @@ def _corrected_project(video_info):
 
 
 def test_thresholds_suggested_from_corrections(video_info):
-    from moto_blur import tuning
+    from flouto import tuning
 
     p = _corrected_project(video_info)
     facts = tuning.truth(p)
@@ -890,7 +890,7 @@ def test_thresholds_suggested_from_corrections(video_info):
 
 
 def test_comparison_with_another_analysis(video_info):
-    from moto_blur import tuning
+    from flouto import tuning
 
     reference = _corrected_project(video_info)
     candidate = _corrected_project(video_info)
@@ -940,7 +940,7 @@ def test_fine_tiles_every_other_frame(tmp_path):
 
 
 def test_queue_analyses_each_video_in_its_own_project(tmp_path):
-    from moto_blur import batch
+    from flouto import batch
 
     a = make_video(tmp_path / "a.mp4", frames=30)
     b = make_video(tmp_path / "b.mp4", frames=20)
@@ -954,26 +954,26 @@ def test_queue_analyses_each_video_in_its_own_project(tmp_path):
     assert "illisible" in results[1]["message"] and "introuvable" in results[3]["message"]
     assert seen == [(0, 4, "a.mp4"), (1, 4, "abimee.mp4"), (2, 4, "b.mp4"), (3, 4, "absente.mp4")]
     for name in ("a", "b"):
-        project = pj.load(tmp_path / f"{name}.motoblur.json")
+        project = pj.load(tmp_path / f"{name}.flouto.json")
         assert project.preset == "rapide" and len(project.analysis["c1"].tracks) == 1
         assert not needed_after(project)
     assert [r["name"] for r in library.recent()] == ["b", "a"]
     assert batch.summary(results, 4).startswith("2 vidéos analysées sur 4.")
     # relancer la file ne refait rien
     again = batch.run_batch([a, b], preset="rapide", detect_fn=FakeDetector(skip=set(range(1000))))
-    assert all(r["ok"] for r in again) and len(pj.load(tmp_path / "a.motoblur.json").analysis["c1"].tracks) == 1
+    assert all(r["ok"] for r in again) and len(pj.load(tmp_path / "a.flouto.json").analysis["c1"].tracks) == 1
 
 
 def needed_after(project):
-    from moto_blur.analyze import needed_intervals
+    from flouto.analyze import needed_intervals
 
     return any(needed_intervals(project, c) for c in project.clips)
 
 
 def test_info_command_lists_every_model(capsys):
-    """« moto-blur info » doit connaître toutes les catégories de modèles (l'installeur la lance)."""
-    from moto_blur.cli import main
-    from moto_blur.models import MODELS
+    """« flouto info » doit connaître toutes les catégories de modèles (l'installeur la lance)."""
+    from flouto.cli import main
+    from flouto.models import MODELS
 
     assert main(["info"]) == 0
     out = capsys.readouterr().out
@@ -1037,7 +1037,7 @@ def test_followed_blur_can_only_be_shortened(tmp_path, tracker_available):
 
 
 def test_preview_sizes_follow_the_short_side_and_fine_preview_on_demand(api, tmp_path):
-    from moto_blur.proxy import build_proxy, fine_is_useful, proxy_path, proxy_size
+    from flouto.proxy import build_proxy, fine_is_useful, proxy_path, proxy_size
 
     wide = pj.VideoInfo("hevc", 3840, 2160, "yuv420p10le", "30", "1/15360", 0, 512 * 300, 300, 8_000_000)
     tall = pj.VideoInfo("hevc", 1440, 2560, "yuv420p10le", "30", "1/15360", 0, 512 * 300, 300, 8_000_000)
@@ -1058,3 +1058,24 @@ def test_preview_sizes_follow_the_short_side_and_fine_preview_on_demand(api, tmp
     light = api("GET", f"/media/{clip.id}", raw=True)
     fine = api("GET", f"/media/{clip.id}?q=fine", raw=True)
     assert light[4:8] == b"ftyp" and fine[4:8] == b"ftyp" and len(fine) != len(light)  # crf différent
+
+
+def test_anciens_noms_reconnus(tmp_path, monkeypatch):
+    """Renommage moto-blur → Flouto : les anciens projets et le vieux dossier restent utilisés."""
+    from flouto import names
+
+    video = tmp_path / "trajet.mp4"
+    assert names.project_for(video).name == "trajet.flouto.json"
+    (tmp_path / "trajet.motoblur.json").write_text("{}")
+    assert names.project_for(video).name == "trajet.motoblur.json"
+    assert names.project_name("trajet.motoblur.json") == names.project_name("trajet.flouto.json") == "trajet"
+    assert names.is_project("a.motoblur.json") and names.is_project("a.flouto.json") and not names.is_project("a.json")
+
+    monkeypatch.delenv("FLOUTO_HOME", raising=False)
+    monkeypatch.setenv("MOTO_BLUR_HOME", str(tmp_path / "vieux"))
+    assert names.home() == tmp_path / "vieux"
+    monkeypatch.delenv("MOTO_BLUR_HOME")
+    monkeypatch.setattr(names.Path, "home", lambda: tmp_path)
+    (tmp_path / ".moto-blur" / "models").mkdir(parents=True)
+    assert names.home() == tmp_path / ".flouto"
+    assert (tmp_path / ".flouto" / "models").is_dir() and not (tmp_path / ".moto-blur").exists()

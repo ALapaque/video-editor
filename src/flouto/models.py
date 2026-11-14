@@ -14,6 +14,7 @@ import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from . import names
 from .progress import Progress
 
 _HF = "https://huggingface.co/deepghs/yolo-face/resolve/e3662574830c534dfcc9c3b7ea4d89272f8aae4e"
@@ -82,8 +83,8 @@ MODELS: dict[str, ModelSpec] = {
 
 
 def models_dir() -> Path:
-    env = os.environ.get("MOTO_BLUR_MODELS")
-    return Path(env) if env else Path.home() / ".moto-blur" / "models"
+    custom = names.env("MODELS")
+    return Path(custom) if custom else names.home() / "models"
 
 
 def custom_dir(kind: str) -> Path:
@@ -99,13 +100,13 @@ def custom_models(kind: str) -> list[str]:
 
 
 def available(kind: str) -> list[str]:
-    """Modèles utilisables pour une catégorie : ceux de moto-blur, puis ceux de l'utilisateur."""
+    """Modèles utilisables pour une catégorie : ceux de Flouto, puis ceux de l'utilisateur."""
     return [m.name for m in MODELS.values() if m.kind == kind] + custom_models(kind)
 
 
 def _custom_spec(name: str, kind: str) -> ModelSpec | None:
     """Modèle personnel : un fichier ONNX exporté par Ultralytics (une seule classe), posé dans
-    `~/.moto-blur/models/perso/<catégorie>/<nom>.onnx`. Jamais téléchargé."""
+    `~/.flouto/models/perso/<catégorie>/<nom>.onnx`. Jamais téléchargé."""
     path = custom_dir(kind) / f"{name}.onnx"
     if not path.is_file():
         return None
@@ -145,7 +146,7 @@ def batchable(spec: ModelSpec, path: Path) -> tuple[ModelSpec, Path]:
 
     Les modèles de plaques sont publiés avec la suppression des doublons intégrée et une seule
     image par appel : il fallait donc un appel par tuile. On en extrait ici la partie détection
-    (sortie brute, avant suppression des doublons, faite ensuite par moto-blur comme pour les
+    (sortie brute, avant suppression des doublons, faite ensuite par Flouto comme pour les
     visages) et on libère la taille du lot. La conversion est faite une fois, sur cette machine,
     à partir du fichier téléchargé ; le résultat est gardé à côté de lui.
 
@@ -207,7 +208,7 @@ def _download(url: str, target: Path, sha256: str, label: str, size_mb: float) -
     """Télécharge un fichier et vérifie son empreinte ; rien n'est gardé si elle ne correspond pas."""
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "moto-blur"})
+    request = urllib.request.Request(url, headers={"User-Agent": "flouto"})
     with urllib.request.urlopen(request) as response, open(tmp, "wb") as out:
         total = int(response.headers.get("Content-Length") or size_mb * 1e6)
         progress = Progress(f"Téléchargement du modèle {label}", max(1, total // 100_000), 0, unit="x 100 ko")
@@ -243,7 +244,7 @@ def ensure_model(spec: ModelSpec) -> Path:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".part")
-    request = urllib.request.Request(spec.url, headers={"User-Agent": "moto-blur"})
+    request = urllib.request.Request(spec.url, headers={"User-Agent": "flouto"})
     with urllib.request.urlopen(request) as response, open(tmp, "wb") as out:
         total = int(response.headers.get("Content-Length") or spec.size_mb * 1e6)
         steps = max(1, total // 100_000)

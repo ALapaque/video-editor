@@ -15,7 +15,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <main class="mode-choice">
-    <span class="brand"><Logo :size="26" /><strong>moto-blur</strong></span>
+    <span class="brand"><Logo :size="26" /><strong>Flouto</strong></span>
     <h1>Comment voulez-vous travailler ?</h1>
     <p class="wiz-lead">Vous pourrez changer d'avis à tout moment, sans rien perdre.</p>
     <div class="mode-cards">
