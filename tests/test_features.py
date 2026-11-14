@@ -685,7 +685,10 @@ def test_ignore_zone_similar_and_risk_over_the_api(api):
     assert review and all(r["risk"] is False for r in review)
     # un objet douteux pas encore revu de plus près : une analyse (rapide) est proposée
     assert api("GET", "/api/state")["project"]["clips"][0]["needs_analysis"] is True
-    api.project.analysis["c1"].confirmed = True
+    assert api("GET", "/api/state")["project"]["recheck_only"] is True  # rien à analyser : une vérification courte
+    api.project.analysis["c1"].confirmed = 1  # gros plan déjà fait par une version d'avant : le contexte reste à faire
+    assert api("GET", "/api/state")["project"]["clips"][0]["needs_analysis"] is True
+    api.project.analysis["c1"].confirmed = 2
     assert api("GET", "/api/state")["project"]["clips"][0]["needs_analysis"] is False
 
 
@@ -782,3 +785,68 @@ def test_examine_reuses_the_loaded_model_whatever_its_batch_size():
     results = detector.examine([plate, empty, plate])  # 3 vues, lot de taille différente
     assert len(results) == 3 and len(results[1]) == 0
     assert len(results[0]) >= 1 and np.allclose(results[0], results[2], atol=1e-3)
+
+
+def test_doubtful_object_without_context_is_not_blurred(tmp_path, monkeypatch):
+    """Un « visage » douteux sans personne dessous n'est pas flouté, sauf s'il est nettement
+    retrouvé en gros plan."""
+    from moto_blur import confirm, context
+    from moto_blur.postprocess import is_blurred
+
+    project = make_project(tmp_path, make_video(tmp_path / "v.mp4", frames=40))
+    analyze_project(project, detect_fn=none())
+    clip = project.clips[0]
+    f = clip.video.frame_pts
+    state = project.analysis["c1"]
+
+    def doubtful(i, x):
+        return pj.Track(i, "face", [[round(k * f), x, 60, x + 30, 100, 0.45 if k < 3 else 0.30] for k in range(20)])
+
+    wall, weak_person, clear, hidden = doubtful(1, 20), doubtful(2, 80), doubtful(3, 140), doubtful(4, 200)
+    state.tracks += [wall, weak_person, clear, hidden]
+    zoom_scores = {1: 0.30, 2: 0.30, 3: 0.70, 4: 0.05}
+    near_scores = {1: 0.0, 2: 0.6, 3: 0.0, 4: 0.9}
+    seen = []
+
+    class Examiner:
+        class spec:  # noqa: N801
+            input_size = 64
+
+        def examine(self, views):
+            return [np.zeros((0, 5), dtype=np.float32) for _ in views]
+
+    def fake_score(detector, rgb, kind, box):
+        seen.append(round(box[0]))
+        return near_scores[{20: 1, 80: 2, 140: 3, 200: 4}[round(box[0])]]
+
+    monkeypatch.setattr(context, "score", fake_score)
+    monkeypatch.setattr(confirm, "_found", lambda detections, box: 0.0)
+    assert len(confirm.pending(project, clip)) == 4
+    confirm.confirm_tracks(project, clip, {"face": Examiner()}, context=object())
+    for t in (wall, weak_person, clear, hidden):
+        t.confirm = zoom_scores[t.id]  # résultat du gros plan, fixé pour l'essai
+    blur = project.blur_settings
+    assert not is_blurred(wall, blur)  # ni personne, ni nettement retrouvé : un mur, un arbre
+    assert is_blurred(weak_person, blur)  # une personne dessous : gardé
+    assert is_blurred(clear, blur)  # pas de personne vue, mais nettement retrouvé en gros plan : gardé
+    assert not is_blurred(hidden, blur)  # pas retrouvé du tout en gros plan : écarté, contexte ou non
+    assert wall.context == 0.0 and weak_person.context == 0.6 and hidden.context == 0.9
+    # dès que le contexte est trouvé avec assurance, on ne regarde pas les autres images
+    assert seen.count(80) == 1 and seen.count(20) == 3
+    pj.save(project)
+    assert {t.id: t.context for t in pj.load(project.path).analysis["c1"].tracks}[2] == 0.6
+    assert is_blurred(wall, pj.BlurSettings(confirm=False))
+
+
+def test_context_detector_finds_people_and_vehicles():
+    from moto_blur import context
+
+    try:
+        detector = context.load()
+    except (urllib.error.URLError, OSError) as exc:
+        pytest.skip(f"modèle indisponible : {exc}")
+    blank = np.full((640, 640, 3), 120, dtype=np.uint8)
+    boxes, scores, classes = detector.detect(blank)
+    assert len(boxes) == len(scores) == len(classes) == 0
+    assert context.score(detector, np.full((360, 640, 3), 120, dtype=np.uint8), "face", (300, 100, 330, 140)) == 0.0
+    assert context.score(detector, np.full((360, 640, 3), 120, dtype=np.uint8), "plate", (300, 200, 380, 220)) == 0.0

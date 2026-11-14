@@ -57,8 +57,12 @@ def below_min_score(track: Track, settings: BlurSettings) -> bool:
     """
     if track.source != "auto" or track.forced or not track.obs:
         return False
-    if settings.confirm and track.confirm is not None and track.confirm < settings.confirm_min:
-        return True  # objet douteux que le détecteur n'a pas retrouvé en le revoyant de plus près
+    if settings.confirm and track.confirm is not None:
+        if track.confirm < settings.confirm_min:
+            return True  # objet douteux que le détecteur n'a pas retrouvé en le revoyant de plus près
+        if (track.context is not None and track.context < settings.context_min
+                and track.confirm < settings.confirm_strong):
+            return True  # ni personne ni véhicule autour, et pas nettement retrouvé en gros plan
     minimum = settings.min_score_for(track.kind)
     scores = [o[5] for o in track.obs]
     if max(scores) >= minimum + STRONG_MARGIN:

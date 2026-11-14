@@ -105,6 +105,22 @@ prompt_encoder_mask_decoder.onnx       874414704c5d686db7d206a35f6e15d26563d50c8
 prompt_encoder_mask_decoder.onnx_data  e9874d900dd4134ed60eab1e97910327c2419e0b2954485d8fd6e7f1a1470f47
 ```
 
+### Contexte — YOLOX-S (OpenCV Zoo)
+
+| Nom dans moto-blur | Taille | Usage |
+|---|---|---|
+| `yolox-s` | 36 Mo | repère les personnes et les véhicules autour d'un objet douteux : un « visage » sans personne dessous, une « plaque » hors de tout véhicule, n'est pas flouté |
+
+- Source : <https://huggingface.co/opencv/object_detection_yolox>
+  (révision `78c368f74ce73ee28fc7a1be418a598c71b58b52`, fichier `object_detection_yolox_2022nov.onnx`).
+- Modèle d'origine : YOLOX de Megvii, <https://github.com/Megvii-BaseDetection/YOLOX>.
+- Licence : Apache-2.0 (fichier LICENSE du dépôt). Données d'entraînement : COCO.
+- Exécuté sur le processeur, seulement sur les meilleures images des objets douteux.
+
+```
+yolox-s  c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063
+```
+
 ### Modèles personnels
 
 Un modèle entraîné par vous (voir `docs/ENTRAINEMENT.md`) se pose dans

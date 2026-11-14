@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import av
 import numpy as np
 
-from . import confirm, dash, intervals
+from . import confirm, context, dash, intervals
 from . import project as pj
 from .detect import Detector, gpu_has_worked
 from .models import batchable, ensure_model, get_spec
@@ -192,7 +192,7 @@ def _confirm_clip(project: pj.Project, clip: pj.Clip, device: str, detect: Detec
     """Contre-vérifie les objets douteux du clip (voir `confirm.py`). False si interrompu."""
     if not confirm.pending(project, clip):
         if clip.id in project.analysis:
-            project.analysis[clip.id].confirmed = True
+            project.analysis[clip.id].confirmed = confirm.VERSION
         return True
     if detect is None:
         detect, _ = make_detect_fn(project, clip, device)
@@ -200,16 +200,21 @@ def _confirm_clip(project: pj.Project, clip: pj.Clip, device: str, detect: Detec
     if not detectors:
         return True
     try:
-        result = confirm.confirm_tracks(project, clip, detectors)
+        around = context.load()
+    except Exception as exc:  # noqa: BLE001 - modèle indisponible (hors ligne) : gros plan seul
+        print(f"Vérification par le contexte indisponible ({exc}) : gros plan seul.", file=sys.stderr)
+        around = None
+    try:
+        result = confirm.confirm_tracks(project, clip, detectors, context=around)
     except KeyboardInterrupt:
         print("\nContre-vérification interrompue : elle reprendra à la prochaine analyse.", file=sys.stderr)
         return False
-    project.analysis[clip.id].confirmed = True
+    project.analysis[clip.id].confirmed = confirm.VERSION
     refresh_review(project)
     pj.save(project)
     if result["examined"]:
         note = (f"{result['examined']} objets douteux revus de plus près, "
-                f"{result['unconfirmed']} non retrouvés et donc non floutés")
+                f"{result['unconfirmed']} écartés et donc non floutés")
         print(f"{clip.id} : {note}.")
         project.notes = [*getattr(project, "notes", []), note[0].upper() + note[1:] + "."]
     return True
