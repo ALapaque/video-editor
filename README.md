@@ -4,6 +4,8 @@ Floutage automatique des visages et des plaques d'immatriculation dans des vidé
 (Insta360 exportée « à plat », ou n'importe quelle action cam), avec un montage simple :
 rogner, supprimer des passages, assembler plusieurs clips, couper le son.
 
+Site et téléchargement : https://alapaque.github.io/video-editor/
+
 Tout le traitement est local : aucune vidéo ne quitte la machine. Le seul appel réseau est le
 téléchargement des modèles de détection au premier lancement.
 
