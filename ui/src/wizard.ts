@@ -20,6 +20,31 @@ export const wiz = reactive({
   extract: "", // chemin du dernier extrait d'essai créé
 });
 
+// « Je choisis moi-même » : le choix est retenu par projet, dans le navigateur (le fichier projet
+// ne le connaît pas). Sans lui, un projet où rien n'est automatique et où aucun objet n'est désigné
+// est de toute façon traité comme « tout à la main ».
+const HAND_KEY = "moto-blur:a-la-main";
+function storedHands(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HAND_KEY) ?? "[]");
+    return Array.isArray(saved) ? saved.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return []; // stockage indisponible : le choix vaut pour cette séance seulement
+  }
+}
+/** Projets (chemins) pour lesquels « Je choisis moi-même » est coché. */
+export const hands = reactive({ paths: storedHands() });
+
+export function rememberHand(path: string, on: boolean): void {
+  const others = hands.paths.filter((p) => p !== path);
+  hands.paths = on ? [...others, path].slice(-60) : others;
+  try {
+    localStorage.setItem(HAND_KEY, JSON.stringify(hands.paths));
+  } catch {
+    /* stockage indisponible */
+  }
+}
+
 /** Glisser-déposer : ce que l'assistant fait des fichiers déposés tant qu'il est à l'écran
  *  (null en mode avancé). L'écoute de la fenêtre est posée une fois, par l'application. */
 export const drop = { target: null as ((paths: string[]) => void) | null };

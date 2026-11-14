@@ -89,6 +89,35 @@ export async function followBlur(clip: string, time: number, box: number[], star
   await start("/api/follow", { clip, time, box, start: startAt, end: endAt });
 }
 
+// --- Tout à la main : aucun flou automatique, seuls les flous posés par l'utilisateur -----------
+
+/** Catégories floutées automatiquement dans le projet ouvert : "face", "plate", ou aucune. */
+export const autoKinds = computed<string[]>(() => (project.value?.settings.analysis.kinds as string[] | undefined) ?? []);
+/** Rien n'est flouté automatiquement : le projet ne demande aucune analyse, seul ce qui est
+ *  entouré à la main est flouté. */
+export const manualOnly = computed(() => !!project.value && autoKinds.value.length === 0);
+/** La contrepartie, dite avec les mêmes mots dans les deux modes. */
+export const MANUAL_WARNING = "Rien n'est flouté automatiquement : ce que vous n'entourez pas reste visible.";
+
+/** Choisit ce qui est flouté automatiquement (liste vide : tout se pose à la main). Les flous
+ *  automatiques d'une catégorie retirée disparaissent ; l'analyse est à refaire pour ce qui reste
+ *  ou revient. Vrai si le moteur a accepté. */
+export async function setAutoKinds(kinds: string[]): Promise<boolean> {
+  return !!(await send("PUT", "/api/settings", { analysis: { kinds } }));
+}
+
+/** Flou posé à la main dont le début et la fin se règlent : flou fixe, ou flou ajouté qui suit ce
+ *  qu'on a entouré (celui-là ne peut qu'être raccourci). */
+export function spanEditable(track: Track): boolean {
+  return track.source === "manual" || (track.source === "tracker" && track.kind === "manual");
+}
+
+/** Début et fin d'un flou posé à la main, en secondes de temps source du clip (annulable). Un flou
+ *  fixe se rallonge ou se raccourcit ; un flou qui suit ne peut qu'être raccourci. Vrai si accepté. */
+export async function setBlurSpan(clip: string, id: number, startAt: number, endAt: number): Promise<boolean> {
+  return !!(await send("PATCH", "/api/tracks", { clip, id, span: [startAt, endAt] }));
+}
+
 // --- Corrections par lot ----------------------------------------------------------
 
 /** Retire (ou remet) plusieurs flous d'un clip en une seule action annulable. */

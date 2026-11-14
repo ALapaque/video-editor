@@ -54,6 +54,8 @@ const paths = {
   /* === fin : nouveau flux, mode avancé === */
   /* file d'attente : plusieurs vidéos à la suite */
   layers: '<path d="M8 2.25 14 5.4 8 8.55 2 5.4z"/><path d="m2.5 8.1 5.5 2.9 5.5-2.9M2.5 10.7 8 13.6l5.5-2.9"/>',
+  /* réglages de lecture (lecteur simple) */
+  gear: '<circle cx="8" cy="8" r="2"/><circle cx="8" cy="8" r="4.4"/><path d="M8 1.75v1.85M8 12.4v1.85M1.75 8H3.6M12.4 8h1.85M3.58 3.58l1.31 1.31M11.11 11.11l1.31 1.31M3.58 12.42l1.31-1.31M11.11 4.89l1.31-1.31"/>',
 } as const;
 export type IconName = keyof typeof paths;
 </script>
