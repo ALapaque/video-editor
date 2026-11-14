@@ -978,3 +978,56 @@ def test_info_command_lists_every_model(capsys):
     assert main(["info"]) == 0
     out = capsys.readouterr().out
     assert all(name in out for name in MODELS)
+
+
+# --- Tout à la main : aucun flou automatique -------------------------------------------------
+
+
+def test_manual_only_project_needs_no_analysis_and_blurs_only_what_is_drawn(api, tmp_path):
+    state = api("PUT", "/api/settings", {"analysis": {"kinds": []}})
+    assert state["project"]["settings"]["analysis"]["kinds"] == []
+    assert state["project"]["tracks"]["c1"] == [] and not state["project"]["clips"][0]["needs_analysis"]
+    assert state["project"]["recheck_only"] is False and state["project"]["problem"] is None
+    # un flou fixe posé à la main, de 0,5 s à 1,5 s
+    created = api("POST", "/api/manual", {"clip": "c1", "keyframes": [[0.5, 100, 40, 180, 110], [1.5, 100, 40, 180, 110]]})["created"]
+    # son début et sa fin se règlent ensuite : allongé d'un côté, raccourci de l'autre
+    state = api("PATCH", "/api/tracks", {"clip": "c1", "id": created, "span": [0.2, 1.0]})
+    (track,) = state["project"]["tracks"]["c1"]
+    assert (track["start"], track["end"]) == (pytest.approx(0.2, abs=0.02), pytest.approx(1.0, abs=0.02))
+    assert state["project"]["history"]["undo"] == "correction d'un flou"
+    with pytest.raises(urllib.error.HTTPError):
+        api("PATCH", "/api/tracks", {"clip": "c1", "id": created, "span": [1.0, 1.0]})
+    # l'export ne floute que cette zone, pendant cette durée
+    api("POST", "/api/render", {"output": "main.mp4", "encoder": "software"})
+    assert api.wait()["job"]["state"] == "done"
+    frames = read_frames(tmp_path / "main.mp4")
+    source = read_frames(tmp_path / "clip.mp4")
+    inside = lambda f: f[50:100, 110:170].astype(int)  # noqa: E731
+    assert np.abs(inside(frames[15]) - inside(source[15])).mean() > 5  # 0,5 s : flouté
+    assert np.abs(inside(frames[45]) - inside(source[45])).mean() < 4  # 1,5 s : plus flouté
+    assert np.abs(frames[15][130:, :].astype(int) - source[15][130:, :].astype(int)).mean() < 4  # ailleurs : intact
+
+
+def test_followed_blur_can_only_be_shortened(tmp_path, tracker_available):
+    path, truth = make_shots_video(tmp_path / "plans.mp4")
+    project = make_project(tmp_path, path)
+    project.analysis_settings.kinds = []
+    engine = Engine(project)
+    engine.start_follow({"clip": "c1", "time": 10 / 30, "box": list(truth[10]), "start": 0, "end": 3})
+    for _ in range(400):
+        if engine.job.state != "running":
+            break
+        time.sleep(0.05)
+    (track,) = project.analysis["c1"].tracks
+    before = (track.obs[0][0], track.obs[-1][0])
+    size = engine.begin("correction d'un flou")  # comme le fait la route, pour pouvoir annuler
+    engine.patch_track({"clip": "c1", "id": track.id, "span": [0.3, 0.6]})
+    engine.settle(size)
+    f = project.clips[0].video.frame_pts
+    assert round(track.obs[0][0] / f) == 9 and round(track.obs[-1][0] / f) == 18
+    assert track.extend_before_s == 0.0 and track.extend_after_s == 0.0  # il s'arrête net
+    engine.patch_track({"clip": "c1", "id": track.id, "span": [0.0, 5.0]})  # ne se rallonge pas
+    assert round(track.obs[0][0] / f) == 9 and round(track.obs[-1][0] / f) == 18
+    engine.step(forward=False)  # « Annuler » rend au flou toute sa durée
+    restored = project.analysis["c1"].tracks[0]
+    assert (restored.obs[0][0], restored.obs[-1][0]) == before

@@ -447,7 +447,49 @@ class Engine:
                     if key in body:
                         value = body[key]
                         setattr(track, key, None if value is None else max(0.0, min(float(value), 600.0)))
+                if "span" in body:
+                    self._set_span(body["clip"], track, body["span"])
             self._after_zone_change()
+
+    def _set_span(self, clip_id: str, track: pj.Track, span) -> None:
+        """Début et fin d'un flou posé à la main, en secondes de temps source.
+
+        - Flou fixe : le début et la fin se déplacent librement (le rectangle garde la position
+          qu'il avait à ce bout-là) ; raccourci, il s'arrête à sa position interpolée.
+        - Flou qui suit : on ne peut que le raccourcir ; il s'arrête alors net, sans prolongation.
+        """
+        if track.source == "auto":
+            raise ApiError("le début et la fin ne se règlent que sur un flou posé à la main.")
+        v = self.require().clip(clip_id).video
+        start = sec_to_pts(max(0.0, float(span[0])), v, "floor")
+        end = sec_to_pts(min(float(span[1]), v.duration_s), v, "ceil")
+        obs = sorted(track.obs, key=lambda o: o[0])
+        first, last = int(obs[0][0]), int(obs[-1][0])
+        if track.source == "tracker":
+            start, end = max(start, first), min(end, last)
+        if end - start < v.frame_pts:
+            raise ApiError("le flou doit durer au moins une image.")
+
+        def at(pts: int) -> list[float]:
+            """Observation à cet instant : interpolée, ou figée au-delà des extrémités."""
+            if pts <= first:
+                return [pts, *obs[0][1:]]
+            if pts >= last:
+                return [pts, *obs[-1][1:]]
+            i = max(k for k, o in enumerate(obs) if o[0] <= pts)
+            a, b = obs[i], obs[i + 1]
+            w = (pts - a[0]) / (b[0] - a[0])
+            return [pts, *[a[k] + (b[k] - a[k]) * w for k in range(1, 5)], a[5]]
+
+        inside = [o for o in obs if start < o[0] < end]
+        track.obs = [at(start), *inside, at(end)]
+        if track.source == "tracker":
+            if start > first:
+                track.extend_before_s = 0.0
+            if end < last:
+                track.extend_after_s = 0.0
+            if track.outline:
+                track.outline = [row for row in track.outline if start <= row[0] <= end] or None
 
     def similar(self, clip_id: str, track_id: int) -> list[int]:
         """Flous automatiques encore actifs « comme celui-ci » (même endroit, même catégorie)."""
