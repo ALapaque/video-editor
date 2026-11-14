@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // Panneau latéral : vérification, flous de l'image affichée (et endroits à ne jamais flouter), réglages.
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
-import type { Track } from "../api";
-import { applyProfile, presetInfo, removeIgnoreZone, saveProfile } from "../extras";
+import type { Track, Tune } from "../api";
+import { applyProfile, applyTune, presetInfo, removeIgnoreZone, saveProfile, tuneGain, tuneSuggestion } from "../extras";
 import { byDoubt, displayName, kindFilters, matchesKind, panels, placeOf, type KindFilter } from "../blurs";
 import { pending } from "../review";
 import BlurRow from "./BlurRow.vue";
@@ -248,6 +248,39 @@ function setSens(): void {
   setMinScore();
 }
 
+// « Régler d'après mes corrections » : les flous retirés sont des erreurs du logiciel. Le moteur
+// propose (sans rien réanalyser) les réglages qui n'en produiraient plus le plus grand nombre,
+// sans perdre un seul flou gardé. La proposition est dite en clair ; les noms des réglages et
+// leurs valeurs ne sont que dans l'infobulle.
+const tune = ref<Tune | null>(null);
+const tuneAsking = ref(false);
+const tuneNames: Record<string, string> = { face_min_score: "score minimal des visages", plate_min_score: "score minimal des plaques", min_hits: "images sûres exigées" };
+/** Détail technique de la proposition : « score minimal des visages : 0,40 → 0,55 ; … ». */
+const tuneDetail = computed(() => {
+  const now = project.value?.settings.blur ?? {};
+  const show = (key: string, v: unknown) => (key === "min_hits" ? String(v) : Number(v).toFixed(2).replace(".", ","));
+  return Object.entries(tune.value?.settings ?? {})
+    .map(([key, value]) => `${tuneNames[key] ?? key} : ${show(key, now[key])} → ${show(key, value)}`)
+    .join(" ; ");
+});
+async function askTune(): Promise<void> {
+  if (tuneAsking.value) return;
+  tuneAsking.value = true;
+  const found = await tuneSuggestion();
+  tuneAsking.value = false;
+  if (!found) return notify("La proposition n'a pas pu être calculée.", "error");
+  tune.value = found;
+  void nextTick(() => document.querySelector<HTMLElement>(".tune-ask [data-tune-main]")?.focus());
+}
+async function acceptTune(): Promise<void> {
+  const found = tune.value;
+  if (!found?.usable || busy.value) return;
+  if (!(await applyTune(found))) return; // refusé : le message est affiché
+  notify("Réglages appliqués d'après vos corrections. Pour revenir en arrière : Annuler (Ctrl+Z).");
+}
+// la proposition vaut pour le projet tel qu'il était : au moindre changement, elle s'efface
+watch(() => [state.data.version, project.value?.path], () => (tune.value = null));
+
 async function saveBlur(): Promise<void> {
   await send("PUT", "/api/settings", { blur: { ...blur } });
 }
@@ -256,6 +289,8 @@ async function saveAnalysis(): Promise<void> {
   if (await send("PUT", "/api/settings", { analysis: rest })) notify("Réglages d'analyse enregistrés. Relancez « Analyser » : toute l'analyse sera refaite.");
 }
 const expert = ref(false); // réglages experts : repliés par défaut
+/** Analyse fine (par tuiles) sur une image sur N, telle qu'elle est enregistrée dans le projet. */
+const tileEvery = computed(() => Number(project.value?.settings.analysis.tile_every ?? 1));
 
 // Modèles proposés : ceux que le moteur annonce (fournis, puis personnels), sinon la liste d'origine.
 // Le modèle du projet reste dans la liste même s'il n'est plus annoncé.
@@ -484,6 +519,25 @@ async function confirmProfile(): Promise<void> {
           <small><strong>{{ sensNow === null ? "Réglage personnalisé" : sensSteps[sens + 2] }}</strong> · {{ plural(droppedCount(), "objet non flouté", "objets non floutés") }} dans ce clip, car trop peu sûrs.</small>
         </div>
         <p class="help">Vers la gauche : moins de flous inutiles (reflets, feuillage…), mais un visage aperçu très brièvement peut rester net. Vers la droite : rien n'échappe, au prix de quelques faux flous à retirer. Appliqué tout de suite, sans refaire l'analyse.</p>
+        <button
+          class="wrap" data-tune :disabled="busy || tuneAsking" :aria-expanded="!!tune"
+          title="Le logiciel se sert des flous que vous avez retirés pour proposer un meilleur réglage. Rien n'est analysé à nouveau, et rien ne change sans votre accord."
+          @click="askTune"
+        ><Icon name="sliders" />Régler d'après mes corrections</button>
+        <div v-if="tune" class="profile-ask tune-ask" data-tune-card role="status">
+          <template v-if="tune.usable">
+            <p :title="tuneDetail">Avec ces réglages, {{ tuneGain(tune) }}, sans perdre aucun flou que vous avez gardé.</p>
+            <p v-if="tune.best.new" class="dim">{{ tune.best.new > 1 ? `${tune.best.new} objets que le logiciel n'avait pas floutés le seraient en plus` : "1 objet que le logiciel n'avait pas flouté le serait en plus" }} : regardez-les ensuite.</p>
+            <span class="row">
+              <button class="small attention" data-tune-main data-tune-apply :disabled="busy" :title="tuneDetail" @click="acceptTune">Appliquer</button>
+              <button class="small" data-tune-no @click="tune = null">Non merci</button>
+            </span>
+          </template>
+          <template v-else>
+            <p>{{ tune.reason || "Vos corrections ne permettent pas de proposer un meilleur réglage." }}</p>
+            <span class="row"><button class="small" data-tune-main data-tune-no @click="tune = null">Fermer</button></span>
+          </template>
+        </div>
         <template v-if="project?.mismatch">
           <h4>Clips de formats différents</h4>
           <label>Aligner sur
@@ -528,6 +582,14 @@ async function confirmProfile(): Promise<void> {
             <label>Score minimal pour suivre un objet <input v-model.number="analysis.conf_new" type="number" min="0.01" max="0.9" step="0.05" /></label>
             <label>Taille des tuiles (0 = auto, -1 = aucune) <input v-model.number="analysis.tile_size" type="number" min="-1" step="64" /></label>
             <label>Analyser une image sur <input v-model.number="analysis.detect_every" type="number" min="1" max="10" step="1" /></label>
+            <label>Analyse fine
+              <select v-model.number="analysis.tile_every" data-tile-every aria-describedby="tile-every-help">
+                <option :value="1">sur chaque image</option>
+                <option :value="2">une image sur deux (plus rapide)</option>
+                <option v-if="tileEvery > 2" :value="tileEvery">une image sur {{ tileEvery }}</option>
+              </select>
+            </label>
+            <p id="tile-every-help" class="help">L'analyse fine cherche les petits objets lointains en découpant l'image en morceaux. Une image sur deux : analyse presque deux fois plus rapide, mais un petit objet lointain doit rester un peu plus longtemps à l'écran pour être vu. Comme les autres réglages de détection : à enregistrer ci-dessous, puis toute l'analyse est à refaire.</p>
             <button :disabled="busy" @click="saveAnalysis">Enregistrer les réglages de détection</button>
             <button class="wrap" :disabled="busy" title="Enregistre dans un dossier les images des plaques vérifiées de ce projet, pour entraîner un modèle de plaques" @click="start('/api/dataset')">Exporter des images d'entraînement (plaques)</button>
             <p class="help">Pour améliorer la reconnaissance des plaques avec vos propres vidéos. Le dossier créé est indiqué à la fin.</p>
@@ -582,6 +644,9 @@ async function confirmProfile(): Promise<void> {
 .fold.expert .fold-head { margin-left: -6px; font-weight: 600; }
 .expert-body { display: flex; flex-direction: column; gap: 9px; animation: fade-in var(--m-panel) var(--ease); }
 .expert-body h5 { margin: 6px 0 0; font-size: 12.5px; font-weight: 650; color: var(--text); }
+/* régler d'après mes corrections : la proposition, en clair */
+.tune-ask p[title] { cursor: help; }
+.tune-ask p.dim { color: var(--dim); }
 
 /* === nouveau flux : endroits à ne jamais flouter === */
 .ignore-tool { align-self: stretch; }
