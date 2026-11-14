@@ -14,6 +14,10 @@ export interface Clip {
   pix_fmt: string;
   has_audio: boolean;
   proxy: boolean;
+  /** Aperçu net (1080 pixels sur le petit côté) déjà fabriqué pour ce clip. */
+  proxy_fine: boolean;
+  /** L'aperçu net apporte quelque chose : la source est plus grande que l'aperçu rapide. */
+  fine_useful: boolean;
   missing: boolean;
   needs_analysis: boolean;
 }

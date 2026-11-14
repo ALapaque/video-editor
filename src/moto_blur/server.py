@@ -50,7 +50,7 @@ from .postprocess import (
     nuisance,
     similar_tracks,
 )
-from .proxy import build_proxy, proxy_path
+from .proxy import build_proxy, fine_is_useful, proxy_path
 from .render import RenderError, check_ready, formats_differ, render_project, used_clips
 from .timeline import pts_to_sec, resolve_segments, sec_to_pts
 from .video import iter_frames, probe
@@ -270,6 +270,9 @@ class Engine:
                         "codec": v.codec, "pix_fmt": v.pix_fmt,
                         "has_audio": clip.audio is not None,
                         "proxy": proxy_path(project, clip).exists(),
+                        # Aperçu net (1080 pixels) : déjà fabriqué ? utile pour cette vidéo ?
+                        "proxy_fine": proxy_path(project, clip, fine=True).exists(),
+                        "fine_useful": fine_is_useful(clip.video),
                         "missing": not project.clip_path(clip).exists(),
                         "needs_analysis": bool(needed_intervals(project, clip))
                         or confirm.due(project, clip)
@@ -447,7 +450,49 @@ class Engine:
                     if key in body:
                         value = body[key]
                         setattr(track, key, None if value is None else max(0.0, min(float(value), 600.0)))
+                if "span" in body:
+                    self._set_span(body["clip"], track, body["span"])
             self._after_zone_change()
+
+    def _set_span(self, clip_id: str, track: pj.Track, span) -> None:
+        """Début et fin d'un flou posé à la main, en secondes de temps source.
+
+        - Flou fixe : le début et la fin se déplacent librement (le rectangle garde la position
+          qu'il avait à ce bout-là) ; raccourci, il s'arrête à sa position interpolée.
+        - Flou qui suit : on ne peut que le raccourcir ; il s'arrête alors net, sans prolongation.
+        """
+        if track.source == "auto":
+            raise ApiError("le début et la fin ne se règlent que sur un flou posé à la main.")
+        v = self.require().clip(clip_id).video
+        start = sec_to_pts(max(0.0, float(span[0])), v, "floor")
+        end = sec_to_pts(min(float(span[1]), v.duration_s), v, "ceil")
+        obs = sorted(track.obs, key=lambda o: o[0])
+        first, last = int(obs[0][0]), int(obs[-1][0])
+        if track.source == "tracker":
+            start, end = max(start, first), min(end, last)
+        if end - start < v.frame_pts:
+            raise ApiError("le flou doit durer au moins une image.")
+
+        def at(pts: int) -> list[float]:
+            """Observation à cet instant : interpolée, ou figée au-delà des extrémités."""
+            if pts <= first:
+                return [pts, *obs[0][1:]]
+            if pts >= last:
+                return [pts, *obs[-1][1:]]
+            i = max(k for k, o in enumerate(obs) if o[0] <= pts)
+            a, b = obs[i], obs[i + 1]
+            w = (pts - a[0]) / (b[0] - a[0])
+            return [pts, *[a[k] + (b[k] - a[k]) * w for k in range(1, 5)], a[5]]
+
+        inside = [o for o in obs if start < o[0] < end]
+        track.obs = [at(start), *inside, at(end)]
+        if track.source == "tracker":
+            if start > first:
+                track.extend_before_s = 0.0
+            if end < last:
+                track.extend_after_s = 0.0
+            if track.outline:
+                track.outline = [row for row in track.outline if start <= row[0] <= end] or None
 
     def similar(self, clip_id: str, track_id: int) -> list[int]:
         """Flous automatiques encore actifs « comme celui-ci » (même endroit, même catégorie)."""
@@ -773,18 +818,22 @@ class Engine:
 
         threading.Thread(target=run, daemon=True).start()
 
-    def start_proxies(self) -> None:
+    def start_proxies(self, fine: bool = False) -> None:
+        """Fabrique les aperçus manquants : rapides (d'office) ou nets (à la demande)."""
         project = self.require()
 
         def work(job: Job) -> str:
             for clip in project.clips:
-                if proxy_path(project, clip).exists() or not project.clip_path(clip).exists():
+                if not project.clip_path(clip).exists() or (fine and not fine_is_useful(clip.video)):
                     continue
-                p = progress.Progress(f"Préparation de l'aperçu de {Path(clip.path).name}", clip.video.frames, 0)
-                build_proxy(project, clip, p)
-            return "Aperçus prêts."
+                if proxy_path(project, clip, fine).exists():
+                    continue
+                label = "Préparation de l'aperçu net de" if fine else "Préparation de l'aperçu de"
+                p = progress.Progress(f"{label} {Path(clip.path).name}", clip.video.frames, 0)
+                build_proxy(project, clip, p, fine)
+            return "Aperçus nets prêts." if fine else "Aperçus prêts."
 
-        self.start("proxy", "Préparation des aperçus", work)
+        self.start("proxy", "Préparation des aperçus nets" if fine else "Préparation des aperçus", work)
 
     def start_analysis(self, device: str) -> None:
         project = self.require()
@@ -1258,7 +1307,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send(200, data, "image/jpeg")
             elif route == "/api/proxies" and method == "POST":
-                engine.start_proxies()
+                engine.start_proxies(bool(self._body().get("fine", False)))
                 self._json(engine.state())
             elif route == "/api/analyze" and method == "POST":
                 engine.start_analysis(self._body().get("device", "auto"))
@@ -1275,7 +1324,9 @@ class Handler(BaseHTTPRequestHandler):
             elif route.startswith("/media/") and method in ("GET", "HEAD"):
                 project = engine.require()
                 clip = project.clip(route[len("/media/") :])
-                self._file(proxy_path(project, clip), "video/mp4")
+                fine = proxy_path(project, clip, fine=True)
+                # ?q=fine : l'aperçu net s'il est fabriqué, sinon l'aperçu rapide
+                self._file(fine if query.get("q") == "fine" and fine.exists() else proxy_path(project, clip), "video/mp4")
             elif method in ("GET", "HEAD") and not route.startswith("/api/"):
                 name = route.lstrip("/") or "index.html"
                 target = (UI_DIR / name).resolve()
