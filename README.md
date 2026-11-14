@@ -276,10 +276,16 @@ Le fichier projet est un JSON unique : clips, montage (`timeline`, `mutes`), ré
   il protège moins qu'un rectangle large (un contour serré laisse voir ce qui dépasse), revient
   de lui-même à la forme habituelle quand il n'est pas fiable, et doit être vérifié sur la vidéo.
   Sa vitesse sur Mac et sur Radeon n'a pas été mesurée.
-- La contre-vérification écarte des fausses détections (4 sur 125 objets sur la scène de rue
-  d'essai, sans perdre de vrai visage), mais elle n'a pas été mesurée sur de vraies vidéos de
-  moto : on ne sait pas encore si elle écarte les arbres pris pour des visages, ni si elle
-  perd de vrais visages lointains. Elle se coupe dans les réglages de flou.
+- La contre-vérification (gros plan, puis contexte : un visage est sur une personne, une plaque
+  sur un véhicule) écarte 7 fausses détections sur 125 objets sur la scène de rue d'essai, sans
+  perdre de vrai visage. Elle n'a pas été mesurée sur de vraies vidéos de moto : on ne sait pas
+  encore si elle écarte les arbres pris pour des visages, ni si elle perd de vrais visages
+  lointains ou en partie cachés. Elle se coupe dans les réglages de flou.
+- Vitesse, mesurée sur la scène de rue d'essai (foule de petits visages, processeur seul), par
+  rapport au réglage normal : le préréglage « Rapide » va 4 fois plus vite et perd environ 5
+  petits visages sur 120 ; « tuiles fines une image sur deux » va 2 fois plus vite et en perd
+  autant. Sur ce type de scène, « Rapide » est donc le meilleur choix des deux ; sur vos vidéos,
+  `moto-blur measure PROJET --preset rapide` le dit sans rien modifier.
 - La vérification ne demande plus de valider les flous : un flou inutile peut donc rester dans
   la vidéo si vous ne le retirez pas pendant la relecture. Rien ne fuit pour autant.
 - Les préréglages « Conditions difficiles » et « Rapide » n'ont pas été évalués sur de vraies
