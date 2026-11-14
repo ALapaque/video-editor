@@ -3,8 +3,8 @@ name: Installeurs
 # Fabrique l'application de bureau pour macOS (Apple Silicon) et Windows, et la publie.
 #
 # - Fusion dans main (si l'application, le moteur ou l'interface ont changé) : nouvelle version
-#   publiée automatiquement. Numéro : le dernier v… publié, dernier chiffre + 1 (v0.2.0, v0.2.1…).
-#   Pour changer de numéro « majeur » (v0.3.0…), pousser soi-même l'étiquette voulue : la suite
+#   publiée automatiquement. Numéro : le dernier v… publié, dernier chiffre + 1 (v0.0.1, v0.0.2…).
+#   Pour changer de numéro (v0.1.0, v1.0.0…), pousser soi-même l'étiquette voulue : la suite
 #   repartira de là.
 # - Étiquette de version poussée à la main (v0.3.0…) : publie cette version.
 # - Lancement manuel (onglet Actions, « Run workflow ») : fabrique les installeurs sans rien
@@ -56,7 +56,7 @@ jobs:
           elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
             LAST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
             if [ -z "$LAST" ]; then
-              VERSION=0.2.0
+              VERSION=0.0.1
             else
               IFS=. read -r MAJ MIN PAT <<< "${LAST#v}"
               VERSION="$MAJ.$MIN.$((PAT + 1))"
@@ -89,8 +89,9 @@ jobs:
           TAG: v${{ steps.version.outputs.version }}
         shell: bash
         run: |
-          # Un brouillon laissé par une fabrication ratée est remplacé.
-          OLD=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id")
+          # Les brouillons laissés par des fabrications ratées sont supprimés (seul ce workflow en
+          # crée, et deux exécutions ne se chevauchent pas).
+          OLD=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.draft) | .id")
           for id in $OLD; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"; done
           cat > notes.md <<'NOTES'
           **Windows** : téléchargez le fichier qui finit par `_x64-setup.exe` ci-dessous et lancez-le. Si Windows affiche « Windows a protégé votre ordinateur », cliquez « Informations complémentaires », puis « Exécuter quand même ».
@@ -100,8 +101,15 @@ jobs:
           Une fois installé, moto-blur propose lui-même les versions suivantes au démarrage.
           NOTES
           sed -i 's/^          //' notes.md
-          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "moto-blur $TAG" --notes-file notes.md
-          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -1)
+          # L'identifiant est pris dans la réponse de la création : relire la liste juste après
+          # ne le montre pas toujours encore.
+          ID=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+            -f name="moto-blur $TAG" -F body=@notes.md -F draft=true --jq '.id')
+          if [ -z "$ID" ]; then
+            echo "::error::Le brouillon de la version $TAG n'a pas pu être créé."
+            exit 1
+          fi
+          echo "Brouillon $TAG : $ID"
           echo "release_id=$ID" >> "$GITHUB_OUTPUT"
 
   application:
@@ -159,6 +167,15 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Identifiant du brouillon
+        if: needs.preparation.outputs.publish == 'true'
+        shell: bash
+        run: |
+          if [ -z "${{ needs.preparation.outputs.release_id }}" ]; then
+            echo "::error::Identifiant du brouillon de version manquant : les installeurs n'auraient été déposés nulle part."
+            exit 1
+          fi
+
       - name: Installeurs ajoutés à la version
         if: needs.preparation.outputs.publish == 'true'
         uses: tauri-apps/tauri-action@v0
@@ -193,5 +210,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/${{ needs.preparation.outputs.release_id }}" \
-            -F draft=false -f make_latest=true --jq '.html_url'
+          ID="${{ needs.preparation.outputs.release_id }}"
+          # Une version n'est publiée que si l'installeur Windows, l'image Mac et le fichier des
+          # mises à jour y sont bien.
+          ASSETS=$(gh api "repos/$GITHUB_REPOSITORY/releases/$ID/assets" --paginate --jq '.[].name')
+          echo "$ASSETS"
+          for want in '_x64-setup.exe$' '\.dmg$' '^latest\.json$'; do
+            echo "$ASSETS" | grep -Eq "$want" || { echo "::error::Fichier manquant dans la version : $want"; exit 1; }
+          done
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" -F draft=false -f make_latest=true --jq '.html_url'
