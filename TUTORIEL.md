@@ -527,17 +527,17 @@ signature des mises à jour. **Gardez une copie de cette clé** : sans elle, les
 déjà installées ne pourront plus se mettre à jour (il faudrait les réinstaller à la main).
 
 Ensuite, **rien à faire** : chaque fusion dans `main` qui modifie l'application, le moteur ou
-l'interface publie automatiquement une nouvelle version (v0.2.0, puis v0.2.1, v0.2.2…).
+l'interface publie automatiquement une nouvelle version (v0.0.1, puis v0.0.2, v0.0.3…).
 GitHub fabrique l'installeur Windows et l'image Mac (une quinzaine de minutes) ; la version
 n'apparaît sur la page des versions, et n'est proposée aux applications installées, que si
 les deux ont réussi. Une fusion qui ne touche que la documentation ne publie rien.
 
-Pour passer à un autre numéro (v0.3.0, v1.0.0…), poussez vous-même l'étiquette voulue depuis
+Pour passer à un autre numéro (v0.1.0, v1.0.0…), poussez vous-même l'étiquette voulue depuis
 `main` ; les versions automatiques suivantes repartiront de là :
 
 ```sh
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 Suivi des fabrications : <https://github.com/ALapaque/video-editor/actions/workflows/installeurs.yml>.
