@@ -89,12 +89,14 @@ class Job:
         # File d'attente : rang de la vidéo en cours, nombre de vidéos, son nom, et les résultats.
         self.item: list | None = None
         self.results: list[dict] | None = None
+        self.finished: int | None = None  # heure de fin (secondes Unix), pour « terminée à 08:32 »
 
     def to_json(self) -> dict:
         return {
             "kind": self.kind, "label": self.label, "done": self.done, "total": self.total,
             "fps": round(self.fps, 1), "state": self.state, "message": self.message,
             "created": self.created, "item": self.item, "results": self.results,
+            "finished": self.finished,
         }
 
 
@@ -811,6 +813,7 @@ class Engine:
                 job.state, job.message = "error", f"{type(exc).__name__} : {exc}"
             finally:
                 progress.hook = None
+                job.finished = int(time.time())
                 if undo_size is not None:
                     self.settle(undo_size, failed=job.state == "error")
                 with self.lock:
@@ -970,7 +973,11 @@ class Engine:
             def on_item(index: int, total: int, name: str) -> None:
                 job.item = [index + 1, total, name]
 
-            results = batch.run_batch(paths, preset, use_profile, device, on_item, self.project)
+            def on_result(done: list[dict]) -> None:
+                job.results = done
+
+            results = batch.run_batch(paths, preset, use_profile, device, on_item, self.project,
+                                      on_result=on_result)
             job.results = results
             if self.project is not None:
                 self.history.clear()  # le projet ouvert a pu être réanalysé

@@ -173,6 +173,8 @@ export interface Job {
   item?: [number, number, string] | null;
   /** File d'attente : un résultat par vidéo, connu à la fin du traitement. */
   results?: BatchResult[] | null;
+  /** Heure de fin du traitement (secondes Unix), null tant qu'il tourne. */
+  finished?: number | null;
 }
 
 /** Résultat d'une vidéo de la file d'attente. `path` : le projet créé à côté de la vidéo. */

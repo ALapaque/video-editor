@@ -97,6 +97,8 @@ def suggest(project: pj.Project) -> dict:
                 result = evaluate(project, trial, facts)
                 if result["lost"]:
                     continue  # jamais au prix d'un flou gardé
+                if result["new"] > now["wrong_left"] - result["wrong_left"]:
+                    continue  # pas plus de flous jamais regardés en plus que d'erreurs évitées
                 distance = (abs(face - current.face_min_score) + abs(plate - current.plate_min_score)
                             + 0.05 * abs(hits - current.min_hits))
                 rank = (result["wrong_left"], result["new"], distance)
