@@ -10,6 +10,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use tauri::{DragDropEvent, Manager, RunEvent, Url, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_updater::UpdaterExt;
 
 /// Ligne imprimée par le moteur quand son serveur local est prêt (voir `server.py`).
 const READY_PREFIX: &str = "MOTO_BLUR_UI ";
@@ -82,6 +84,67 @@ fn show_error(window: &tauri::WebviewWindow, message: &str) {
     let _ = window.eval(&script);
 }
 
+/// Arrête le moteur (avant une mise à jour : l'installeur remplace ses fichiers).
+fn stop_engine(handle: &tauri::AppHandle) {
+    if let Some(mut child) = handle.state::<Engine>().0.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// Mise à jour : au démarrage seulement, l'application demande à la page des versions de
+/// moto-blur s'il en existe une plus récente. Si oui, elle le dit et propose de l'installer ;
+/// rien n'est téléchargé sans accord. Le paquet est vérifié par sa signature avant d'être
+/// installé. Hors ligne ou en cas d'erreur, rien ne s'affiche. Aucun autre appel réseau : le
+/// traitement des vidéos reste entièrement local. `MOTO_BLUR_NO_UPDATE=1` désactive la vérification.
+fn check_update(handle: tauri::AppHandle) {
+    if std::env::var_os("MOTO_BLUR_NO_UPDATE").is_some() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let Ok(updater) = handle.updater() else { return };
+        let Ok(Some(update)) = updater.check().await else { return };
+        let text = format!(
+            "La version {} de moto-blur est disponible (vous avez la {}).\n\n\
+             L'installer maintenant ? L'application se fermera puis redémarrera ; \
+             vos projets sont conservés. Un traitement en cours serait interrompu.",
+            update.version, update.current_version
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        handle
+            .dialog()
+            .message(text)
+            .title("Mise à jour de moto-blur")
+            .buttons(MessageDialogButtons::OkCancelCustom("Mettre à jour".into(), "Plus tard".into()))
+            .show(move |yes| {
+                let _ = tx.send(yes);
+            });
+        let yes = tauri::async_runtime::spawn_blocking(move || rx.recv().unwrap_or(false))
+            .await
+            .unwrap_or(false);
+        if !yes {
+            return;
+        }
+        stop_engine(&handle);
+        match update.download_and_install(|_, _| {}, || {}).await {
+            Ok(()) => handle.restart(),
+            Err(e) => {
+                handle
+                    .dialog()
+                    .message(format!(
+                        "La mise à jour n'a pas pu être installée ({e}).\n\n\
+                         Fermez moto-blur et relancez-le ; vous pouvez aussi télécharger la \
+                         nouvelle version sur la page des versions."
+                    ))
+                    .title("Mise à jour de moto-blur")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+                handle.exit(1);
+            }
+        }
+    });
+}
+
 /// Fichiers déposés sur la fenêtre : leurs chemins sont remis à l'interface, qui ouvre la vidéo
 /// ou le projet (`window.motoBlurDrop`, voir `ui/src/extras.ts`). Une page web seule ne connaît
 /// pas le chemin d'un fichier déposé ; la coque, si.
@@ -92,6 +155,8 @@ fn drop_script(paths: &[PathBuf]) -> String {
 
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Engine(Mutex::new(None)))
         .on_window_event(|window, event| {
             if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
@@ -101,6 +166,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            check_update(app.handle().clone());
             let handle = app.handle().clone();
             // Démarrage hors du fil principal : la fenêtre d'attente s'affiche tout de suite.
             std::thread::spawn(move || {
@@ -127,10 +193,7 @@ pub fn run() {
 
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
-            if let Some(mut child) = handle.state::<Engine>().0.lock().unwrap().take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+            stop_engine(handle);
         }
     });
 }
