@@ -5,10 +5,11 @@ pas (voir `MODELS.md`). Il n'a jamais vu vos trajets, votre caméra, ni l'angle 
 voit les plaques. Un modèle affiné sur vos propres images peut mieux faire : moins de plaques
 manquées, moins de fausses détections.
 
-**Ce que moto-blur fournit** : l'export des images d'entraînement à partir de projets que vous
-avez vérifiés, et la possibilité d'utiliser un modèle que vous avez entraîné.
-**Ce que moto-blur ne fait pas** : l'entraînement lui-même. Il demande un outil séparé
-(Ultralytics, licence AGPL-3.0), installé à part, et un peu de temps de calcul.
+**Ce que moto-blur fournit** : une commande qui exporte les images de vos projets vérifiés, lance
+l'entraînement, convertit le résultat et l'installe ; et une autre qui mesure si le modèle
+obtenu fait mieux que le modèle fourni.
+**Ce qui n'est pas dans moto-blur** : l'outil d'entraînement lui-même (Ultralytics, licence
+AGPL-3.0). La commande le télécharge à part, la première fois.
 
 Rien de ce qui suit n'a pu être essayé sur vos machines ni sur vos vidéos : prenez-le comme une
 marche à suivre raisonnable, pas comme une promesse de résultat.
@@ -31,67 +32,64 @@ Ordre de grandeur, à titre indicatif : quelques centaines d'images contenant de
 prises sur plusieurs sorties différentes (jour, soir, ville, route), sont un minimum pour
 espérer un gain. Une seule vidéo ne suffit pas.
 
-## 2. Exporter les images
+## 2. Entraîner, en une commande
 
-Dans l'interface, mode avancé, réglages d'analyse : « Exporter des images d'entraînement ».
-Ou en ligne de commande, pour chaque projet vérifié :
-
-```bash
-uv run moto-blur dataset samples/sortie1.motoblur.json -o entrainement
-uv run moto-blur dataset samples/sortie2.motoblur.json -o entrainement
-```
-
-Le même dossier de sortie peut recevoir plusieurs projets : les images s'ajoutent. Le dossier
-contient `images/`, `labels/`, `train.txt` (images d'entraînement), `val.txt` (une image sur
-cinq, gardée pour mesurer le modèle) et `data.yaml`.
-
-**Ces images montrent des plaques non floutées.** Elles restent sur votre machine ; ne les
-publiez pas et ne les mettez pas dans le dépôt (le dossier `samples/` est déjà ignoré par git).
-
-## 3. Entraîner (hors moto-blur)
-
-Sur le Mac (puce Apple, accélération `mps`) :
+Sur le Mac, depuis le dossier de moto-blur, en donnant vos projets vérifiés :
 
 ```bash
-uvx --from ultralytics yolo detect train data=entrainement/data.yaml model=yolo11s.pt imgsz=640 epochs=80 device=mps
+uv run moto-blur train samples/sortie1.motoblur.json samples/sortie2.motoblur.json --name mes-plaques
 ```
 
-Sur le PC Windows, PyTorch ne sait pas utiliser une Radeon simplement : l'entraînement se
-ferait sur le processeur (`device=cpu`), beaucoup plus lentement. Le Mac est le meilleur choix.
+La commande enchaîne quatre étapes :
 
-Utilisez bien un modèle `yolo11` (`yolo11n.pt` plus rapide, `yolo11s.pt` plus précis) : moto-blur
-lit la sortie de cette famille. Les modèles dont la suppression des doublons est intégrée
-(YOLOv10, YOLO26) ont une sortie différente, que moto-blur ne lit pas pour un modèle personnel.
+1. elle exporte les images d'entraînement (dossier `entrainement_mes-plaques`, à côté du premier
+   projet) : `images/`, `labels/`, la liste d'entraînement et celle gardée pour la mesure ;
+2. elle lance l'entraînement avec Ultralytics, sur la puce Apple si elle est là ;
+3. elle convertit le résultat au format lu par moto-blur ;
+4. elle l'installe comme modèle personnel dans `~/.moto-blur/models/perso/plate/`.
 
-La première commande télécharge le modèle de départ. À la fin, Ultralytics indique le dossier
-du résultat (`runs/detect/train/weights/best.pt`) et des mesures. Ces mesures sont flatteuses :
-les images de mesure viennent des mêmes sorties que les images d'entraînement. Le vrai test est
-à l'étape 5.
+Ce qu'il faut savoir :
 
-## 4. Convertir et installer
+- **La première fois, l'outil d'entraînement est téléchargé** (plusieurs centaines de Mo), puis
+  le modèle de départ. C'est le seul moment où cette commande utilise le réseau. L'analyse et
+  le rendu de moto-blur, eux, n'en font toujours aucun usage.
+- **Les images exportées montrent des plaques non floutées.** Elles restent sur votre machine ;
+  ne les publiez pas (le dossier `samples/` est déjà ignoré par git).
+- Avec moins de 50 plaques vérifiées, la commande refuse : ce serait du temps perdu.
+- Options : `--epochs 80` (nombre de passes), `--base yolo11n|yolo11s|yolo11m` (plus rapide ou
+  plus précis), `--device cpu` pour forcer le processeur.
+- Sur le PC Windows, PyTorch ne sait pas utiliser simplement une Radeon : l'entraînement se
+  ferait sur le processeur, beaucoup plus lentement. Le Mac est le bon choix.
+- Les mesures affichées à la fin de l'entraînement sont flatteuses : les images de mesure
+  viennent des mêmes sorties que les images d'entraînement. Le vrai test est à l'étape 3.
+
+La chaîne complète a été essayée de bout en bout (export, entraînement de deux passes,
+conversion, installation, chargement dans moto-blur) sur une machine Linux sans carte
+graphique. Elle n'a pas été essayée sur un Mac, et aucun modèle utile n'a été entraîné : il
+faut vos projets pour cela.
+
+Pour seulement exporter les images, sans entraîner : `uv run moto-blur dataset PROJET -o DOSSIER`,
+ou le bouton « Exporter des images d'entraînement » des réglages experts.
+
+## 3. Vérifier qu'il fait mieux
+
+Sur un projet vérifié dont la vidéo n'a **pas** servi à l'entraînement :
 
 ```bash
-uvx --from ultralytics yolo export model=runs/detect/train/weights/best.pt format=onnx dynamic=True
+uv run moto-blur measure samples/autre-sortie.motoblur.json --plate-model mes-plaques
 ```
 
-Copiez le fichier `best.onnx` obtenu sous le nom de votre choix dans :
+La commande réanalyse la vidéo avec votre modèle, sans toucher au projet, et compare :
 
-- macOS : `~/.moto-blur/models/perso/plate/mes-plaques.onnx`
-- Windows : `C:\Users\<vous>\.moto-blur\models\perso\plate\mes-plaques.onnx`
+- les flous que vous aviez gardés et qui seraient **perdus** ;
+- les objets que vous aviez dû ajouter à la main et que le modèle **trouve seul** ;
+- les faux flous que vous aviez retirés et qui **reviennent** ;
+- la durée de l'analyse.
 
-Le modèle apparaît alors dans la liste « Modèle de plaques » des réglages d'analyse (mode
-avancé), ou s'utilise avec `--plate-model mes-plaques` en ligne de commande.
+Ne gardez votre modèle que s'il ne perd aucun flou et fait revenir moins de faux flous. En cas
+de doute, gardez le modèle fourni : mieux vaut un flou de trop qu'une plaque visible.
 
-## 5. Vérifier qu'il fait mieux
-
-Sur une vidéo qui n'a **pas** servi à l'entraînement :
-
-1. analysez-la avec le modèle fourni, notez le nombre de plaques manquées et de fausses
-   détections trouvées à la vérification ;
-2. changez de modèle, relancez l'analyse, refaites la vérification.
-
-Ne gardez votre modèle que s'il manque moins de plaques. L'exigence reste la même : mieux vaut
-un flou de trop qu'une plaque visible. En cas de doute, gardez le modèle fourni.
+Pour l'utiliser ensuite : mode avancé, réglages experts, « Modèle de plaques ».
 
 ## Licence
 

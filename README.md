@@ -208,16 +208,26 @@ yolo11n-face` et `--plate-model yolo-v9-t-640`, puis `--tile-size` plus grand, p
 `--detect-every 2` (raisonnable à 60 i/s). `Ctrl+C` pendant l'analyse conserve ce qui est fait ;
 relancer la même commande reprend là où elle s'est arrêtée.
 
-### Images d'entraînement et modèle personnel
+### Plusieurs vidéos à la suite, mesure d'un réglage, modèle personnel
 
 ```sh
-# Exporter les plaques vérifiées d'un projet comme images d'entraînement (tuiles + étiquettes)
-uv run moto-blur dataset samples/sortie.motoblur.json -o entrainement
+# File d'attente : analyser plusieurs vidéos l'une après l'autre, chacune dans son projet
+uv run moto-blur batch samples/a.mp4 samples/b.mp4 --preset normal --profile
+
+# Seuils de flou proposés d'après vos corrections (rien n'est réanalysé)
+uv run moto-blur measure samples/sortie.motoblur.json
+
+# Comparer un autre réglage d'analyse au projet corrigé (le projet n'est pas modifié)
+uv run moto-blur measure samples/sortie.motoblur.json --tile-every 2
+uv run moto-blur measure samples/sortie.motoblur.json --plate-model mes-plaques
+
+# Entraîner un modèle de plaques sur vos projets vérifiés et l'installer
+uv run moto-blur train samples/sortie1.motoblur.json samples/sortie2.motoblur.json --name mes-plaques
 ```
 
-Un modèle de plaques entraîné sur vos propres vidéos se pose dans
-`~/.moto-blur/models/perso/plate/` et s'utilise comme les autres. L'entraînement lui-même se fait
-hors de moto-blur : [docs/ENTRAINEMENT.md](docs/ENTRAINEMENT.md).
+Un modèle de plaques entraîné sur vos propres vidéos s'installe dans
+`~/.moto-blur/models/perso/plate/` et s'utilise comme les autres. L'outil d'entraînement
+(Ultralytics) est téléchargé à part par la commande `train` : [docs/ENTRAINEMENT.md](docs/ENTRAINEMENT.md).
 
 ## Comment ça marche
 

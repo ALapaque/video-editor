@@ -218,6 +218,20 @@ def cmd_batch(args: argparse.Namespace) -> int:
     return 0 if all(r["ok"] for r in results) else 1
 
 
+def cmd_train(args: argparse.Namespace) -> int:
+    """Entraîne un modèle de plaques sur des projets vérifiés et l'installe."""
+    from .training import train
+
+    projects = [pj.load(Path(p)) for p in args.projects]
+    result = train(projects, args.name, args.epochs, args.base, args.device, force=args.force)
+    print(f"\nModèle « {result['model']} » installé : {result['path']}")
+    print("Il apparaît dans la liste « Modèle de plaques » des réglages experts.")
+    print("Avant de l'adopter, mesurez-le sur une vidéo vérifiée qui n'a PAS servi à l'entraînement :")
+    print(f"  uv run moto-blur measure AUTRE-PROJET.motoblur.json --plate-model {result['model']}")
+    print("Ne le gardez que s'il ne perd aucun flou et produit moins de faux flous.")
+    return 0
+
+
 def cmd_dataset(args: argparse.Namespace) -> int:
     from .training import export_dataset
 
@@ -419,6 +433,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--detect-every", type=int, help="détecter une image sur N")
     p.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto")
     p.set_defaults(func=cmd_measure)
+
+    p = sub.add_parser("train", help="entraîner un modèle de plaques sur vos projets vérifiés et l'installer (outil séparé, téléchargé au premier usage)")
+    p.add_argument("projects", nargs="+", metavar="PROJET", help="projets vérifiés (plusieurs sorties différentes de préférence)")
+    p.add_argument("--name", default="mes-plaques", help="nom du modèle (défaut : mes-plaques)")
+    p.add_argument("--epochs", type=int, default=80, help="nombre de passes sur les images (défaut : 80)")
+    p.add_argument("--base", default="yolo11s", choices=["yolo11n", "yolo11s", "yolo11m"], help="modèle de départ (n : rapide, s : équilibré, m : précis)")
+    p.add_argument("--device", default="auto", help="auto (puce Apple si présente, sinon processeur), mps, cpu")
+    p.add_argument("--force", action="store_true", help="entraîner même avec très peu de plaques (pour essayer la chaîne)")
+    p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("dataset", help="exporter des images d'entraînement (plaques) à partir d'un projet vérifié")
     p.add_argument("project_file", metavar="PROJET")
