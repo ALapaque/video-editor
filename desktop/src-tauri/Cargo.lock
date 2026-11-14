@@ -1935,6 +1935,7 @@ dependencies = [
 name = "moto-blur-desktop"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
