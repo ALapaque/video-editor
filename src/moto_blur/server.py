@@ -367,6 +367,9 @@ class Engine:
         }
         if t.source == "tracker":
             doc["contour"] = bool(t.outline)
+            # Morceau que le logiciel a « retrouvé » tout seul après une coupure ou une perte :
+            # c'est une supposition, qui se retire d'un clic comme un flou automatique.
+            doc["reacquired"] = t.reacquired_at is not None
         if t.source == "manual":
             doc["keyframes"] = [[pts_to_sec(int(o[0]), v), *[round(x) for x in o[1:5]]] for o in t.obs]
         return doc
@@ -880,6 +883,7 @@ class Engine:
         seed = sec_to_pts(float(body["time"]), clip.video, "floor")
         direction = body.get("direction", "both")
         scope = body.get("scope", "auto")
+        reacquire = bool(body.get("reacquire", project.blur_settings.dash_reacquire))
         if scope not in ("auto", "all", "shot"):
             raise ApiError("portée de suivi inconnue.")
 
@@ -889,7 +893,7 @@ class Engine:
                 raise ApiError("ce clip n'a aucun passage gardé.")
             total = round((span[1] - span[0]) * clip.video.tb * clip.video.fps_fraction)
             p = progress.Progress(f"Suivi : {name}", total, float(clip.video.fps_fraction))
-            tracks = dash.track_from_click(project, clip, seed, box, direction, p, name, scope)
+            tracks = dash.track_from_click(project, clip, seed, box, direction, p, name, scope, reacquire)
             refresh_review(project)
             pj.save(project)
             return dash.describe(name, tracks, clip)

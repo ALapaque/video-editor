@@ -61,6 +61,9 @@ export interface Track {
   end: number;
   extend_before_s: number | null;
   extend_after_s: number | null;
+  /** Morceau d'objet suivi que le logiciel a « retrouvé » tout seul après une coupure ou une
+   *  perte : une supposition, qui se retire d'un clic comme un flou automatique. */
+  reacquired?: boolean;
   /** Objet suivi dont le contour précis a été calculé (flou qui épouse l'objet). */
   contour?: boolean;
   score: number;

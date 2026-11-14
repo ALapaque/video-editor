@@ -430,13 +430,19 @@ def track_from_click(
     progress: Progress | None = None,
     label: str | None = None,
     scope: str = "auto",
+    reacquire: bool = False,
 ) -> list[pj.Track]:
     """Mode 2 : suit l'objet désigné par `box` (x1, y1, x2, y2) sur l'image `seed_pts`.
 
     `direction` : "both", "forward" (de ce point vers la fin) ou "backward".
-    `scope` : "all" suit l'objet sur tout le clip, en le recherchant après chaque changement de
-    plan ; "shot" ne suit que le plan de l'image désignée (correction d'un endroit précis) ;
-    "auto" choisit "shot" si cet objet est déjà suivi dans le clip, "all" sinon.
+    `scope` : "all" concerne tout le clip ; "shot" seulement le plan de l'image désignée
+    (correction d'un endroit précis) ; "auto" choisit "shot" si cet objet est déjà suivi dans
+    le clip, "all" sinon.
+    `reacquire` : après une coupure ou une perte, rechercher l'objet dans toute l'image d'après
+    son aspect et reprendre le suivi. Coupé par défaut : cette recherche peut se tromper
+    d'objet. Sans elle, le suivi s'arrête à la première coupure ou perte ; avec "all", le reste
+    du clip est tout de même noté comme parcouru, pour qu'une alerte signale que l'objet n'y est
+    pas flouté.
     Les observations du MÊME objet sur la partie parcourue sont remplacées ; les autres objets
     ne sont pas touchés. Renvoie les morceaux de suivi créés.
     """
@@ -446,7 +452,8 @@ def track_from_click(
         raise ValueError(f"le clip {clip.id} n'a aucun passage gardé dans le montage.")
     if scope == "auto":
         scope = "shot" if dash_tracks(project, clip, "tracker", name) else "all"
-    search = scope == "all"
+    whole = scope == "all"
+    search = whole and reacquire
     seed_pts = min(max(int(seed_pts), span[0]), span[1] - 1)
     v = clip.video
     scale = TRACK_WIDTH / v.width
@@ -468,11 +475,11 @@ def track_from_click(
             step = round(v.frame_pts / 2) + 1
             frames = ((f.pts, _small(f, size)) for f in iter_frames(container, seed_pts + step, span[1]))
             forward, end = _follow(frames, seed_image, init, scale, clip, progress, search)
-            hi = span[1] - 1 if search else (end if end is not None else seed_pts)
+            hi = span[1] - 1 if whole else (end if end is not None else seed_pts)
         if direction in ("both", "backward"):
             frames = _reverse_frames(container, span[0], seed_pts, size, v.tb)
             backward, end = _follow(frames, seed_image, init, scale, clip, progress, search)
-            lo = span[0] if search else (end if end is not None else seed_pts)
+            lo = span[0] if whole else (end if end is not None else seed_pts)
 
     # Le morceau qui contient l'image désignée réunit ses deux moitiés (arrière et avant).
     seed_obs = [seed_pts, *[float(b) for b in box], 1.0]
@@ -567,17 +574,44 @@ def follow_region(
 
 
 def extend_tracking(project: pj.Project, clip: pj.Clip, progress: Progress | None = None) -> bool:
-    """Prolonge le suivi de chaque objet sur les passages gardés ajoutés depuis. Vrai si prolongé."""
+    """Passages gardés ajoutés depuis le suivi d'un objet. Vrai si quelque chose a changé.
+
+    Avec la recherche automatique (`dash_reacquire`), le suivi y est prolongé. Sans elle, rien
+    n'est deviné : ces passages sont seulement notés comme parcourus, pour qu'une alerte signale
+    que l'objet n'y est pas flouté."""
     done = False
+    reacquire = project.blur_settings.dash_reacquire
     for name in object_names(project, clip, "tracker"):
         for lo, hi in missing_span(project, clip, name):
             tracked = [t for t in dash_tracks(project, clip, "tracker", name) if t.obs]
+            if not reacquire:
+                # Le suivi ne continue que s'il s'était arrêté parce que le passage finissait là
+                # (ni coupure, ni perte) : c'est alors le même plan, on reprend où on en était.
+                two = clip.video.frame_pts * 2
+                tail = max(tracked, key=lambda t: t.obs[-1][0])
+                head = min(tracked, key=lambda t: t.obs[0][0])
+                if (lo >= _attempted(tail)[1] - two and tail.obs[-1][0] >= _attempted(tail)[1] - two
+                        and tail.extend_after_s != 0.0):
+                    o = tail.obs[-1]
+                    track_from_click(project, clip, int(o[0]), tuple(o[1:5]), "forward", progress, name, "all")
+                elif (hi <= _attempted(head)[0] + two and head.obs[0][0] <= _attempted(head)[0] + two
+                        and head.extend_before_s != 0.0):
+                    o = head.obs[0]
+                    track_from_click(project, clip, int(o[0]), tuple(o[1:5]), "backward", progress, name, "all")
+                else:
+                    # Sinon rien n'est deviné : le passage est noté comme parcouru, une alerte
+                    # signalera que l'objet n'y est pas flouté.
+                    nearest = min(tracked, key=lambda t: min(abs(_attempted(t)[0] - hi), abs(_attempted(t)[1] - lo)))
+                    a, b = _attempted(nearest)
+                    nearest.span = [min(a, int(lo)), max(b, int(hi))]
+                done = True
+                continue
             first = min((t.obs[0] for t in tracked), key=lambda o: o[0])
             last = max((t.obs[-1] for t in tracked), key=lambda o: o[0])
             if lo >= max(_attempted(t)[1] for t in tracked) - clip.video.frame_pts * 2:
-                track_from_click(project, clip, int(last[0]), tuple(last[1:5]), "forward", progress, name, "all")
+                track_from_click(project, clip, int(last[0]), tuple(last[1:5]), "forward", progress, name, "all", True)
             elif hi <= min(_attempted(t)[0] for t in tracked) + clip.video.frame_pts * 2:
-                track_from_click(project, clip, int(first[0]), tuple(first[1:5]), "backward", progress, name, "all")
+                track_from_click(project, clip, int(first[0]), tuple(first[1:5]), "backward", progress, name, "all", True)
             else:
                 continue
             done = True
@@ -651,10 +685,12 @@ def describe(name: str, tracks: list[pj.Track], clip: pj.Clip) -> str:
         ))
         lost_s = max(0.0, float((hi - lo - covered) * clip.video.tb))
         if lost_s >= GAP_MIN_S:
-            parts.append(f"non suivi pendant {lost_s:.1f} s")
+            parts.append(f"non suivi (et donc non flouté) pendant {lost_s:.1f} s".replace(".", ","))
     if doubtful:
         parts.append(f"incertain sur {doubtful} images")
     text = ", ".join(parts) + "."
     if found or doubtful:
         text += " Ces passages sont à vérifier."
+    if "non suivi" in text:
+        text += " Une alerte vous montrera où le désigner de nouveau."
     return text

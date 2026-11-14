@@ -257,6 +257,7 @@ def apply_profile(project: pj.Project, progress: Progress | None = None) -> list
             span = dash.dash_span(project, clip)
             frames = round((span[1] - span[0]) * v.tb * v.fps_fraction) if span else 1
             follow = Progress(f"Suivi : {name}", frames, float(v.fps_fraction))
-            tracks = dash.track_from_click(project, clip, pts, box, "both", follow, name, "all")
+            tracks = dash.track_from_click(project, clip, pts, box, "both", follow, name, "all",
+                                           project.blur_settings.dash_reacquire)
             notes.append(f"« {name} » : retrouvé. " + dash.describe(name, tracks, clip))
     return notes
