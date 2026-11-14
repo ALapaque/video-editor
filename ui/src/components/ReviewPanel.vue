@@ -4,7 +4,7 @@
 // signalements un par un, bilan.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { Track } from "../api";
-import { blurSpan, confidence, confidenceInfo, thumbUrl } from "../extras";
+import { blurSpan, confidence, confidenceInfo, MANUAL_WARNING, manualOnly, thumbUrl } from "../extras";
 import { byDoubt, displayName, splitReasons } from "../blurs";
 import {
   addMark, allClear, almostItems, annoyingItems, currentEntry, currentIndex, dismiss, doubtDone, doubtEntries, doubtLeft, droppedInPassage, entries, explain, extra, finish, forceZone, leave,
@@ -96,25 +96,42 @@ function releaseFocus(event: MouseEvent): void {
 function stopSweep(): void {
   player.pause();
 }
+/** Tout à la main : nombre de flous posés (fixes, ou qui suivent ce qui a été entouré). */
+const handCount = computed(() => Object.values(project.value?.tracks ?? {}).reduce((n, list) => n + list.filter((t) => t.source !== "auto" && !t.disabled).length, 0));
+/** « Ajouter un flou » : la lecture s'arrête, le prochain rectangle tracé sur l'image devient un flou. */
+function addBlur(): void {
+  player.pause();
+  state.tool = state.tool === "manual" ? "none" : "manual";
+}
 </script>
 
 <template>
   <section class="pane review-pane" @click="releaseFocus">
     <!-- Écran de choix -->
     <template v-if="review.mode === 'home'">
-      <h4>Vérifier le floutage</h4>
-      <p class="help">Tout ce que le logiciel a détecté est flouté : il n'y a rien à valider. Il vous reste à regarder la vidéo une fois.</p>
+      <h4>{{ manualOnly ? "Vos flous" : "Vérifier le floutage" }}</h4>
+      <p v-if="manualOnly" class="note warn" data-manual-note><Icon name="alert" /><span>{{ MANUAL_WARNING }}</span></p>
+      <p v-else class="help">Tout ce que le logiciel a détecté est flouté : il n'y a rien à valider. Il vous reste à regarder la vidéo une fois.</p>
       <p v-if="needsAnalysis && !busy" class="note warn"><Icon name="alert" />L'analyse n'est pas à jour : lancez-la d'abord, sinon des passages sortiraient sans flou.</p>
       <div class="choices review-home">
+        <!-- tout à la main : poser les flous d'abord -->
+        <div v-if="manualOnly" class="card entry-main" :class="{ todo: !handCount }" data-entry-card="add">
+          <span class="choice-title">Ajouter un flou <b v-if="handCount" class="count">{{ handCount }}</b></span>
+          <p class="entry-text">Arrêtez la vidéo sur ce qu'il faut cacher, puis tracez un rectangle dessus. Le flou peut suivre ce que vous avez entouré, ou rester fixe.</p>
+          <button class="wide entry-go" :class="{ primary: !handCount, on: state.tool === 'manual' }" data-entry="add" :disabled="busy" @click="addBlur">
+            <Icon name="plus" :size="13" />{{ state.tool === "manual" ? "Tracez un rectangle sur l'image…" : "Ajouter un flou" }}
+          </button>
+          <p v-if="handCount" class="entry-text">{{ handCount > 1 ? `${handCount} flous posés` : "1 flou posé" }}. Pour régler le début et la fin d'un flou : cliquez-le dans l'image, puis ouvrez l'onglet « Flous ».</p>
+        </div>
         <!-- la relecture : la seule étape qui protège vraiment -->
-        <div class="card entry-main" :class="{ todo: !sweepDone }">
+        <div class="card entry-main" :class="{ todo: !sweepDone && (!manualOnly || handCount > 0) }">
           <span class="choice-title">Relecture <span v-if="sweepDone" class="tag ok"><Icon name="check" :size="12" />faite</span></span>
-          <p class="entry-text">Regardez la vidéo une fois, en accéléré, flou affiché. C'est le seul moyen de voir ce que le logiciel n'a jamais détecté.</p>
+          <p class="entry-text">{{ manualOnly ? "Regardez la vidéo une fois, en accéléré, flou affiché, pour être sûr de n'avoir rien oublié." : "Regardez la vidéo une fois, en accéléré, flou affiché. C'est le seul moyen de voir ce que le logiciel n'a jamais détecté." }}</p>
           <ul class="rules">
-            <li><Icon name="close" :size="14" /><span><strong>Cliquez un flou en trop</strong> pour le retirer. La lecture continue.</span></li>
+            <li v-if="!manualOnly"><Icon name="close" :size="14" /><span><strong>Cliquez un flou en trop</strong> pour le retirer. La lecture continue.</span></li>
             <li><Icon name="flag" :size="14" /><span><strong>Touche S</strong> si quelque chose reste lisible. Vous corrigerez à la fin.</span></li>
           </ul>
-          <button class="wide entry-go" :class="{ primary: !sweepDone }" data-entry="sweep" :disabled="busy" @click="resumeSweep()">
+          <button class="wide entry-go" :class="{ primary: !sweepDone && (!manualOnly || handCount > 0) }" data-entry="sweep" :disabled="busy" @click="resumeSweep()">
             <Icon name="play" :size="13" />{{ sweepResume !== null ? `Reprendre à ${formatTime(Math.floor(sweepResume), 0)}` : sweepDone ? "Relire la vidéo" : "Commencer la relecture" }}
           </button>
           <button v-if="sweepResume !== null" class="quiet small" :disabled="busy" @click="startSweep(true)">Depuis le début</button>
@@ -133,6 +150,8 @@ function stopSweep(): void {
             <small v-else>{{ doubtEntries.length > 1 ? `Les ${doubtEntries.length} alertes sont regardées.` : "L'alerte est regardée." }} Vous pouvez les revoir.</small>
           </span>
         </button>
+        <!-- flous gênants et non floutés : ils ne concernent que les flous automatiques -->
+        <template v-if="!manualOnly">
         <button class="choice" data-entry="annoying" :disabled="!annoyingItems.length && !sheetItems.length" @click="openSheet(undefined, annoyingItems.length ? 'annoying' : 'all')">
           <span>
             <span class="choice-title"><Icon name="grid" />Flous gênants <b class="count">{{ annoyingItems.length }}</b></span>
@@ -148,6 +167,7 @@ function stopSweep(): void {
             <small v-else>Rien : le logiciel a flouté tout ce qu'il a vu.</small>
           </span>
         </button>
+        </template>
       </div>
     </template>
 
@@ -292,7 +312,7 @@ function stopSweep(): void {
         <button class="quiet small" title="Revenir au choix de la vérification" @click="leave"><Icon name="close" :size="14" />Quitter</button>
       </div>
       <ul class="rules sweep-rules">
-        <li><Icon name="close" :size="14" /><span><strong>Cliquez un flou en trop</strong> pour le retirer.</span></li>
+        <li v-if="!manualOnly"><Icon name="close" :size="14" /><span><strong>Cliquez un flou en trop</strong> pour le retirer.</span></li>
         <li><Icon name="flag" :size="14" /><span><strong>Touche S</strong> si quelque chose reste lisible.</span></li>
       </ul>
       <div class="progress">

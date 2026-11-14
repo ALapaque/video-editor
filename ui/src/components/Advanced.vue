@@ -15,11 +15,11 @@ import SidePanel from "./SidePanel.vue";
 import Timeline from "./Timeline.vue";
 import WelcomeArt from "./WelcomeArt.vue";
 import { batch, batchItemText, batchJob, batchRunning, openBatch } from "../batch";
-import { followBlur, formatDuration, measureEstimate, redo, undo } from "../extras";
+import { followBlur, formatDuration, manualOnly, MANUAL_WARNING, measureEstimate, redo, undo } from "../extras";
 import { panels } from "../blurs";
 import { addMark, allClear, guided, leave, remaining, remainingList, resume, resumeSweep, review, startQueue, sweepResume, validate } from "../review";
 import {
-  addMute, busy, current, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, project, refresh, saveManual, segments, send,
+  addMute, busy, current, deleteSegment, duration, formatTime, job, moveSegment, needsAnalysis, notify, player, project, refresh, saveManual, segments, send,
   setMode, splitAtPlayhead, start, state, time,
 } from "../store";
 
@@ -45,6 +45,24 @@ const steps = [
 ];
 const analysing = computed(() => busy.value && job.value?.kind === "analyze");
 const analysed = computed(() => segments.value.length > 0 && !needsAnalysis.value);
+// Tout à la main (aucun flou automatique) : il n'y a rien à analyser. L'étape « Analyse » quitte le
+// guide, et la troisième s'appelle « Vos flous » : on y pose les flous, puis on relit la vidéo.
+const byHand = computed(() => manualOnly.value && !needsAnalysis.value && !analysing.value);
+const shownSteps = computed(() => (byHand.value ? [steps[0], { id: 3, label: "Vos flous" }, steps[3]] : steps));
+/** Numéro affiché d'une étape (les étapes gardent leur identifiant, 1 à 4, même quand « Analyse » n'est pas montrée). */
+function stepNumber(id: number): number {
+  return shownSteps.value.findIndex((s) => s.id === id) + 1 || id;
+}
+/** Flous posés à la main dans le projet. */
+const handCount = computed(() => Object.values(project.value?.tracks ?? {}).reduce((n, list) => n + list.filter((t) => t.source !== "auto" && !t.disabled).length, 0));
+/** « Ajouter un flou » depuis le guide : onglet « Flous », outil de tracé en main. */
+function addBlur(): void {
+  if (review.mode !== "home") leave();
+  state.step = 3;
+  state.tab = "zones";
+  player.pause();
+  state.tool = "manual";
+}
 // Projet analysé avant la contre-vérification : « Analyser » ne fait que revoir les flous douteux.
 const recheck = computed(() => needsAnalysis.value && !!project.value?.recheck_only);
 const recheckText = "Le logiciel peut revoir de plus près ses flous douteux pour retirer ceux qui n'ont pas lieu d'être (arbre, reflet…). C'est court : rien n'est analysé à nouveau.";
@@ -54,7 +72,10 @@ const autoStep = computed(() => {
   if (!analysed.value) return 1;
   return allClear.value ? 4 : 3; // relecture à faire, alertes ou signalements : on reste à la vérification
 });
-const step = computed(() => state.step || autoStep.value);
+const step = computed(() => {
+  const chosen = state.step || autoStep.value;
+  return byHand.value && chosen === 2 ? 3 : chosen; // « Analyse » n'existe pas quand tout se pose à la main
+});
 function stepDone(id: number): boolean {
   if (id <= 2) return analysed.value && !analysing.value;
   if (id === 3) return analysed.value && allClear.value;
@@ -103,6 +124,7 @@ const guide = computed(() => {
   switch (step.value) {
     case 1:
       if (recheck.value) return { text: recheckText, action: "analyse" };
+      if (byHand.value) return { text: "Coupez ce que vous ne voulez pas garder. Ensuite, posez vos flous : rien n'est flouté automatiquement.", action: "continue" };
       return needsAnalysis.value
         ? { text: "Coupez ce que vous ne voulez pas garder, puis lancez l'analyse.", action: "analyse" }
         : { text: "Le montage est analysé. Si vous ajoutez un passage, il faudra relancer l'analyse.", action: "continue" };
@@ -116,8 +138,10 @@ const guide = computed(() => {
       if (needsAnalysis.value) return { text: "Analysez d'abord le montage : la vérification porte sur ce que l'analyse a trouvé.", action: "analyse", warn: true };
       if (review.mode === "queue") return { text: "Regardez le passage en boucle et répondez dans le panneau de droite : tout ce qui doit être flouté l'est-il ?", action: "" };
       if (review.mode === "end") return { text: allClear.value ? "Relecture faite : vous pouvez exporter." : "Choisissez la suite dans le panneau de droite.", action: allClear.value ? "toExport" : "" };
-      if (review.mode === "sweep") return { text: "Cliquez un flou en trop pour le retirer. Touche S si quelque chose reste lisible.", action: "" };
-      return { text: todoText(plural), action: allClear.value ? "toExport" : "todo" };
+      if (review.mode === "sweep") return { text: byHand.value ? "Touche S si quelque chose reste lisible : vous y ajouterez un flou à la fin." : "Cliquez un flou en trop pour le retirer. Touche S si quelque chose reste lisible.", action: "" };
+      // tout à la main, aucun flou posé : c'est par là qu'on commence
+      if (byHand.value && !handCount.value) return { text: `${MANUAL_WARNING} Arrêtez la vidéo sur ce qu'il faut cacher, puis ajoutez un flou.`, action: "addBlur" };
+      return { text: byHand.value && !allClear.value ? `${plural(handCount.value, "flou posé", "flous posés")}. ${todoText(plural)}` : todoText(plural), action: allClear.value ? "toExport" : "todo" };
     default:
       if (recheck.value) return { text: recheckText, action: "analyse" };
       if (needsAnalysis.value) return { text: "Des passages gardés n'ont pas encore été analysés : ils sortiraient sans flou.", action: "analyse", warn: true };
@@ -217,7 +241,10 @@ async function blurChoice(mode: "follow" | "fixed" | "cancel"): Promise<void> {
   if (pending.guided) {
     notify("Flou ajouté sur tout le passage. Regardez la boucle : si l'objet bouge, retracez-le à un autre instant avec « Déplacer ici… » dans l'onglet « Flous ».");
     resume();
-  } else notify("Flou ajouté pour 2 s. Réglez son début et sa fin dans l'onglet « Flous ».");
+  } else {
+    state.tab = "zones"; // le flou est sélectionné : son début et sa fin se règlent là
+    notify("Flou ajouté pour 2 s. Réglez son début et sa fin dans l'onglet « Flous » : « Début = cette image », « Fin = cette image ».");
+  }
 }
 
 // Fin d'un traitement court : le suivi d'un flou ajouté et la mesure de vitesse n'ont pas besoin
@@ -234,6 +261,7 @@ watch(() => job.value?.state, (now, before) => {
       if (from && j.created !== null && j.created !== undefined) state.selectedTrack = { clip: from.clip, id: j.created };
       notify(`${j.message.replace(/(\d)\.(\d)/g, "$1,$2")} ${from?.guided ? "Regardez la boucle : s'il ne couvre pas tout, ajoutez-en un autre." : "Il est sélectionné : réglez-le dans l'onglet « Flous »."}`);
       if (from?.guided) resume();
+      else if (from) state.tab = "zones"; // le flou est sélectionné : il se règle (et se raccourcit) là
     } else if (from?.guided && review.sub === "missing") state.tool = "manual";
   } else if (j.kind === "estimate" && j.state === "done") {
     state.jobOpen = false; // le résultat s'affiche à côté du bouton « Analyser »
@@ -377,10 +405,10 @@ onBeforeUnmount(() => {
       <span v-if="project" class="project" :title="project.path">{{ project.name }}</span>
       <nav v-if="project" class="steps" aria-label="Étapes">
         <button
-          v-for="s in steps" :key="s.id" class="step" :class="{ current: step === s.id, done: stepDone(s.id) }"
-          :aria-current="step === s.id ? 'step' : undefined" :title="`Étape ${s.id} : ${s.label}`" @click="goStep(s.id)"
+          v-for="(s, i) in shownSteps" :key="s.id" class="step" :class="{ current: step === s.id, done: stepDone(s.id) }"
+          :aria-current="step === s.id ? 'step' : undefined" :title="`Étape ${i + 1} : ${s.label}`" @click="goStep(s.id)"
         >
-          <span class="step-num"><Icon v-if="stepDone(s.id)" name="check" :size="12" /><template v-else>{{ s.id }}</template></span>
+          <span class="step-num"><Icon v-if="stepDone(s.id)" name="check" :size="12" /><template v-else>{{ i + 1 }}</template></span>
           <span class="step-label">{{ s.label }}</span>
         </button>
       </nav>
@@ -451,9 +479,10 @@ onBeforeUnmount(() => {
           <!-- relecture : après un clic qui retire un flou, la ligne propose la suite, sans rien bloquer -->
           <RemovedBar v-else-if="state.lastRemoved" />
           <template v-else>
-            <span class="guide-step">Étape {{ step }}</span>
+            <span class="guide-step">Étape {{ stepNumber(step) }}</span>
             <p class="guide-text">{{ guide.text }}</p>
             <button v-if="guide.action === 'add'" class="primary" @click="picker = 'add'"><Icon name="plus" />Ajouter un clip…</button>
+            <button v-else-if="guide.action === 'addBlur'" class="primary" data-next="add-blur" @click="addBlur"><Icon name="plus" />Ajouter un flou</button>
             <template v-else-if="guide.action === 'analyse'">
               <span v-if="estimateText" class="estimate" title="Durée estimée d'après la vitesse mesurée sur quelques images, avec les réglages actuels"><Icon name="clock" />{{ estimateText }}</span>
               <button v-else title="Mesurer la vitesse de l'analyse sur quelques images pour savoir combien de temps elle prendra. Quelques secondes." @click="measureEstimate()"><Icon name="clock" />Estimer la durée</button>
@@ -552,7 +581,7 @@ onBeforeUnmount(() => {
           <p v-else-if="!chosenName" class="note"><Icon name="info" />Donnez un nom à l'objet pour continuer.</p>
           <p>Que faire du rectangle que vous venez de tracer ?</p>
           <div class="choices">
-            <button class="primary" :disabled="!chosenName" @click="dashChoice('track')"><span>Suivre l'objet<small>Il est suivi image par image sur tout le clip, vers l'avant et l'arrière. À choisir s'il bouge dans l'image.</small></span></button>
+            <button class="primary" :disabled="!chosenName" @click="dashChoice('track')"><span>Suivre l'objet<small>Il est suivi image par image, vers l'avant et l'arrière, tant que le logiciel le voit. S'il le perd (coupure, objet caché), le flou s'arrête et une alerte vous demande de le remontrer. À choisir s'il bouge dans l'image.</small></span></button>
             <button :disabled="!chosenName" @click="dashChoice('fixed')"><span>Flou fixe<small>Le même rectangle sur tout le clip. À choisir si l'objet ne bouge pas dans l'image (caméra fixée à la moto, cadrage constant).</small></span></button>
           </div>
           <div class="row end"><button @click="dashChoice('cancel')">Annuler</button></div>

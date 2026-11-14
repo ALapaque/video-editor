@@ -13,17 +13,18 @@ import { call, type ExportPreset, type Job, type Preset, type RenderOptions, typ
 import { batch, batchItemText, batchPercent, batchRunning, openBatch } from "../batch";
 import {
   appliedBlurs, applyTune, exportPresets, followBlur, formatDuration, measureEstimate, neverBlurHere, presetInfo,
-  removeSimilar, render, renderExtract, restoreRemoved, saveProfile, saveSweep, setPreset, setTracksDisabled, tuneGain, tuneSuggestion, undo,
+  removeSimilar, render, renderExtract, restoreRemoved, saveProfile, saveSweep, setBlurSpan, setPreset, setTracksDisabled, thumbUrl, tuneGain, tuneSuggestion, undo,
 } from "../extras";
+import { playback } from "../playback";
 import {
   addMark, currentEntry, currentIndex, droppedInPassage, entries, explain, extra, forceZone, leave, loop, markEntries, next, objectHere,
   previous, relocate, remaining, replay, restoreZone, resume, review, showObject, startQueue, startSweep, validate,
 } from "../review";
 import {
-  busy, current, droppedHere, duration, fpsOf, job, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send,
+  busy, current, deleteTrack, droppedHere, duration, fpsOf, job, mapRange, needsAnalysis, notify, player, project, refresh, saveMontage, seekTime, send,
   setMode, start, state, time, trackById, zonesSteady,
 } from "../store";
-import { clock, dayText, drop, droppedFile, wiz, type Screen } from "../wizard";
+import { clock, dayText, drop, droppedFile, hands, rememberHand, wiz, type Screen } from "../wizard";
 import BatchDialog from "./BatchDialog.vue";
 import FilePicker from "./FilePicker.vue";
 import Icon, { type IconName } from "./Icon.vue";
@@ -35,11 +36,20 @@ import TrimBar from "./TrimBar.vue";
 import WizProgress from "./WizProgress.vue";
 import WizSheet from "./WizSheet.vue";
 import WizSpan from "./WizSpan.vue";
+import WizThumb from "./WizThumb.vue";
 import WizTime from "./WizTime.vue";
 
-const steps = ["Vidéo", "Quoi flouter", "Couper", "Analyse", "Vérification", "Enregistrer"];
 const stepOf: Record<Screen, number> = { video: 1, profile: 2, what: 2, object: 2, trim: 3, type: 4, analyse: 4, verify: 5, export: 6, done: 7 };
-const step = computed(() => stepOf[wiz.screen]);
+// « Je choisis moi-même », seul : aucune analyse, l'étape disparaît de la liste ; l'étape de
+// vérification s'appelle « Vos flous » dès que l'utilisateur pose lui-même des flous.
+const steps = computed(() => {
+  if (noAnalysis.value) return ["Vidéo", "Quoi flouter", "Couper", "Vos flous", "Enregistrer"];
+  return ["Vidéo", "Quoi flouter", "Couper", "Analyse", hand.value ? "Vos flous" : "Vérification", "Enregistrer"];
+});
+const step = computed(() => {
+  const n = stepOf[wiz.screen];
+  return noAnalysis.value && n >= 5 ? n - 1 : n;
+});
 
 const picker = ref(false);
 const storageOpen = ref(false);
@@ -105,6 +115,15 @@ const objects = computed(() => {
   return out;
 });
 const hasTracks = computed(() => Object.values(p.value?.tracks ?? {}).some((l) => l.length > 0));
+/** « Je choisis moi-même » : l'utilisateur pose lui-même des flous. Choix retenu pour ce projet ;
+ *  et de toute façon vrai quand rien n'est automatique et qu'aucun objet n'est désigné. */
+const hand = computed(() => !!p.value && (hands.paths.includes(p.value.path) || (!kinds.value.length && !objects.value.length && !wiz.objectWanted)));
+/** Rien à analyser du tout : ni visages, ni plaques, ni objet à suivre. L'étape « Analyse » n'existe pas.
+ *  À l'écran « Que faut-il flouter ? », c'est ce qui est coché qui compte, avant même d'être enregistré. */
+const noAnalysis = computed(() => {
+  if (wiz.screen === "what") return choice.hand && !choice.face && !choice.plate && !choice.object;
+  return hand.value && !kinds.value.length && !objects.value.length && !needsAnalysis.value;
+});
 /** Réglages habituels enregistrés sur cet ordinateur (profil « ma moto »), s'il y en a. */
 const profile = computed(() => state.data.profile ?? null);
 /** Vidéo toute neuve (rien d'analysé, aucun objet désigné) et réglages habituels enregistrés : on propose de les reprendre. */
@@ -135,6 +154,7 @@ function sync(): void {
   if (!previewReady.value) return; // l'écran d'attente s'affiche ; on se cale quand l'aperçu est prêt
   if (wiz.path !== p.value.path) {
     wiz.path = p.value.path;
+    wiz.objectWanted = false; // un souhait exprimé pour une autre vidéo ne vaut pas pour celle-ci
     wiz.launched = false;
     wiz.output = "";
     wiz.extract = "";
@@ -170,6 +190,10 @@ function quit(): void {
   queued.value = false;
   added.value = null;
   state.focus = null;
+  state.toolHint = "";
+  hstep.value = "watch";
+  editing.value = null;
+  playback.open = false;
 }
 
 function enter(): void {
@@ -208,11 +232,15 @@ function back(): void {
     case "verify":
       if (inQueue.value && review.sub !== "ask") return resume(); // abandon de la correction en cours
       if (inQueue.value && currentIndex.value > 0) return previous();
-      if (vphase.value !== "intro") { // planche, relecture, premier endroit signalé, première alerte : retour à l'entrée de l'étape
+      if (vphase.value === "hand") { // « Posez vos flous » : on défait un pas (réglage, question, tracé), puis on quitte l'étape
+        if (hstep.value === "kind") return startHandDraw();
+        if (hstep.value !== "watch") return handDone();
+      } else if (vphase.value !== "intro") { // planche, relecture, premier endroit signalé, première alerte : retour à l'entrée de l'étape
         stopSweep();
         if (review.mode !== "home") leave();
         state.loopRange = null;
-        vphase.value = "intro";
+        if (hand.value) enterHand();
+        else vphase.value = "intro";
         return;
       }
       return show(needsAnalysis.value ? "analyse" : "trim");
@@ -238,6 +266,12 @@ function reconcile(): void {
   if (wiz.screen === "object" && osub.value === "result") {
     if (fresh.value && !objects.value.some((o) => o.name === fresh.value?.name && o.clip === fresh.value?.clip)) fresh.value = null;
     if (!objects.value.length) startDraw();
+  }
+  if (wiz.screen === "verify" && vphase.value === "hand" && editing.value) {
+    // réglage d'un flou : l'annulation l'a retiré (retour à la lecture) ou a remis son début et sa fin
+    if (!editTrack.value) return handDone();
+    frameSpan();
+    return loopBlur();
   }
   if (wiz.screen === "verify") {
     // un retrait d'un clic annulé : le bandeau « Flou retiré » n'a plus lieu d'être
@@ -337,34 +371,49 @@ function skipProfile(): void {
 }
 
 // --- 2. Que faut-il flouter ? -------------------------------------------------------
-const choice = reactive({ face: true, plate: true, object: false });
+const choice = reactive({ face: true, plate: true, object: false, hand: false });
 function initWhat(): void {
   choice.face = kinds.value.includes("face");
   choice.plate = kinds.value.includes("plate");
   choice.object = objects.value.length > 0 || wiz.objectWanted;
-  if (!hasTracks.value && !kinds.value.length && !wiz.objectWanted) choice.face = choice.plate = true; // projet tout neuf
+  // « Je choisis moi-même » : choix retenu pour ce projet, ou projet où rien n'est automatique et sans objet désigné
+  choice.hand = !!p.value && (hands.paths.includes(p.value.path) || (!kinds.value.length && !choice.object));
+}
+/** « Je choisis moi-même » vient d'être coché : plus rien n'est cherché automatiquement. Les
+ *  visages ou les plaques peuvent être recochés ensuite, pour mélanger les deux. */
+function pickHand(): void {
+  if (choice.hand) choice.face = choice.plate = false;
 }
 const wantedKinds = computed(() => ["face", "plate"].filter((k) => (k === "face" ? choice.face : choice.plate)));
 const kindsChanged = computed(() => wantedKinds.value.join() !== kinds.value.join());
 /** Le projet a déjà été analysé : changer le choix refait l'analyse. */
 const analysedOnce = computed(() => Object.values(p.value?.tracks ?? {}).some((l) => l.some((t) => t.source === "auto")) || (!needsAnalysis.value && kinds.value.length > 0));
 const whatNote = computed(() => {
-  if (!choice.face && !choice.plate && !choice.object) return "Cochez au moins une case pour continuer.";
+  if (!choice.face && !choice.plate && !choice.object && !choice.hand) return "Cochez au moins une case pour continuer.";
   const notes: string[] = [];
   if (kindsChanged.value && analysedOnce.value) {
-    notes.push(wantedKinds.value.length ? "Vous avez changé ce choix : l'analyse sera refaite." : "Les visages et les plaques déjà trouvés ne seront plus floutés.");
+    // ce qui disparaît, puis ce que cela coûte : les flous automatiques de la catégorie retirée
+    // ne sont plus appliqués, et toute nouvelle recherche refait l'analyse
+    const gone = kinds.value.filter((k) => !wantedKinds.value.includes(k));
+    if (gone.length === 2) notes.push("Les visages et les plaques déjà trouvés ne seront plus floutés.");
+    else if (gone.length) notes.push(gone[0] === "face" ? "Les visages déjà trouvés ne seront plus floutés." : "Les plaques déjà trouvées ne seront plus floutées.");
+    if (wantedKinds.value.length) notes.push("Vous avez changé ce choix : l'analyse sera refaite.");
+    else notes.push("Si vous recochez une de ces cases plus tard, l'analyse sera à refaire.");
   }
   if (!choice.object && objects.value.length) notes.push(`${objects.value.length > 1 ? "Les objets déjà désignés" : "L'objet déjà désigné"} (${list(objects.value.map((o) => capital(o.name)))}) ne ${objects.value.length > 1 ? "seront" : "sera"} plus flouté${objects.value.length > 1 ? "s" : ""}.`);
+  // la contrepartie de « Je choisis moi-même », dite une fois, au moment du choix
+  if (choice.hand && !wantedKinds.value.length && !choice.object) notes.push("Dans ce mode, ce que vous n'entourez pas reste visible.");
   return notes.join(" ");
 });
-const whatValid = computed(() => choice.face || choice.plate || choice.object);
+const whatValid = computed(() => choice.face || choice.plate || choice.object || choice.hand);
 async function saveWhat(): Promise<void> {
-  if (!whatValid.value) return;
+  if (!whatValid.value || !p.value) return;
   if (kindsChanged.value && !(await send("PUT", "/api/settings", { analysis: { kinds: wantedKinds.value } }))) return;
   if (!choice.object) {
     for (const o of [...objects.value]) await send("POST", "/api/dash", { clip: o.clip, mode: "clear", label: o.name });
   }
   wiz.objectWanted = choice.object;
+  rememberHand(p.value.path, choice.hand);
   show(choice.object ? "object" : "trim");
 }
 
@@ -375,6 +424,7 @@ const objectName = ref(""); // nom choisi par une pastille
 const customName = ref(""); // nom saisi à la main : il l'emporte sur la pastille
 const fresh = ref<{ clip: string; name: string; at: number } | null>(null); // objet qui vient d'être désigné
 const trackError = ref("");
+const trackNote = ref(""); // message de fin du suivi, quand l'objet n'a pas pu être suivi partout
 const chosenName = computed(() => {
   const typed = customName.value.trim() || objectName.value;
   return objects.value.find((o) => o.name.toLowerCase() === typed.toLowerCase())?.name ?? typed;
@@ -386,6 +436,7 @@ function startDraw(): void {
   state.loopRange = null;
   state.pendingDash = null;
   fresh.value = null;
+  trackNote.value = "";
   osub.value = "draw";
   state.tool = "dash";
 }
@@ -399,6 +450,7 @@ function showObjects(): void {
 watch(() => state.pendingDash, (drawn) => {
   if (!drawn) return;
   if (wiz.screen === "verify" && inQueue.value && review.sub === "missing") return void follow(drawn);
+  if (wiz.screen === "verify" && vphase.value === "hand" && hstep.value === "draw") return void (hstep.value = "kind"); // « Posez vos flous » : la question
   if (wiz.screen !== "object") return;
   objectName.value = objects.value.length ? "" : "compteur";
   customName.value = "";
@@ -406,6 +458,8 @@ watch(() => state.pendingDash, (drawn) => {
 });
 watch(() => state.tool, (tool) => {
   if (wiz.screen === "object" && osub.value === "draw" && tool === "none" && !state.pendingDash) state.tool = "dash";
+  // « Posez vos flous » : après un tracé trop petit, l'outil reste en main
+  if (wiz.screen === "verify" && vphase.value === "hand" && hstep.value === "draw" && tool === "none" && !state.pendingDash) state.tool = "dash";
   // « Il manque un flou » : après un tracé trop petit, le lecteur rend l'outil du flou immobile ; ici le flou suit
   if (wiz.screen === "verify" && review.sub === "missing" && tool === "manual") state.tool = "dash";
 });
@@ -595,7 +649,8 @@ function analyse(): void {
 // en une relecture (un clic sur un flou en trop le retire, un bouton signale ce qui reste
 // lisible), puis les endroits signalés un par un, puis les alertes s'il y en a : les passages où
 // quelque chose peut rester visible. La planche des flous qui se voient le plus est facultative.
-type Phase = "intro" | "sheet" | "sweep" | "marks" | "risks";
+// « hand » : l'utilisateur pose lui-même ses flous (« Je choisis moi-même »), voir plus bas.
+type Phase = "intro" | "sheet" | "sweep" | "marks" | "risks" | "hand";
 const vphase = ref<Phase>("intro");
 const entry = currentEntry;
 /** Endroits signalés ou alertes, passés un par un (file commune : `doubtEntries` ne contient que les alertes). */
@@ -611,7 +666,272 @@ const reasons = computed(() => {
   return [...new Set(texts)].slice(0, 2);
 });
 function initVerify(): void {
+  if (hand.value) return enterHand();
   vphase.value = "intro";
+}
+
+// --- 5 bis. « Posez vos flous » : l'utilisateur entoure lui-même ce qu'il faut cacher ---------
+// La vidéo, lecture et pause, la barre de position, et un gros bouton : « Flouter quelque chose
+// ici ». La lecture s'arrête, on entoure, on répond à une question (le flou suit, ou reste à cet
+// endroit), on règle quand il commence et quand il finit (barre à deux poignées, lecture en
+// boucle), et « C'est bon » revient à la lecture là où on en était. Les flous posés sont listés :
+// on peut y revenir, les régler, les retirer. La relecture mémorisée (`project.sweep`) sert de
+// « j'ai tout regardé ». Si des visages ou des plaques sont aussi floutés automatiquement, un clic
+// sur un de ces flous le retire, comme pendant la relecture.
+type HandStep = "watch" | "draw" | "kind" | "follow" | "adjust";
+const FIXED_S = 5; // durée de départ d'un flou qui reste à sa place ; elle se règle juste après
+const hstep = ref<HandStep>("watch");
+/** Où reprendre après « C'est bon » : l'instant du montage où l'on était, et si la vidéo tournait. */
+const handBack = reactive({ at: 0, playing: false, speed: 1 });
+/** Flou en cours de réglage. `fresh` : il vient d'être posé. */
+const editing = ref<{ clip: string; id: number; fresh: boolean } | null>(null);
+const editTrack = computed(() => (editing.value ? trackById(editing.value.clip, editing.value.id) : undefined));
+/** Début et fin du flou réglé (secondes de temps source du clip), et partie de la vidéo que montre la barre. */
+const span = reactive({ a: 0, b: 0, from: 0, to: 0, min: 0, max: 0 });
+
+/** Un flou posé à la main, tel qu'il se présente dans la vidéo montée. */
+interface HandBlur { clip: string; id: number; follows: boolean; from: number; to: number }
+/** Flous posés à la main encore présents dans la vidéo, dans l'ordre où ils apparaissent. */
+const handBlurs = computed<HandBlur[]>(() => {
+  const out: HandBlur[] = [];
+  for (const [clip, tracks] of Object.entries(p.value?.tracks ?? {})) {
+    for (const t of tracks) {
+      if (t.kind !== "manual" || t.source === "auto" || t.disabled) continue;
+      const parts = mapRange({ clip, start: t.start, end: t.end });
+      if (parts.length) out.push({ clip, id: t.id, follows: t.source === "tracker", from: parts[0].start, to: parts[parts.length - 1].end });
+    }
+  }
+  return out.sort((x, y) => x.from - y.from || x.id - y.id);
+});
+/** « de 0:12 à 0:17 » : moments de la vidéo montée. */
+function spanText(from: number, to: number): string {
+  return clock(from) === clock(to) ? `à ${clock(from)}` : `de ${clock(from)} à ${clock(to)}`;
+}
+/** Instant de la vidéo montée correspondant à un instant du clip (null s'il est coupé). */
+function montageTime(clip: string, t: number): number | null {
+  return mapRange({ clip, start: t, end: t })[0]?.start ?? null;
+}
+const handEnded = computed(() => vphase.value === "hand" && hstep.value === "watch" && sweepEnded.value);
+/** Ce que le logiciel floute tout seul, quand les deux façons sont mélangées. */
+const autoWords = computed(() => list(kinds.value.map((k) => (k === "face" ? "les visages" : "les plaques"))));
+
+function enterHand(): void {
+  if (review.mode !== "home") leave();
+  vphase.value = "hand";
+  hstep.value = "watch";
+  editing.value = null;
+  state.loopRange = null;
+  state.tool = "none";
+  state.toolHint = "";
+  state.lastRemoved = null;
+  state.clickRemoves = kinds.value.length > 0; // mélange : un clic retire un flou automatique en trop
+  if (canResume.value) seekTime(sweepAt.value); // on reprend là où on s'était arrêté
+  window.clearInterval(sweepTimer);
+  sweepTimer = window.setInterval(() => state.playing && watching() && keepSweep(), 5000);
+}
+/** L'écran « Posez vos flous » montre la vidéo en lecture libre (ni tracé ni réglage en cours). */
+function watching(): boolean {
+  return wiz.screen === "verify" && vphase.value === "hand" && hstep.value === "watch";
+}
+watch(() => state.playing, (playing) => {
+  if (!playing && watching()) keepSweep(time.value >= duration.value - 0.2);
+});
+
+/** « Flouter quelque chose ici » : la lecture s'arrête, l'utilisateur entoure. */
+function blurHere(): void {
+  if (busy.value || !current.value) return;
+  rememberPlace();
+  startHandDraw();
+}
+function rememberPlace(): void {
+  handBack.at = time.value;
+  handBack.playing = state.playing;
+  handBack.speed = review.speed;
+  player.pause();
+  keepSweep();
+  if (review.speed !== 1) review.speed = 1; // tracé et contrôle en boucle : à vitesse normale
+}
+function startHandDraw(): void {
+  player.pause();
+  state.loopRange = null;
+  state.pendingDash = null;
+  state.clickRemoves = false;
+  state.lastRemoved = null;
+  editing.value = null;
+  hstep.value = "draw";
+  state.toolHint = "Entourez avec la souris ce qu'il faut cacher";
+  state.tool = "dash"; // le tracé revient par `pendingDash`
+}
+/** « Le flou suit ce que j'ai entouré » : suivi dans les deux sens, dans le passage gardé affiché. */
+async function handFollow(): Promise<void> {
+  const drawn = state.pendingDash;
+  const s = current.value;
+  if (!drawn || !s || s.clip.id !== drawn.clip || busy.value) return;
+  state.pendingDash = null;
+  state.tool = "none";
+  hstep.value = "follow";
+  following.value = true;
+  const done = await runJob("follow", () => followBlur(drawn.clip, drawn.time, drawn.box, s.inFrame / s.fps, s.outFrame / s.fps));
+  following.value = false;
+  if (!alive || wiz.screen !== "verify" || vphase.value !== "hand") return;
+  const made = done?.state === "done" && done.created !== null ? trackById(drawn.clip, done.created) : undefined;
+  if (made) return beginAdjust(drawn.clip, made.id, true);
+  if (done?.state === "error") notify(`Le flou n'a pas pu être posé : ${done.message}`, "error");
+  if (done?.state === "cancelled") return handDone(); // arrêté : rien n'est posé, la lecture reprend
+  startHandDraw(); // nouvel essai
+}
+/** « Le flou reste à cet endroit » : quelques secondes à partir de l'image affichée ; on règle ensuite. */
+async function handFixed(): Promise<void> {
+  const drawn = state.pendingDash;
+  const s = current.value;
+  if (!drawn || !s || s.clip.id !== drawn.clip || busy.value) return;
+  const last = (s.outFrame - 1) / s.fps;
+  const from = Math.min(drawn.time, last - 1 / s.fps);
+  const to = Math.max(Math.min(from + FIXED_S, last), from + 1 / s.fps);
+  const next = await send("POST", "/api/manual", { clip: drawn.clip, keyframes: [[from, ...drawn.box], [to, ...drawn.box]] });
+  if (next?.created === undefined) return; // refusé : le message est affiché, la question reste posée
+  state.pendingDash = null;
+  beginAdjust(drawn.clip, next.created, true);
+}
+/** Ouvre le réglage d'un flou : sa barre à deux poignées, et le flou en boucle pour contrôler. */
+function beginAdjust(clip: string, id: number, fresh: boolean): void {
+  const track = trackById(clip, id);
+  if (!track) return handDone();
+  state.tool = "none";
+  state.toolHint = "";
+  state.pendingDash = null;
+  state.clickRemoves = false;
+  state.lastRemoved = null;
+  editing.value = { clip, id, fresh };
+  hstep.value = "adjust";
+  frameSpan(true);
+  loopBlur();
+}
+/** Cale la barre sur le flou réglé. Un flou qui suit ne peut qu'être raccourci : la barre le
+ *  représente en entier. Un flou qui reste à sa place peut aller partout dans la partie gardée :
+ *  la barre montre toute la vidéo si elle est courte, sinon un morceau autour du flou. */
+function frameSpan(reset = false): void {
+  const track = editTrack.value;
+  const e = editing.value;
+  if (!track || !e) return;
+  span.a = track.start;
+  span.b = track.end;
+  if (track.source === "tracker") {
+    Object.assign(span, { from: track.start, to: track.end, min: track.start, max: track.end });
+    return;
+  }
+  const seg = segmentsOf(e.clip).find((s) => track.end >= s.lo && track.start <= s.hi) ?? segmentsOf(e.clip)[0];
+  const lo = seg?.lo ?? 0;
+  const hi = seg?.hi ?? Math.max(track.end, lo + 1);
+  span.min = lo;
+  span.max = hi;
+  if (hi - lo <= 90) {
+    span.from = lo;
+    span.to = hi;
+    return;
+  }
+  // longue vidéo : la barre garde son cadrage tant que le flou n'en touche pas un bord
+  const room = (span.to - span.from) * 0.04;
+  const touches = (track.start - span.from < room && span.from > lo + 1e-3) || (span.to - track.end < room && span.to < hi - 1e-3);
+  if (!reset && span.to > span.from && track.start >= span.from && track.end <= span.to && !touches) return;
+  const length = Math.min(hi - lo, Math.max(60, 4 * (track.end - track.start)));
+  span.from = Math.min(Math.max(lo, (track.start + track.end) / 2 - length / 2), hi - length);
+  span.to = span.from + length;
+}
+/** Parties gardées d'un clip, en secondes de temps source. */
+function segmentsOf(clip: string): { lo: number; hi: number }[] {
+  const c = clips.value.find((x) => x.id === clip);
+  if (!c) return [];
+  const fps = fpsOf(c);
+  return (p.value?.timeline ?? []).filter((s) => s.clip === clip).map((s) => ({ lo: Math.max(0, s.start), hi: Math.min(s.end, (c.frames - 1) / fps) }));
+}
+/** La barre ne montre qu'un morceau de la vidéo : on le dit. */
+const spanWindow = computed(() => {
+  const e = editing.value;
+  if (!e || editTrack.value?.source === "tracker" || (span.from <= span.min + 1e-3 && span.to >= span.max - 1e-3)) return "";
+  const from = montageTime(e.clip, span.from);
+  const to = montageTime(e.clip, span.to);
+  return from === null || to === null ? "" : `La barre montre la vidéo de ${clock(from)} à ${clock(to)}. Pour aller plus loin, amenez une poignée au bord et relâchez.`;
+});
+function spanClock(t: number): string {
+  const at = editing.value ? montageTime(editing.value.clip, t) : null;
+  if (at === null) return "…";
+  const tenths = Math.round(at * 10); // au dixième de seconde : les poignées se règlent finement
+  return `${Math.floor(tenths / 600)}:${String(Math.floor((tenths % 600) / 10)).padStart(2, "0")},${tenths % 10}`;
+}
+/** Lit le flou réglé en boucle, avec un peu de marge avant et après. `end` : depuis peu avant sa fin. */
+function loopBlur(end = false): void {
+  const e = editing.value;
+  const track = editTrack.value;
+  if (!e || !track) return;
+  const parts = mapRange({ clip: e.clip, start: track.start, end: track.end });
+  if (!parts.length) {
+    state.loopRange = null; // flou hors de la partie gardée : rien à lire
+    return;
+  }
+  const from = Math.max(0, parts[0].start - 0.8);
+  const to = Math.min(duration.value, parts[parts.length - 1].end + 0.8);
+  state.loopRange = { from, to };
+  seekTime(end ? Math.max(from, to - 3) : from);
+  void nextTick(() => void (alive && hstep.value === "adjust" && player.play()));
+}
+/** Pendant qu'une poignée bouge, la vidéo montre l'image où elle se trouve. */
+function previewSpan(edge: "start" | "end"): void {
+  const e = editing.value;
+  const c = clips.value.find((x) => x.id === e?.clip);
+  if (!e || !c) return;
+  player.pause();
+  state.loopRange = null;
+  const at = montageTime(e.clip, edge === "start" ? span.a : Math.max(span.a, span.b - 1 / fpsOf(c)));
+  if (at !== null) seekTime(at);
+}
+async function saveSpan(edge: "start" | "end"): Promise<void> {
+  const e = editing.value;
+  const track = editTrack.value;
+  if (!e || !track) return;
+  if (Math.abs(track.start - span.a) > 1e-4 || Math.abs(track.end - span.b) > 1e-4) await setBlurSpan(e.clip, e.id, span.a, span.b);
+  if (!alive || hstep.value !== "adjust" || !editTrack.value) return;
+  frameSpan(); // les valeurs retenues par le moteur (ou celles d'avant, s'il a refusé)
+  loopBlur(edge === "end");
+}
+function toggleLoop(): void {
+  if (state.playing) return player.pause();
+  if (!state.loopRange) return loopBlur();
+  void player.play();
+}
+/** « C'est bon » (ou abandon du tracé) : retour à la lecture, là où on en était. */
+function handDone(): void {
+  player.pause();
+  editing.value = null;
+  state.loopRange = null;
+  state.tool = "none";
+  state.toolHint = "";
+  state.pendingDash = null;
+  hstep.value = "watch";
+  state.clickRemoves = kinds.value.length > 0;
+  review.speed = handBack.speed;
+  seekTime(handBack.at);
+  if (handBack.playing) void nextTick(() => void (alive && watching() && player.play()));
+  handBack.playing = false;
+}
+/** « Régler » un flou de la liste. */
+function editHand(blur: HandBlur): void {
+  if (busy.value) return;
+  rememberPlace();
+  beginAdjust(blur.clip, blur.id, false);
+}
+/** Retire un flou posé à la main (liste, ou écran de réglage). */
+async function removeHand(clip: string, id: number): Promise<void> {
+  if (busy.value) return;
+  await deleteTrack(clip, id);
+  if (trackById(clip, id)) return; // refusé : le message est affiché
+  notify("Flou retiré. Pour le remettre : « Annuler la dernière action », en haut.");
+  if (editing.value?.id === id && editing.value.clip === clip) handDone();
+}
+/** « J'ai terminé » : les endroits signalés et les alertes s'il y en a, puis l'enregistrement. */
+function finishHand(): void {
+  player.pause();
+  afterSweep();
 }
 
 // --- Relecture : à 2× par défaut ; un clic retire un flou, un bouton signale ce qui manque ------
@@ -633,6 +953,7 @@ function stopSweep(): void {
   window.clearInterval(sweepTimer);
   window.clearTimeout(removedTimer);
   if (wiz.screen === "verify" && vphase.value === "sweep" && review.mode === "sweep" && state.playing) keepSweep(); // à l'arrêt, la pause l'a déjà retenue
+  if (watching() && state.playing) keepSweep(); // « Posez vos flous » : même mémoire
   state.clickRemoves = false;
   state.lastRemoved = null;
   if (review.speed !== 1) review.speed = 1;
@@ -671,7 +992,7 @@ function rewind(): void {
 // plusieurs flous réunis pour ce qu'on en voit : un flou.
 const REMOVED_MS = 8000;
 let removedHeld = false; // pointeur ou clavier sur le bandeau : il reste affiché
-const removed = computed(() => (wiz.screen === "verify" && vphase.value === "sweep" ? state.lastRemoved : null));
+const removed = computed(() => (wiz.screen === "verify" && (vphase.value === "sweep" || watching()) ? state.lastRemoved : null));
 /** Flous réunis dans la tache cliquée (voir `wholeBlur`) : à l'écran, c'est un seul flou. */
 const blobSize = ref(1);
 /** Nombre de flous retirés, tels qu'on les voit : la tache cliquée, plus ceux retirés « au même endroit ». */
@@ -718,7 +1039,7 @@ async function wholeBlur(last: NonNullable<typeof state.lastRemoved>): Promise<v
   pressed = null;
   const others = (zone?.[9] ?? []).filter((id) => {
     const t = trackById(last.clip, id);
-    return id !== last.ids[0] && !!t && t.source === "auto" && !t.disabled;
+    return id !== last.ids[0] && !!t && (t.source === "auto" || !!t.reacquired) && !t.disabled;
   });
   if (!others.length) return;
   await setTracksDisabled(last.clip, others, true);
@@ -740,6 +1061,7 @@ async function never(): Promise<void> {
 // Le lecteur refuse de retirer d'un clic un flou venu de l'utilisateur, et le dit avec les mots
 // du mode avancé (« la liste des flous ») : ici, la même chose avec ceux de l'assistant.
 watch(() => state.toast, (toast) => {
+  if (alive && vphase.value === "hand" && toast.startsWith("Ce flou a été ajouté par vous")) return notify("Ce flou vient de vous : un clic ne le retire pas. Pour le retirer, servez-vous de la liste « Vos flous ».");
   if (alive && toast.startsWith("Ce flou a été ajouté par vous")) notify("Ce flou vient de vous : un clic ne le retire pas. Pour le supprimer, passez en mode avancé.");
 });
 
@@ -865,6 +1187,8 @@ const blurred = computed(() => {
   if (manual) words.push(plural(manual, "flou ajouté à la main", "flous ajoutés à la main"));
   return list(words) || "rien";
 });
+/** Rien n'est flouté automatiquement : seul ce que l'utilisateur a entouré ou désigné l'est. */
+const allByHand = computed(() => hand.value && !kinds.value.length);
 const exportView = computed(() => {
   const j = job.value;
   if (j?.kind === "render" && j.state === "running") return "running";
@@ -913,6 +1237,12 @@ function exportExtract(): void {
 /** « La regarder » : directement la relecture, là où elle s'était arrêtée. */
 function watchAll(): void {
   show("verify");
+  if (hand.value) {
+    // « Posez vos flous » : la lecture reprend là où elle s'était arrêtée (depuis le début si elle était finie)
+    if (!canResume.value) seekTime(0);
+    void nextTick(() => void (alive && watching() && player.play()));
+    return;
+  }
   void beginSweep(canResume.value ? "resume" : "start");
 }
 /** « Regarder ces endroits » : les endroits signalés, puis les alertes. */
@@ -997,7 +1327,11 @@ watch(() => job.value?.state, (now, before) => {
     } else if (extract) wiz.extract = extract;
     else if (now === "cancelled") stopped.value = true;
   } else if (j.kind === "dash" && wiz.screen === "object" && osub.value === "tracking") {
-    if (now === "done") playResult();
+    if (now === "done") {
+      // le suivi s'arrête à la première coupure ou perte : le moteur le dit, on le montre tel quel
+      trackNote.value = /non suivi/.test(j.message) ? nb(j.message) : "";
+      playResult();
+    }
     else if (now === "error") {
       trackError.value = j.message;
       osub.value = "failed";
@@ -1010,6 +1344,15 @@ const root = ref<HTMLDivElement>();
 const progress = ref<InstanceType<typeof WizProgress>>();
 function onKey(event: KeyboardEvent): void {
   if (picker.value || storageOpen.value || batch.open) return; // le sélecteur de fichiers et les dialogues ont leurs propres touches
+  if (playback.open) {
+    // réglages de lecture ouverts : le clavier leur appartient ; Échap les ferme, sans changer d'écran
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      playback.open = false;
+    }
+    return;
+  }
   if (dropAsk.value) {
     if (event.key !== "Escape" && event.key !== "Enter") return;
     event.preventDefault();
@@ -1062,7 +1405,7 @@ const withVideo = computed(() => {
   if (!p.value || !previewReady.value || batchRunning.value) return false;
   if (wiz.screen === "object") return true;
   if (wiz.screen === "trim") return !advancedMontage.value;
-  return wiz.screen === "verify" && (vphase.value === "sweep" || inQueue.value);
+  return wiz.screen === "verify" && (vphase.value === "sweep" || vphase.value === "hand" || inQueue.value);
 });
 /** La planche des flous occupe toute la largeur. */
 const sheetShown = computed(() => state.loaded && !batchRunning.value && !!p.value && !lost.value.length && previewReady.value && wiz.screen === "verify" && vphase.value === "sheet");
@@ -1123,7 +1466,7 @@ onBeforeUnmount(() => {
 
 <template>
   <!-- data-phase : où en est l'étape Vérification, lisible par les essais automatiques -->
-  <div ref="root" class="wiz" :data-phase="wiz.screen === 'verify' ? vphase : undefined" @click="releaseFocus">
+  <div ref="root" class="wiz" :data-phase="wiz.screen === 'verify' ? vphase : undefined" :data-hand="wiz.screen === 'verify' && vphase === 'hand' ? hstep : undefined" @click="releaseFocus">
     <header class="wiz-top">
       <span class="brand"><Logo /><strong>moto-blur</strong></span>
       <ol class="wsteps" aria-label="Étapes">
@@ -1177,6 +1520,37 @@ onBeforeUnmount(() => {
               <button class="wiz-play" @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>
               <WizTime kind="slider" @seek="scrub" />
             </div>
+          </template>
+          <template v-else-if="wiz.screen === 'verify' && vphase === 'hand'">
+            <!-- « Posez vos flous » : lecture libre ; pendant le tracé, le curseur ; pendant le réglage, la barre du flou -->
+            <div v-if="hstep === 'watch'" class="wiz-controls">
+              <button class="wiz-play" data-hand-play @click="toggle"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Lecture" }}</button>
+              <button class="wiz-rewind" data-rewind title="Revenir 5 secondes en arrière" aria-label="Revenir 5 secondes en arrière" @click="rewind"><Icon name="stepBack" />5 s</button>
+              <WizTime kind="slider" @seek="seekTime" />
+              <span class="wiz-speed" role="group" aria-label="Vitesse de lecture">
+                <span class="dim">Vitesse</span>
+                <span class="joined">
+                  <button :class="{ on: review.speed === 1 }" :aria-pressed="review.speed === 1" data-speed="1" @click="review.speed = 1">Normale</button>
+                  <button :class="{ on: review.speed === 2 }" :aria-pressed="review.speed === 2" data-speed="2" title="Deux fois plus vite" @click="review.speed = 2">2×</button>
+                </span>
+              </span>
+            </div>
+            <label v-else-if="hstep === 'draw'" class="wiz-seek">
+              <span>Pas la bonne image&nbsp;? Déplacez ce curseur.</span>
+              <WizTime kind="slider" @seek="scrub" />
+            </label>
+            <template v-else-if="hstep === 'adjust' && editTrack && editing">
+              <TrimBar
+                v-model:start="span.a" v-model:end="span.b" :origin="span.from" :total="Math.max(span.to - span.from, 1e-3)" :min="span.min" :max="span.max"
+                :step="1 / fpsOf(clips.find((c) => c.id === editing!.clip) ?? clips[0])" :start-text="spanClock(span.a)" :end-text="spanClock(span.b)"
+                start-label="Début du flou" end-label="Fin du flou" data-hand-span
+                @preview="previewSpan" @commit="saveSpan"
+              >
+                <button class="wiz-play" data-hand-loop @click="toggleLoop"><Icon :name="state.playing ? 'pause' : 'play'" />{{ state.playing ? "Pause" : "Voir le flou" }}</button>
+              </TrimBar>
+              <p v-if="spanWindow" class="wiz-hint wiz-span-window">{{ spanWindow }}</p>
+            </template>
+            <div v-else class="wiz-controls"></div>
           </template>
           <template v-else-if="wiz.screen === 'verify' && vphase === 'sweep'">
             <!-- relecture : lecture, retour de 5 s, avancement, vitesse (2× par défaut) -->
@@ -1311,7 +1685,7 @@ onBeforeUnmount(() => {
             <span class="wiz-icon"><Icon name="gauge" :size="34" /></span>
             <h1>Reprendre vos réglages habituels ?</h1>
             <p v-if="profile" class="wiz-lead">Vous les avez enregistrés {{ dayText(profile.saved_at) }} : flouter <strong>{{ profileText || "vos objets" }}</strong>{{ profile.preset !== "normal" ? `, vidéo de type « ${presetInfo[profile.preset].label} »` : "" }}.</p>
-            <p v-if="profile?.objects.length" class="wiz-lead">Le logiciel cherchera {{ profile.objects.length > 1 ? "ces objets" : "cet objet" }} dans cette vidéo et {{ profile.objects.length > 1 ? "les" : "le" }} suivra tout seul.</p>
+            <p v-if="profile?.objects.length" class="wiz-lead">Le logiciel cherchera {{ profile.objects.length > 1 ? "ces objets" : "cet objet" }} dans cette vidéo et {{ profile.objects.length > 1 ? "les" : "le" }} suivra tant qu'il {{ profile.objects.length > 1 ? "les" : "le" }} voit.</p>
             <div class="wiz-actions">
               <button class="primary big" data-primary :disabled="busy" @click="followProfile(applyProfile)"><Icon name="check" :size="18" />Oui, les reprendre</button>
               <button class="big" :disabled="busy" @click="skipProfile">Non merci</button>
@@ -1343,6 +1717,16 @@ onBeforeUnmount(() => {
               <span class="wiz-card-text">Compteur, téléphone, GPS… Vous me le montrerez à l'écran suivant.</span>
             </label>
           </div>
+          <!-- un choix à part : rien d'automatique, l'utilisateur entoure lui-même ce qu'il faut cacher -->
+          <span class="wiz-or" aria-hidden="true">ou</span>
+          <label class="wiz-own" :class="{ on: choice.hand }" data-hand-choice>
+            <input v-model="choice.hand" type="checkbox" @change="pickHand" />
+            <span class="wiz-card-icon"><Icon name="pen" :size="26" /></span>
+            <span class="wiz-own-text">
+              <span class="wiz-card-name">Je choisis moi-même</span>
+              <span class="wiz-card-text">{{ choice.face || choice.plate ? "Vous entourez vous-même ce qu'il faut cacher, en plus de ce que le logiciel trouve." : "Rien n'est flouté automatiquement : vous entourez vous-même ce qu'il faut cacher." }}</span>
+            </span>
+          </label>
           <p class="wiz-note" :class="{ shown: !!whatNote }" role="status"><Icon name="info" />{{ whatNote || " " }}</p>
           <div class="wiz-actions">
             <button class="primary big" data-primary :disabled="!whatValid" @click="saveWhat">Continuer<Icon name="arrowRight" :size="18" /></button>
@@ -1368,7 +1752,7 @@ onBeforeUnmount(() => {
             <p v-if="replaces" class="wiz-note shown"><Icon name="info" />« {{ capital(chosenName) }} » existe déjà : son suivi sera corrigé sur ce plan seulement.</p>
             <h2>L'objet bouge-t-il dans l'image ?</h2>
             <div class="wiz-answers">
-              <button class="big answer" :disabled="!chosenName" data-answer="track" @click="designate('track')"><span><strong>Oui</strong><small>Le logiciel le suivra tout au long de la vidéo, et le retrouvera après chaque changement de plan.</small></span></button>
+              <button class="big answer" :disabled="!chosenName" data-answer="track" @click="designate('track')"><span><strong>Oui</strong><small>Le logiciel le suit tant qu'il le voit. S'il le perd (changement de plan, objet caché), il vous demandera de le remontrer.</small></span></button>
               <button class="big answer" :disabled="!chosenName" data-answer="fixed" @click="designate('fixed')"><span><strong>Non, il reste au même endroit</strong><small>Par exemple si la caméra est fixée à la moto.</small></span></button>
             </div>
           </template>
@@ -1388,6 +1772,7 @@ onBeforeUnmount(() => {
             <template v-if="fresh">
               <h1>L'objet est-il bien caché ?</h1>
               <p class="wiz-lead">Regardez ces quelques secondes : « {{ capital(fresh.name) }} » doit rester flouté.</p>
+              <p v-if="trackNote" class="wiz-note shown warn" data-track-note role="status"><Icon name="alert" /><span>{{ trackNote }}</span></p>
             </template>
             <template v-else>
               <h1>{{ objects.length > 1 ? "Vos objets à flouter" : "Votre objet à flouter" }}</h1>
@@ -1496,6 +1881,76 @@ onBeforeUnmount(() => {
         <template v-else-if="wiz.screen === 'verify'">
           <!-- planche facultative : jamais sur le chemin principal -->
           <WizSheet v-if="vphase === 'sheet'" @done="vphase = 'intro'" />
+
+          <!-- « Posez vos flous » : l'utilisateur entoure lui-même ce qu'il faut cacher -->
+          <template v-else-if="vphase === 'hand'">
+            <template v-if="hstep === 'draw'">
+              <h1>Entourez ce qu'il faut cacher</h1>
+              <p class="wiz-lead">Sur la vidéo&nbsp;: cliquez, glissez, relâchez.</p>
+              <p class="wiz-wait"><Icon name="pen" :size="18" />En attente de votre tracé sur la vidéo…</p>
+              <div class="wiz-actions"><button class="big" data-hand-cancel @click="handDone">Annuler</button></div>
+            </template>
+            <template v-else-if="hstep === 'kind'">
+              <h1>Ce que vous avez entouré bouge-t-il dans l'image&nbsp;?</h1>
+              <div class="wiz-answers">
+                <button class="big answer primary" data-primary data-hand-kind="follow" :disabled="busy" @click="handFollow"><span><strong>Le flou suit ce que j'ai entouré</strong><small>Pour une personne, une plaque, tout ce qui bouge dans l'image.</small></span></button>
+                <button class="big answer" data-hand-kind="fixed" :disabled="busy" @click="handFixed"><span><strong>Le flou reste à cet endroit</strong><small>Pour ce qui ne bouge pas dans l'image&nbsp;: un compteur, un autocollant sur le pare-brise…</small></span></button>
+              </div>
+              <div class="wiz-actions"><button class="big quiet" data-hand-redraw :disabled="busy" @click="startHandDraw"><Icon name="refresh" :size="18" />Entourer autrement</button></div>
+            </template>
+            <template v-else-if="hstep === 'follow'">
+              <h1>Le flou suit ce que vous avez entouré…</h1>
+              <p class="wiz-lead">Il s'arrête seul quand ce que vous avez entouré disparaît, ou au changement de plan.</p>
+              <WizProgress ref="progress" phase="Vous réglerez ensuite quand il commence et quand il finit." />
+            </template>
+            <template v-else-if="hstep === 'adjust' && editTrack && editing">
+              <h1>{{ editing.fresh ? "Le flou est posé" : "Réglez ce flou" }}</h1>
+              <p class="wiz-lead" data-hand-when>{{ editTrack.source === "tracker" ? "Il suit ce que vous avez entouré" : "Il reste à cet endroit" }}, <strong>{{ spanText(montageTime(editing.clip, editTrack.start) ?? 0, montageTime(editing.clip, editTrack.end) ?? 0) }}</strong> ({{ human(editTrack.end - editTrack.start) }}).</p>
+              <p class="wiz-lead">Sous la vidéo, faites glisser les deux poignées orange pour choisir <strong>quand il commence et quand il finit</strong>.</p>
+              <p v-if="editTrack.source === 'tracker'" class="wiz-hint" data-hand-shorten>Ce flou suit ce que vous avez entouré&nbsp;: vous pouvez seulement le raccourcir. S'il s'arrête trop tôt, posez un autre flou à cet endroit.</p>
+              <div class="wiz-actions column">
+                <button class="primary big" data-primary data-hand-ok :disabled="busy" @click="handDone"><Icon name="check" :size="18" />C'est bon</button>
+                <button class="big" data-hand-remove :disabled="busy" @click="removeHand(editing.clip, editing.id)"><Icon name="trash" :size="18" />Retirer ce flou</button>
+              </div>
+            </template>
+            <template v-else>
+              <h1>{{ handEnded ? "Vous avez tout regardé" : "Posez vos flous" }}</h1>
+              <p v-if="handEnded" class="wiz-lead">{{ handBlurs.length ? `Vous avez posé ${plural(handBlurs.length, "flou", "flous")}.` : "Vous n'avez posé aucun flou." }} Vous pouvez encore en ajouter.</p>
+              <template v-else>
+                <p class="wiz-lead">{{ kinds.length ? `Le logiciel a flouté ${autoWords}. Pour le reste, regardez la vidéo : quand` : "Regardez la vidéo. Quand" }} quelque chose doit être caché, appuyez sur le bouton.</p>
+                <ul v-if="kinds.length" class="wiz-rules compact">
+                  <li><Icon name="close" /><span><strong>Un flou en trop&nbsp;?</strong> Cliquez dessus, il disparaît.</span></li>
+                </ul>
+              </template>
+              <div class="wiz-actions column">
+                <button class="big signal" :class="{ primary: !handEnded }" :data-primary="handEnded ? undefined : ''" data-hand-add :disabled="busy" @click="blurHere"><Icon name="pen" :size="20" />Flouter quelque chose ici</button>
+                <button class="big" :class="{ primary: handEnded }" :data-primary="handEnded ? '' : undefined" data-hand-done @click="finishHand">J'ai terminé<Icon name="arrowRight" :size="18" /></button>
+              </div>
+              <!-- dernier flou automatique retiré d'un clic (quand visages ou plaques sont aussi floutés) -->
+              <div
+                v-if="removed" class="wiz-removed" data-removed role="status"
+                @pointerenter="holdRemoved(true)" @pointerleave="holdRemoved(false)" @focusin="holdRemoved(true)" @focusout="holdRemoved(false)"
+              >
+                <p>
+                  <Icon name="check" />
+                  <span class="grow"><strong>{{ removedCount > 1 ? `${removedCount} flous retirés` : "Flou retiré" }}</strong><small v-if="removedCount === 1">{{ removed.name }}</small></span>
+                  <button class="small" data-restore :disabled="busy" @click="restoreRemoved()">Annuler</button>
+                </p>
+              </div>
+              <!-- les flous posés : discret, pour y revenir, les régler ou les retirer -->
+              <div class="wiz-hand-list" data-hand-list>
+                <p class="wiz-hand-title">{{ handBlurs.length ? `Vos flous (${handBlurs.length})` : "Aucun flou posé pour l'instant." }}</p>
+                <ul v-if="handBlurs.length">
+                  <li v-for="(b, i) in handBlurs" :key="`${b.clip}:${b.id}`" :data-hand-blur="b.id">
+                    <WizThumb :src="thumbUrl(b.clip, b.id, 160)" :alt="`Flou ${i + 1}`" />
+                    <span class="grow"><strong>{{ capital(spanText(b.from, b.to)) }}</strong><small>{{ b.follows ? "suit ce que vous avez entouré" : "reste au même endroit" }}</small></span>
+                    <button class="small" data-hand-edit :disabled="busy" :aria-label="`Régler le flou ${i + 1}, ${spanText(b.from, b.to)}`" @click="editHand(b)">Régler</button>
+                    <button class="small icon-btn" data-hand-drop :disabled="busy" :title="`Retirer ce flou`" :aria-label="`Retirer le flou ${i + 1}, ${spanText(b.from, b.to)}`" @click="removeHand(b.clip, b.id)"><Icon name="trash" /></button>
+                  </li>
+                </ul>
+              </div>
+            </template>
+          </template>
 
           <template v-else-if="vphase === 'intro'">
             <span class="wiz-icon" :class="{ ok: sweepDone }"><Icon :name="sweepDone ? 'check' : 'eye'" :size="34" /></span>
@@ -1685,6 +2140,10 @@ onBeforeUnmount(() => {
               <li><Icon name="lock" :size="18" /><span>Flouté : <strong>{{ blurred }}</strong></span></li>
               <li v-if="remaining.swept && !leftCount" data-watched><Icon name="check" :size="18" /><span>Vous avez regardé <strong>toute la vidéo</strong></span></li>
             </ul>
+            <!-- tout à la main : la contrepartie, redite sobrement avant d'enregistrer -->
+            <p v-if="allByHand && !needsAnalysis && !p.problem" class="wiz-note shown wiz-byhand" :class="{ warn: blurred === 'rien' }" data-by-hand>
+              <Icon :name="blurred === 'rien' ? 'alert' : 'info'" /><span>{{ blurred === "rien" ? "Vous n'avez posé aucun flou : la vidéo sera enregistrée sans aucun flou." : "Rien d'autre n'est flouté : ce que vous n'avez pas entouré reste visible." }}</span>
+            </p>
             <p v-if="needsAnalysis" class="wiz-note shown warn"><Icon name="alert" />La vidéo a changé depuis l'analyse : il faut l'analyser à nouveau avant de l'enregistrer.</p>
             <p v-else-if="p.problem" class="wiz-error">{{ p.problem }}</p>
             <div v-else-if="leftCount" class="unchecked wiz-unchecked" data-left>
@@ -1695,7 +2154,7 @@ onBeforeUnmount(() => {
               <label class="check"><input v-model="confirmed" type="checkbox" data-confirm /> Je crée la vidéo quand même</label>
             </div>
             <p v-if="!needsAnalysis && !p.problem && !remaining.swept" class="wiz-note shown wiz-unwatched" data-unwatched>
-              <Icon name="info" /><span>Vous n'avez pas regardé la vidéo en entier. C'est le seul moyen de repérer ce que le logiciel n'a jamais vu.</span>
+              <Icon name="info" /><span>Vous n'avez pas regardé la vidéo en entier. {{ allByHand ? "Regardez-la pour être sûr de n'avoir rien oublié." : "C'est le seul moyen de repérer ce que le logiciel n'a jamais vu." }}</span>
               <button class="small" @click="watchAll">La regarder</button>
             </p>
             <p v-if="stopped" class="wiz-note shown"><Icon name="info" />La création a été arrêtée. Aucune vidéo n'a été enregistrée.</p>
@@ -1788,6 +2247,31 @@ onBeforeUnmount(() => {
 .wiz-link { align-self: flex-start; height: 32px; margin-top: 6px; padding: 0 9px 0 6px; background: none; border-color: transparent; color: var(--faint); font-size: 14px; font-weight: 500; }
 .wiz-link .icon { color: var(--faint); }
 @media (hover: hover) { .wiz-link:hover:not(:disabled) { background: none; border-color: transparent; color: var(--text); } }
+
+/* « Je choisis moi-même » : un choix à part, sous les trois cartes */
+.wiz-or { align-self: stretch; display: flex; align-items: center; gap: 12px; margin: -2px 0; color: var(--faint); font-size: 14px; }
+.wiz-or::before, .wiz-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.wiz-own { position: relative; align-self: stretch; display: flex; align-items: center; gap: 16px; padding: 14px 56px 14px 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); cursor: pointer; transition: background-color var(--m-out) var(--ease), border-color var(--m-out) var(--ease); }
+.wiz-own:hover { border-color: var(--line-strong); background: var(--raised); }
+.wiz-own.on { background: var(--accent-soft); border-color: var(--accent); }
+.wiz-own input { position: absolute; top: 50%; right: 16px; width: 24px; height: 24px; margin-top: -12px; border-radius: 6px; background-size: 18px; }
+.wiz-own .wiz-card-icon { flex: none; margin-bottom: 0; }
+.wiz-own.on .wiz-card-icon { background: var(--accent); color: var(--accent-ink); }
+.wiz-own-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
+/* « Posez vos flous » : la liste discrète des flous posés, le réglage du début et de la fin */
+.wiz-hand-list { align-self: stretch; display: flex; flex-direction: column; gap: 7px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.wiz-hand-title { color: var(--dim); font-size: 14px; }
+.wiz-hand-list ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.wiz-hand-list li { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 6px; background: var(--raised); border-radius: var(--r-md); font-size: 14.5px; }
+.wiz-hand-list .wiz-thumb { flex: none; width: 60px; border-radius: 6px; }
+.wiz-hand-list li strong { display: block; font-weight: 600; }
+.wiz-hand-list li small { display: block; color: var(--dim); font-size: 12.5px; }
+.wiz-hand-list button.small { flex: none; height: 32px; padding: 0 11px; font-size: 13.5px; }
+.wiz-hand-list button.icon-btn { width: 32px; padding: 0; }
+.wiz-span-window { margin: 0 14px; }
+.wiz-panel .wiz-byhand { align-self: stretch; color: var(--dim); }
+.wiz-panel .wiz-byhand:not(.warn) .icon { color: var(--faint); }
 
 /* cartes à choix unique : type de vidéo */
 .wiz-card input[type="radio"] { appearance: none; -webkit-appearance: none; margin: 0; border-radius: 50%; background: var(--bg); border: 1px solid var(--line-strong); cursor: pointer; transition: border-color var(--m-out) var(--ease), border-width var(--m-out) var(--ease); }

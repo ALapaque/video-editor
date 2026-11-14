@@ -115,7 +115,9 @@ export function spanEditable(track: Track): boolean {
 /** Début et fin d'un flou posé à la main, en secondes de temps source du clip (annulable). Un flou
  *  fixe se rallonge ou se raccourcit ; un flou qui suit ne peut qu'être raccourci. Vrai si accepté. */
 export async function setBlurSpan(clip: string, id: number, startAt: number, endAt: number): Promise<boolean> {
-  return !!(await send("PATCH", "/api/tracks", { clip, id, span: [startAt, endAt] }));
+  // un rien à l'intérieur : le moteur arrondit le début vers le bas et la fin vers le haut, et un
+  // instant tombé pile sur une image ne doit pas glisser sur sa voisine
+  return !!(await send("PATCH", "/api/tracks", { clip, id, span: [startAt + 1e-6, endAt - 1e-6] }));
 }
 
 // --- Corrections par lot ----------------------------------------------------------

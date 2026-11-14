@@ -626,11 +626,18 @@ function hitsNear(p: { x: number; y: number }): ZoneTuple[] {
   return hits;
 }
 
-/** Relecture : flou automatique (le seul qu'un clic retire) sous la souris, à faire ressortir. */
+/** Un clic de relecture retire ce flou : flou automatique, ou morceau d'objet suivi que le logiciel
+ *  a « retrouvé » tout seul (une supposition). Un flou posé par l'utilisateur ne part pas d'un clic. */
+function clickRemovable(clipId: string, id: number): boolean {
+  const track = trackById(clipId, id);
+  return !!track && (track.source === "auto" || !!track.reacquired);
+}
+
+/** Relecture : flou qu'un clic retire sous la souris, à faire ressortir. */
 function hoverAt(clientX: number, clientY: number): void {
   const s = current.value;
   if (!s || !canvas.value) return;
-  const hit = hitsNear(toSource({ clientX, clientY })).find((z) => trackById(s.clip.id, z[7])?.source === "auto");
+  const hit = hitsNear(toSource({ clientX, clientY })).find((z) => clickRemovable(s.clip.id, z[7]));
   const id = hit ? hit[7] : null;
   if (id !== hoverId) {
     hoverId = id;
@@ -651,7 +658,7 @@ function clickAt(p: { x: number; y: number }): void {
   if (state.clickRemoves) {
     // Relecture : un clic sur un flou le retire aussitôt, la lecture continue.
     const near = hitsNear(p);
-    const hit = near.find((z) => trackById(s.clip.id, z[7])?.source === "auto") ?? near[0];
+    const hit = near.find((z) => clickRemovable(s.clip.id, z[7])) ?? near[0];
     if (!hit) return;
     const key = `${s.clip.id}:${hit[7]}`;
     // il quitte l'image tout de suite (sauf s'il est réuni à d'autres flous, qui restent)
@@ -659,8 +666,8 @@ function clickAt(p: { x: number; y: number }): void {
     // même de son côté). La tache quitte l'image tout de suite si elle ne contient que des
     // flous automatiques.
     const group = state.mode === "simple" ? [] : (hit[9] ?? []);
-    const allAuto = group.length > 1 && group.every((g) => trackById(s.clip.id, g)?.source === "auto");
-    if (trackById(s.clip.id, hit[7])?.source === "auto" && ((hit[9]?.length ?? 0) <= 1 || allAuto)) hiding.add(key);
+    const allAuto = group.length > 1 && group.every((g) => clickRemovable(s.clip.id, g));
+    if (clickRemovable(s.clip.id, hit[7]) && ((hit[9]?.length ?? 0) <= 1 || allAuto)) hiding.add(key);
     hoverId = null;
     setCursor();
     if (!state.playing) draw();
