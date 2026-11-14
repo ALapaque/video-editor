@@ -12,7 +12,7 @@ const kept = reactive({
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { RenderOptions } from "../api";
-import { exportPresets, render, renderExtract } from "../extras";
+import { exportPresets, manualOnly, render, renderExtract } from "../extras";
 import { allClear, remaining } from "../review";
 import { duration, formatTime, project, time } from "../store";
 import Icon from "./Icon.vue";
@@ -74,6 +74,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         </ul>
         <label class="check"><input v-model="confirmed" type="checkbox" /> J'exporte quand même</label>
       </div>
+      <!-- tout à la main : la contrepartie, rappelée sobrement -->
+      <p v-if="manualOnly" class="note" data-manual-note><Icon name="info" /><span>Aucun flou automatique dans ce projet : seul ce que vous avez entouré est flouté. Ce que vous n'avez pas entouré reste visible.</span></p>
       <label>Fichier de sortie (dans le dossier du projet, ou chemin complet)
         <input v-model="form.output" type="text" spellcheck="false" />
       </label>

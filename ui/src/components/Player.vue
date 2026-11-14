@@ -13,6 +13,7 @@ import Icon from "./Icon.vue";
 import { addIgnoreZone, confidence, confidenceInfo, removeBlur, snapshot } from "../extras";
 import { displayName, panels } from "../blurs";
 import { loop, objectHere, outline, rate, removeZone, resume, review, speeds } from "../review";
+import { cancelFine, fineNow, finePercent, mediaUrl, playback, preparingFine, QUALITY_NOTE, setQuality, shownQuality, type Quality } from "../playback";
 import {
   start,
   current, droppedNow, duration, formatTime, kindLabel, notify, objectNames, player, project, saveManual, seekTime, segments,
@@ -25,9 +26,15 @@ const video = ref<HTMLVideoElement>();
 const canvas = ref<HTMLCanvasElement>();
 const stage = ref<HTMLDivElement>();
 const frameEl = ref<HTMLDivElement>();
-const exact = ref<"" | "blur" | "source">("");
+// Qualité de l'image (commune aux deux modes, mémorisée) : rapide, nette, ou image exacte à l'arrêt.
+const exact = computed<"" | "blur" | "source">(() => (playback.quality === "blur" || playback.quality === "source" ? playback.quality : ""));
 const exactLoading = ref(false);
 let loadedClip = "";
+let loadedSrc = "";
+// Changement de qualité en cours (même clip, autre fichier d'aperçu) : la dernière image affichée
+// reste en place le temps du chargement, et sert aussi à l'aperçu du flou.
+let swapping = false;
+const held = document.createElement("canvas");
 let frameCallback = 0;
 let drag: { x0: number; y0: number; x1: number; y1: number } | null = null;
 const scratch = document.createElement("canvas");
@@ -75,10 +82,16 @@ function sync(): void {
   const s = current.value;
   if (!el || !s) return;
   if (!s.clip.proxy) return;
+  const url = mediaUrl(s.clip); // aperçu rapide, ou net s'il est demandé et fabriqué
   if (loadedClip !== s.clip.id) {
     loadedClip = s.clip.id;
-    el.src = `/media/${s.clip.id}`;
+    loadedSrc = url;
+    swapping = false;
+    el.removeAttribute("poster");
+    el.src = url;
     el.volume = volume.value / 100;
+  } else if (loadedSrc !== url) {
+    swapQuality(el, url);
   }
   if (el.playbackRate !== rate.value) el.playbackRate = rate.value; // une nouvelle source remet la vitesse à 1
   const target = mediaTime(state.frame, s.fps);
@@ -87,6 +100,41 @@ function sync(): void {
   played = { seg: state.seg, frame: state.frame };
   draw();
 }
+
+/** Même clip, autre qualité d'aperçu : la position est gardée, la lecture reprend si elle était en
+ *  cours, et l'image affichée reste en place pendant le chargement (pas d'écran noir, pas de saut).
+ *  Le calque des flous ne dépend pas de la taille de l'aperçu : il ne bouge pas, le zoom non plus. */
+function swapQuality(el: HTMLVideoElement, url: string): void {
+  const resume = state.playing;
+  if (el.videoWidth && el.readyState >= 2) {
+    held.width = el.videoWidth;
+    held.height = el.videoHeight;
+    const hc = held.getContext("2d");
+    try {
+      hc?.drawImage(el, 0, 0);
+      el.poster = held.toDataURL("image/jpeg", 0.85);
+      swapping = true;
+    } catch {
+      swapping = false; // image non copiable : simple rechargement
+    }
+  }
+  loadedSrc = url;
+  el.src = url;
+  const ready = () => {
+    el.removeEventListener("loadeddata", ready);
+    el.removeEventListener("error", ready);
+    if (loadedSrc !== url) return; // un autre changement a suivi
+    swapping = false;
+    el.removeAttribute("poster");
+    applyVolume();
+    if (resume && state.playing) void el.play().catch(() => (state.playing = false));
+    sync();
+  };
+  el.addEventListener("loadeddata", ready);
+  el.addEventListener("error", ready);
+}
+// le choix de qualité change, ou l'aperçu net vient d'être fabriqué : la vidéo suit
+watch(() => (current.value ? mediaUrl(current.value.clip) : ""), () => sync());
 
 // Dernière position donnée par la lecture elle-même. Si la tête de lecture est ailleurs, c'est
 // qu'on l'a déplacée (clic sur la timeline pendant la relecture, pour revoir un passage) : la
@@ -97,6 +145,10 @@ function onVideoFrame(_now: number, meta: { mediaTime: number }): void {
   const el = video.value;
   const s = current.value;
   if (!el || !s) return;
+  if (swapping) {
+    schedule(); // l'aperçu change de qualité : la tête de lecture attend la nouvelle vidéo
+    return;
+  }
   if (state.playing) {
     const frame = Math.round(meta.mediaTime * s.fps);
     if (frame >= s.outFrame) {
@@ -149,7 +201,6 @@ async function play(): Promise<void> {
   const el = video.value;
   if (!el || !current.value) return;
   if (time.value >= duration.value - 1.5 / current.value.fps) seekTime(0);
-  exact.value = "";
   sync();
   state.playing = true;
   try {
@@ -194,6 +245,11 @@ function step(frames: number): void {
 /** « Voir le flou » / « Voir les contours » : aperçu du flou ou contours des flous. */
 function toggleView(): void {
   state.preview = state.preview === "blur" ? "boxes" : "blur";
+}
+/** Masque (ou remontre) flous et contours dans l'aperçu, pour regarder l'image telle qu'elle a
+ *  été filmée. Rien n'est retiré du projet : l'export garde tous les flous. */
+function toggleHidden(): void {
+  state.preview = state.preview === "off" ? "blur" : "off";
 }
 
 // --- Zoom sur la vidéo ---------------------------------------------------------
@@ -370,9 +426,12 @@ function draw(): void {
   const focused = focus ? zones.filter((z) => zoneIn(z, focus)) : [];
   const pulse = focused.length && !reducedMotion ? 0.5 + 0.5 * Math.sin((performance.now() / 1600) * Math.PI * 2) : 0.6;
 
-  if (state.preview === "blur" && el.videoWidth) {
+  // image d'où tirer l'aperçu du flou : la vidéo, ou l'image gardée pendant un changement de qualité
+  const picture = swapping && held.width ? held : el;
+  const pictureWidth = picture === el ? el.videoWidth : held.width;
+  if (state.preview === "blur" && pictureWidth) {
     // Aperçu du flou : la zone de la vidéo est réduite à quelques pixels puis ré-agrandie.
-    const px = el.videoWidth / s.clip.width;
+    const px = pictureWidth / s.clip.width;
     const sc = scratch.getContext("2d");
     for (const z of zones) {
       const [x1, y1, x2, y2] = z;
@@ -383,7 +442,7 @@ function draw(): void {
       scratch.height = ch;
       if (!sc) break;
       sc.imageSmoothingEnabled = true;
-      sc.drawImage(el, x1 * px, y1 * px, (x2 - x1) * px, (y2 - y1) * px, 0, 0, cw, ch);
+      sc.drawImage(picture, x1 * px, y1 * px, (x2 - x1) * px, (y2 - y1) * px, 0, 0, cw, ch);
       ctx.save();
       shapePath(ctx, z, k);
       ctx.clip();
@@ -572,11 +631,18 @@ function hitsNear(p: { x: number; y: number }): ZoneTuple[] {
   return hits;
 }
 
-/** Relecture : flou automatique (le seul qu'un clic retire) sous la souris, à faire ressortir. */
+/** Un clic de relecture retire ce flou : flou automatique, ou morceau d'objet suivi que le logiciel
+ *  a « retrouvé » tout seul (une supposition). Un flou posé par l'utilisateur ne part pas d'un clic. */
+function clickRemovable(clipId: string, id: number): boolean {
+  const track = trackById(clipId, id);
+  return !!track && (track.source === "auto" || !!track.reacquired);
+}
+
+/** Relecture : flou qu'un clic retire sous la souris, à faire ressortir. */
 function hoverAt(clientX: number, clientY: number): void {
   const s = current.value;
   if (!s || !canvas.value) return;
-  const hit = hitsNear(toSource({ clientX, clientY })).find((z) => trackById(s.clip.id, z[7])?.source === "auto");
+  const hit = hitsNear(toSource({ clientX, clientY })).find((z) => clickRemovable(s.clip.id, z[7]));
   const id = hit ? hit[7] : null;
   if (id !== hoverId) {
     hoverId = id;
@@ -597,7 +663,7 @@ function clickAt(p: { x: number; y: number }): void {
   if (state.clickRemoves) {
     // Relecture : un clic sur un flou le retire aussitôt, la lecture continue.
     const near = hitsNear(p);
-    const hit = near.find((z) => trackById(s.clip.id, z[7])?.source === "auto") ?? near[0];
+    const hit = near.find((z) => clickRemovable(s.clip.id, z[7])) ?? near[0];
     if (!hit) return;
     const key = `${s.clip.id}:${hit[7]}`;
     // il quitte l'image tout de suite (sauf s'il est réuni à d'autres flous, qui restent)
@@ -605,8 +671,8 @@ function clickAt(p: { x: number; y: number }): void {
     // même de son côté). La tache quitte l'image tout de suite si elle ne contient que des
     // flous automatiques.
     const group = state.mode === "simple" ? [] : (hit[9] ?? []);
-    const allAuto = group.length > 1 && group.every((g) => trackById(s.clip.id, g)?.source === "auto");
-    if (trackById(s.clip.id, hit[7])?.source === "auto" && ((hit[9]?.length ?? 0) <= 1 || allAuto)) hiding.add(key);
+    const allAuto = group.length > 1 && group.every((g) => clickRemovable(s.clip.id, g));
+    if (clickRemovable(s.clip.id, hit[7]) && ((hit[9]?.length ?? 0) <= 1 || allAuto)) hiding.add(key);
     hoverId = null;
     setCursor();
     if (!state.playing) draw();
@@ -781,7 +847,7 @@ async function pointerUp(event: PointerEvent): Promise<void> {
 function onKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
-  if (state.jobOpen || state.pendingBlur || review.sheet || panels.shortcuts) return; // un dialogue est ouvert : le clavier lui appartient
+  if (state.jobOpen || state.pendingBlur || review.sheet || panels.shortcuts || playback.open) return; // un dialogue est ouvert : le clavier lui appartient
   const s = current.value;
   if (!s) return;
   const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
@@ -799,7 +865,7 @@ function onKey(event: KeyboardEvent): void {
   } else if (plain && (event.key === "0" || event.code === "Numpad0")) resetZoom();
   else if (plain && (event.key === "+" || event.key === "=" || event.code === "NumpadAdd")) zoomCenter(1.5);
   else if (plain && (event.key === "-" || event.code === "NumpadSubtract")) zoomCenter(1 / 1.5);
-  else if (plain && !props.simple && (event.key === "v" || event.key === "V")) toggleView();
+  else if (plain && (event.key === "v" || event.key === "V")) toggleView();
   else return;
   event.preventDefault();
 }
@@ -872,6 +938,10 @@ const observer = new ResizeObserver(() => {
 watch(() => [clip.value?.width, clip.value?.height], measure);
 onMounted(() => {
   window.addEventListener("keydown", onKey);
+  if (props.simple) {
+    window.addEventListener("pointerdown", outsidePanel, true);
+    window.addEventListener("resize", onResize);
+  }
   if (stage.value) observer.observe(stage.value);
   player.play = play;
   player.pause = pause;
@@ -881,6 +951,9 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("pointerdown", outsidePanel, true);
+  window.removeEventListener("resize", onResize);
+  if (props.simple) playback.open = false;
   observer.disconnect();
   window.cancelAnimationFrame(pulseFrame);
   const el = video.value as (HTMLVideoElement & { cancelVideoFrameCallback?: (id: number) => void }) | undefined;
@@ -888,6 +961,60 @@ onBeforeUnmount(() => {
 });
 
 const zoomText = computed(() => `${String(Math.round(view.s * 10) / 10).replace(".", ",")}×`);
+
+// --- Qualité de l'image : menu du mode avancé, panneau du lecteur simple ------------------------
+const qualityTip = computed(() => {
+  const fine = fineNow.value === "useless" ? "" : " « Nette » : plus de détails ; l'aperçu net se prépare une seule fois par vidéo, cela prend un moment.";
+  return `${QUALITY_NOTE}${fine} « Image exacte » : à l'arrêt, l'image en pleine qualité, telle qu'elle sortira à l'export (floutée) ou telle qu'elle a été filmée (sans flou) ; elle est préparée à chaque arrêt.`;
+});
+/** Choix dans le menu. Si « Nette » est refusé (traitement en cours), le menu revient au choix en service. */
+async function pickQuality(value: Quality, event?: Event): Promise<void> {
+  await setQuality(value);
+  const select = event?.target as HTMLSelectElement | undefined;
+  if (select && select.value !== shownQuality.value) select.value = shownQuality.value;
+}
+/** Les trois niveaux du lecteur simple. « Image exacte » y montre l'image telle qu'elle sera enregistrée. */
+const level = computed<"fast" | "fine" | "exact">(() => (shownQuality.value === "" ? "fast" : shownQuality.value === "fine" ? "fine" : "exact"));
+function pickLevel(to: "fast" | "fine" | "exact"): void {
+  if (to === "exact" && exact.value) return; // déjà en image exacte (floutée ou non) : rien à changer
+  void setQuality(to === "fast" ? "" : to === "fine" ? "fine" : "blur");
+}
+
+// Panneau « Réglages de lecture » du lecteur simple : ouvert par le petit bouton posé sur l'image,
+// fermé par Échap, la croix ou un clic ailleurs. Il est placé au-dessus du bouton, hors de l'image
+// (qui peut être petite ou étroite) ; tant qu'il est ouvert, le clavier lui appartient.
+const gear = ref<HTMLButtonElement>();
+const panel = ref<HTMLDivElement>();
+const panelStyle = ref<Record<string, string>>({});
+function placePanel(): void {
+  const r = gear.value?.getBoundingClientRect();
+  if (!r) return;
+  const width = Math.min(336, window.innerWidth - 16);
+  const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8));
+  panelStyle.value = { width: `${width}px`, left: `${left}px`, bottom: `${Math.max(8, window.innerHeight - r.top + 8)}px`, maxHeight: `${Math.max(160, r.top - 16)}px` };
+}
+function togglePanel(): void {
+  if (playback.open) return closePanel(true);
+  placePanel();
+  playback.open = true;
+  void nextTick(() => (panel.value?.querySelector<HTMLElement>("input:checked") ?? panel.value?.querySelector<HTMLElement>("input, button"))?.focus());
+}
+function closePanel(refocus = false): void {
+  if (!playback.open) return;
+  playback.open = false;
+  if (refocus) gear.value?.focus();
+}
+function outsidePanel(event: Event): void {
+  const target = event.target as Node | null;
+  if (playback.open && target && !panel.value?.contains(target) && !gear.value?.contains(target)) closePanel();
+}
+function onResize(): void {
+  closePanel();
+}
+// fermé d'ailleurs (Échap pris par l'assistant) : le focus revient au bouton, pas au début de la page
+watch(() => playback.open, (open) => {
+  if (!open && panel.value?.contains(document.activeElement)) gear.value?.focus();
+}, { flush: "sync" });
 
 defineExpose({ toggle, step, pause, snap, resetZoom });
 </script>
@@ -911,13 +1038,24 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
             v-if="simple && clip.proxy && state.tool === 'none' && review.sub !== 'extra'" class="icon-btn snap-float" :disabled="snapping"
             title="Enregistrer cette image, floutée, à côté de la vidéo" aria-label="Enregistrer cette image, floutée" @click="snap"
           ><span v-if="snapping" class="spinner small"></span><Icon v-else name="camera" /></button>
+          <!-- assistant : qualité de l'image, affichage et son derrière un seul petit bouton -->
+          <button
+            v-if="simple && clip.proxy" ref="gear" class="icon-btn play-gear" :class="{ on: playback.open }" data-play-settings
+            aria-haspopup="dialog" :aria-expanded="playback.open" aria-label="Réglages de lecture"
+            title="Réglages de lecture : qualité de l'image, affichage, son" @click="togglePanel"
+          ><Icon name="gear" /></button>
+          <!-- aperçu net en préparation : visible même panneau fermé, puisque les modifications attendent -->
+          <div v-if="simple && preparingFine && !playback.open" class="fine-chip" role="status" data-fine-chip>
+            <span class="spinner small"></span>Aperçu net&nbsp;: {{ finePercent }}&nbsp;%
+            <button class="small" title="Arrêter la préparation de l'aperçu net" @click="cancelFine()">Arrêter</button>
+          </div>
           <Transition name="fade">
             <button v-if="zoomed" class="zoom-reset" :title="`Revenir à l'image entière (0). Zoom actuel : ${zoomText}`" @click="resetZoom">
               <Icon name="zoom" :size="14" />Image entière<span class="mono">{{ zoomText }}</span>
             </button>
           </Transition>
           <Transition name="hint">
-            <div v-if="state.tool !== 'none' && simple" class="hint tool">{{ state.tool === "dash" ? "Entourez l'objet avec la souris" : "Entourez avec la souris ce qui doit être flouté" }}</div>
+            <div v-if="state.tool !== 'none' && simple" class="hint tool">{{ state.toolHint || (state.tool === "dash" ? "Entourez l'objet avec la souris" : "Entourez avec la souris ce qui doit être flouté") }}</div>
             <div v-else-if="state.tool !== 'none'" class="hint tool">
               {{ panels.ignoring ? "Tracez un rectangle sur l'endroit à ne jamais flouter" : state.tool === "dash" ? "Tracez un rectangle autour de l'objet à flouter" : "Tracez un rectangle sur ce qui doit être flouté" }} — Échap pour annuler
             </div>
@@ -955,11 +1093,19 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
       <button
         class="view-toggle" :title="state.preview === 'blur' ? 'Voir les contours des flous, avec leur nom au survol (V)' : 'Voir le flou tel qu\'il sera à l\'export (V)'" @click="toggleView"
       ><Icon :name="state.preview === 'blur' ? 'target' : 'eye'" />{{ state.preview === "blur" ? "Voir les contours" : "Voir le flou" }}</button>
-      <label class="dim field quality" title="À l'arrêt, « image exacte » affiche l'image en pleine qualité, telle qu'elle sortira à l'export (floutée) ou telle qu'elle a été filmée (sans flou). Un peu plus lent : l'image est préparée à chaque arrêt."><span class="field-label">Qualité</span>
-        <select v-model="exact" aria-label="Qualité de l'aperçu">
-          <option value="">aperçu rapide</option>
-          <option value="blur">image exacte, floutée</option>
-          <option value="source">image exacte, sans flou</option>
+      <button
+        class="icon-btn hide-toggle" :class="{ on: state.preview === 'off' }" :aria-pressed="state.preview === 'off'" data-hide-blurs
+        :title="state.preview === 'off' ? 'Remontrer les flous dans l\'aperçu' : 'Masquer les flous et les contours dans l\'aperçu, pour voir l\'image telle qu\'elle a été filmée. L\'export garde tous les flous.'"
+        :aria-label="state.preview === 'off' ? 'Remontrer les flous' : 'Masquer les flous dans l\'aperçu'" @click="toggleHidden"
+      ><Icon name="eyeOff" /></button>
+      <label class="dim field quality" :title="qualityTip"><span class="field-label">Qualité</span>
+        <select :value="shownQuality" aria-label="Qualité de l'aperçu" :disabled="!clip" @change="pickQuality(($event.target as HTMLSelectElement).value as Quality, $event)">
+          <option value="">rapide</option>
+          <option v-if="fineNow !== 'useless'" value="fine">{{ fineNow === "ready" ? "nette" : fineNow === "preparing" ? `nette (préparation : ${finePercent} %)` : "nette (à préparer, une fois)" }}</option>
+          <optgroup label="Image exacte, à l'arrêt">
+            <option value="blur">image exacte, floutée</option>
+            <option value="source">image exacte, sans flou</option>
+          </optgroup>
         </select>
       </label>
       <button
@@ -971,8 +1117,62 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
     <div v-if="!simple" class="legend" aria-label="Légende de l'image">
       <span v-if="!legend.length" class="legend-item none">{{ state.preview === "off" ? "Flous masqués" : "Aucun flou sur cette image" }}</span>
       <span v-for="key in legend" :key="key" class="legend-item" :title="legendInfo[key].help"><i class="sw" :class="`sw-${key}`" aria-hidden="true"></i>{{ legendInfo[key].label }}</span>
+      <span class="legend-note" :title="QUALITY_NOTE">Aperçu allégé : l'export garde la qualité d'origine</span>
       <span v-if="!zoomed" class="legend-tip">Molette : zoomer</span>
     </div>
+    <!-- lecteur simple : qualité, affichage et son, rangés derrière un seul petit bouton -->
+    <Teleport v-if="simple" to="body">
+      <Transition name="fade">
+        <div
+          v-if="playback.open" ref="panel" class="play-panel" role="dialog" aria-label="Réglages de lecture" data-play-panel
+          :style="panelStyle" @keydown.esc.stop.prevent="closePanel(true)"
+        >
+          <div class="pp-head">
+            <strong>Réglages de lecture</strong>
+            <button class="icon-btn bare" aria-label="Fermer les réglages de lecture" data-play-close @click="closePanel(true)"><Icon name="close" :size="14" /></button>
+          </div>
+          <fieldset class="pp-group">
+            <legend>Qualité de l'image</legend>
+            <label class="pp-choice" :class="{ on: level === 'fast' }">
+              <input type="radio" name="pp-quality" value="fast" :checked="level === 'fast'" @change="pickLevel('fast')" />
+              <span><strong>Rapide</strong><small>Fluide sur tous les ordinateurs.</small></span>
+            </label>
+            <label v-if="fineNow !== 'useless'" class="pp-choice" :class="{ on: level === 'fine' }">
+              <input type="radio" name="pp-quality" value="fine" :checked="level === 'fine'" @change="pickLevel('fine')" />
+              <span><strong>Nette</strong><small>{{ fineNow === "ready" ? "Plus de détails. Déjà prête pour cette vidéo." : "Plus de détails. À préparer une seule fois par vidéo : cela prend un moment." }}</small></span>
+            </label>
+            <label class="pp-choice" :class="{ on: level === 'exact' }">
+              <input type="radio" name="pp-quality" value="exact" :checked="level === 'exact'" @change="pickLevel('exact')" />
+              <span><strong>Image exacte</strong><small>À l'arrêt seulement&nbsp;: l'image telle qu'elle sera enregistrée.</small></span>
+            </label>
+            <p v-if="preparingFine" class="pp-status" role="status" data-fine-status>
+              <span class="spinner small"></span>
+              <span class="grow">Préparation de l'aperçu net&nbsp;: {{ finePercent }}&nbsp;%. La lecture continue en aperçu rapide. Vos modifications attendront la fin.</span>
+              <button class="small" data-fine-stop @click="cancelFine()">Arrêter</button>
+            </p>
+            <p class="pp-note">{{ QUALITY_NOTE }}</p>
+          </fieldset>
+          <div class="pp-group" role="group" aria-labelledby="pp-view">
+            <span id="pp-view" class="pp-title">Affichage</span>
+            <span class="joined pp-view">
+              <button :class="{ on: state.preview === 'blur' }" :aria-pressed="state.preview === 'blur'" data-view="blur" @click="state.preview = 'blur'"><Icon name="eye" />Flou</button>
+              <button :class="{ on: state.preview === 'boxes' }" :aria-pressed="state.preview === 'boxes'" data-view="boxes" @click="state.preview = 'boxes'"><Icon name="target" />Contours</button>
+              <button :class="{ on: state.preview === 'off' }" :aria-pressed="state.preview === 'off'" data-view="off" @click="state.preview = 'off'"><Icon name="eyeOff" />Rien</button>
+            </span>
+            <p class="pp-note">{{ state.preview === "off" ? "Les flous sont masqués ici seulement : la vidéo enregistrée les garde tous." : state.preview === "boxes" ? "Chaque flou est entouré : l'image dessous reste nette." : "Le flou tel qu'il sera dans la vidéo enregistrée." }}</p>
+          </div>
+          <div class="pp-group" role="group" aria-labelledby="pp-sound">
+            <span id="pp-sound" class="pp-title">Son</span>
+            <span class="volume pp-volume">
+              <button class="icon-btn" :class="{ on: userMuted }" :aria-pressed="userMuted" :aria-label="userMuted ? 'Rétablir le son' : 'Couper le son'" data-mute @click="toggleSound"><Icon :name="silent ? 'volumeOff' : 'volume'" /></button>
+              <input v-model.number="volume" type="range" min="0" max="100" step="1" aria-label="Volume" :aria-valuetext="`${volume} %`" />
+              <span class="mono volume-value">{{ volume }}&nbsp;%</span>
+            </span>
+            <p class="pp-note">Pour l'écoute ici seulement&nbsp;: le son de la vidéo enregistrée n'est pas modifié.</p>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -992,6 +1192,7 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
 .transport { flex-wrap: wrap; row-gap: 6px; }
 .group-name { flex: none; color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 .view-toggle { flex: none; min-width: 152px; }
+.hide-toggle { flex: none; }
 .legend { flex: none; display: flex; align-items: center; gap: 4px 14px; height: 16px; overflow: hidden; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .legend-item.none { color: var(--faint); }
@@ -1014,7 +1215,48 @@ defineExpose({ toggle, step, pause, snap, resetZoom });
   background: linear-gradient(90deg, #6b7380 0 33%, #8a929e 33% 66%, #5b626d 66%), #6b7380;
   background-size: 100% 50%; background-repeat: repeat-y;
 }
+.legend-note { margin-left: auto; color: var(--faint); }
+.legend-note + .legend-tip { margin-left: 0; }
+.left.portrait .legend-note { margin-left: 0; }
 @media (max-width: 1280px) {
   .legend-tip { display: none; }
 }
+
+/* === réglages de lecture : qualité de l'image, affichage, son === */
+.field.quality select { max-width: 150px; }
+.play-gear { position: absolute; z-index: 2; right: 10px; bottom: 10px; width: 36px; height: 36px; background: rgba(13, 14, 16, .8); border-color: var(--line-strong); opacity: .8; }
+.stage:hover .play-gear, .play-gear:focus-visible, .play-gear.on { opacity: 1; }
+.wiz-stage .snap-float { right: 54px; bottom: 12px; } /* la capture se range à gauche du bouton des réglages */
+.fine-chip {
+  position: absolute; z-index: 2; left: 10px; bottom: 10px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 11px;
+  background: rgba(13, 14, 16, .88); border: 1px solid var(--line-strong); border-radius: 999px; font-size: 13.5px; white-space: nowrap;
+}
+.fine-chip button.small { height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; }
+.stage.zoomed .fine-chip { bottom: 46px; }
+.play-panel {
+  position: fixed; z-index: 25; display: flex; flex-direction: column; gap: 14px; padding: 12px 14px 14px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-lg); box-shadow: 0 18px 50px rgba(0, 0, 0, .6);
+  font-size: 14px; line-height: 1.4;
+}
+.pp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pp-head strong { font-size: 15px; font-weight: 650; }
+.pp-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.pp-group legend, .pp-title { margin: 0 0 6px; padding: 0; color: var(--dim); font-size: 12.5px; font-weight: 600; }
+.pp-title { margin-bottom: 0; }
+.pp-choice { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer; transition: background-color var(--m-out) var(--ease), border-color var(--m-out) var(--ease); }
+.pp-choice:hover { border-color: var(--line-strong); }
+.pp-choice.on { background: var(--accent-soft); border-color: var(--accent-line); }
+.pp-choice input { flex: none; appearance: none; -webkit-appearance: none; width: 18px; height: 18px; margin: 1px 0 0; border-radius: 50%; background: var(--bg); border: 1px solid var(--line-strong); cursor: pointer; }
+.pp-choice input:checked { border: 5px solid var(--accent); background: var(--accent-ink); }
+.pp-choice strong { display: block; font-weight: 600; }
+.pp-choice small { display: block; color: var(--dim); font-size: 12.5px; line-height: 1.4; }
+.pp-note { color: var(--faint); font-size: 12.5px; line-height: 1.45; }
+.pp-status { display: flex; align-items: center; gap: 9px; padding: 8px 10px; background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--r-md); font-size: 13px; }
+.pp-status button.small { flex: none; height: 28px; padding: 0 10px; }
+.pp-view { display: flex; }
+.pp-view button { flex: 1; height: 36px; }
+.pp-volume { margin: 0; }
+.pp-volume .icon-btn { width: 36px; height: 36px; }
+.pp-volume input { flex: 1; width: auto; height: 26px; }
+.pp-volume .volume-value { display: inline; }
 </style>

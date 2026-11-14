@@ -36,6 +36,8 @@ const paths = {
   steps: '<circle cx="3.5" cy="8" r="1.75"/><circle cx="12.5" cy="8" r="1.75"/><path d="M5.25 8h1.5M9.25 8h1.5"/><circle cx="8" cy="8" r=".6" fill="currentColor"/>',
   sliders: '<path d="M2.5 4.5h4M9.5 4.5h4M2.5 11.5h7M12.5 11.5h1"/><circle cx="8" cy="4.5" r="1.5"/><circle cx="11" cy="11.5" r="1.5"/>',
   eye: '<path d="M1.5 8S4 3.75 8 3.75 14.5 8 14.5 8 12 12.25 8 12.25 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.9"/>',
+  /* flous masqués dans l'aperçu */
+  eyeOff: '<path d="M1.5 8S4 3.75 8 3.75 14.5 8 14.5 8 12 12.25 8 12.25 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.9"/><path d="m2.5 13.5 11-11"/>',
   clock: '<circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/>',
   refresh: '<path d="M13 8a5 5 0 1 1-1.6-3.65M13 2.75v2.5h-2.5"/>',
   folderOpen: '<path d="M1.75 12V4.25a1 1 0 0 1 1-1h3l1.5 1.75h5a1 1 0 0 1 1 1v1"/><path d="M1.9 12.5 3.6 8a1 1 0 0 1 .95-.7h9.2a.6.6 0 0 1 .57.8l-1.4 4.2a1 1 0 0 1-.95.7H2.75a.9.9 0 0 1-.85-.5z"/>',
@@ -54,6 +56,8 @@ const paths = {
   /* === fin : nouveau flux, mode avancé === */
   /* file d'attente : plusieurs vidéos à la suite */
   layers: '<path d="M8 2.25 14 5.4 8 8.55 2 5.4z"/><path d="m2.5 8.1 5.5 2.9 5.5-2.9M2.5 10.7 8 13.6l5.5-2.9"/>',
+  /* réglages de lecture (lecteur simple) */
+  gear: '<circle cx="8" cy="8" r="2"/><circle cx="8" cy="8" r="4.4"/><path d="M8 1.75v1.85M8 12.4v1.85M1.75 8H3.6M12.4 8h1.85M3.58 3.58l1.31 1.31M11.11 11.11l1.31 1.31M3.58 12.42l1.31-1.31M11.11 4.89l1.31-1.31"/>',
 } as const;
 export type IconName = keyof typeof paths;
 </script>

@@ -89,6 +89,37 @@ export async function followBlur(clip: string, time: number, box: number[], star
   await start("/api/follow", { clip, time, box, start: startAt, end: endAt });
 }
 
+// --- Tout à la main : aucun flou automatique, seuls les flous posés par l'utilisateur -----------
+
+/** Catégories floutées automatiquement dans le projet ouvert : "face", "plate", ou aucune. */
+export const autoKinds = computed<string[]>(() => (project.value?.settings.analysis.kinds as string[] | undefined) ?? []);
+/** Rien n'est flouté automatiquement : le projet ne demande aucune analyse, seul ce qui est
+ *  entouré à la main est flouté. */
+export const manualOnly = computed(() => !!project.value && autoKinds.value.length === 0);
+/** La contrepartie, dite avec les mêmes mots dans les deux modes. */
+export const MANUAL_WARNING = "Rien n'est flouté automatiquement : ce que vous n'entourez pas reste visible.";
+
+/** Choisit ce qui est flouté automatiquement (liste vide : tout se pose à la main). Les flous
+ *  automatiques d'une catégorie retirée disparaissent ; l'analyse est à refaire pour ce qui reste
+ *  ou revient. Vrai si le moteur a accepté. */
+export async function setAutoKinds(kinds: string[]): Promise<boolean> {
+  return !!(await send("PUT", "/api/settings", { analysis: { kinds } }));
+}
+
+/** Flou posé à la main dont le début et la fin se règlent : flou fixe, ou flou ajouté qui suit ce
+ *  qu'on a entouré (celui-là ne peut qu'être raccourci). */
+export function spanEditable(track: Track): boolean {
+  return track.source === "manual" || (track.source === "tracker" && track.kind === "manual");
+}
+
+/** Début et fin d'un flou posé à la main, en secondes de temps source du clip (annulable). Un flou
+ *  fixe se rallonge ou se raccourcit ; un flou qui suit ne peut qu'être raccourci. Vrai si accepté. */
+export async function setBlurSpan(clip: string, id: number, startAt: number, endAt: number): Promise<boolean> {
+  // un rien à l'intérieur : le moteur arrondit le début vers le bas et la fin vers le haut, et un
+  // instant tombé pile sur une image ne doit pas glisser sur sa voisine
+  return !!(await send("PATCH", "/api/tracks", { clip, id, span: [startAt + 1e-6, endAt - 1e-6] }));
+}
+
 // --- Corrections par lot ----------------------------------------------------------
 
 /** Retire (ou remet) plusieurs flous d'un clip en une seule action annulable. */
@@ -268,7 +299,7 @@ export function installDrop(open: (paths: string[]) => void): void {
 // L'interface parle de « flou » partout (jamais de « zone », « détection » ou « piste ») et
 // remplace les scores chiffrés par trois niveaux. Règle unique, utilisée par les deux modes.
 
-export type Confidence = "sur" | "verifier" | "douteux" | "ecarte" | "main";
+export type Confidence = "sur" | "verifier" | "douteux" | "ecarte" | "main" | "retrouve";
 
 export const confidenceInfo: Record<Confidence, { label: string; help: string }> = {
   sur: { label: "sûr", help: "Le logiciel est sûr de ce qu'il a trouvé." },
@@ -276,10 +307,12 @@ export const confidenceInfo: Record<Confidence, { label: string; help: string }>
   douteux: { label: "douteux", help: "Le logiciel hésite beaucoup : c'est peut-être une erreur." },
   ecarte: { label: "non flouté", help: "Trop peu sûr pour être flouté. Vous pouvez le flouter quand même." },
   main: { label: "ajouté par vous", help: "Flou que vous avez ajouté ou objet que vous avez désigné." },
+  retrouve: { label: "retrouvé par le logiciel", help: "Le logiciel a cru retrouver l'objet ici, tout seul, après une coupure ou une perte. Il a pu se tromper d'objet : regardez, et retirez ce flou s'il n'est pas au bon endroit." },
 };
 
 /** Niveau de confiance d'un flou, d'après son score habituel (médian) sur toute sa durée. */
 export function confidence(track: Track): Confidence {
+  if (track.reacquired) return "retrouve"; // une supposition du logiciel, pas un flou posé par l'utilisateur
   if (track.source !== "auto") return "main";
   if (track.below_min_score && !track.forced) return "ecarte";
   if (track.score >= 0.6) return "sur";

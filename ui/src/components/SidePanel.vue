@@ -2,7 +2,7 @@
 // Panneau latéral : vérification, flous de l'image affichée (et endroits à ne jamais flouter), réglages.
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import type { Track, Tune } from "../api";
-import { applyProfile, applyTune, presetInfo, removeIgnoreZone, saveProfile, tuneGain, tuneSuggestion } from "../extras";
+import { applyProfile, applyTune, autoKinds, MANUAL_WARNING, manualOnly, presetInfo, removeIgnoreZone, saveProfile, setAutoKinds, setBlurSpan, spanEditable, tuneGain, tuneSuggestion } from "../extras";
 import { byDoubt, displayName, kindFilters, matchesKind, panels, placeOf, type KindFilter } from "../blurs";
 import { pending } from "../review";
 import BlurRow from "./BlurRow.vue";
@@ -10,8 +10,8 @@ import Icon from "./Icon.vue";
 import PresetChoice from "./PresetChoice.vue";
 import ReviewPanel from "./ReviewPanel.vue";
 import {
-  busy, clipById, current, deleteTrack, droppedHere, kindLabel, notify, patchTrack, project, removeMute, saveManual,
-  send, start, state, tracksNow,
+  busy, clipById, current, deleteTrack, droppedHere, kindLabel, needsAnalysis, notify, patchTrack, project, removeMute,
+  send, start, state, trackById, tracksNow,
 } from "../store";
 
 const tab = computed({ get: () => state.tab, set: (value) => (state.tab = value) });
@@ -30,9 +30,21 @@ const sourceTime = computed(() => (current.value ? state.frame / current.value.f
 const filter = ref<KindFilter>("all");
 // flous appliqués (ou retirés à la main) à l'image affichée, du plus douteux au plus sûr ; ceux
 // qui sont trop peu sûrs pour être floutés sont listés à part
-const tracksHere = computed<Track[]>(() =>
-  tracksNow.value.filter((tr) => !tr.below_min_score).sort((a, b) => Number(a.disabled) - Number(b.disabled) || byDoubt(a, b)),
-);
+const tracksHere = computed<Track[]>(() => {
+  const list = tracksNow.value.filter((tr) => !tr.below_min_score);
+  // Le flou posé à la main qui est sélectionné reste dans la liste même hors de l'image affichée :
+  // c'est depuis une autre image qu'on règle son début ou sa fin.
+  const sel = state.selectedTrack;
+  if (sel && sel.clip === current.value?.clip.id && !list.some((t) => t.id === sel.id)) {
+    const kept = trackById(sel.clip, sel.id);
+    if (kept && spanEditable(kept)) list.push(kept);
+  }
+  return list.sort((a, b) => Number(a.disabled) - Number(b.disabled) || byDoubt(a, b));
+});
+/** Le flou est-il présent à l'image affichée ? (Un flou posé à la main sélectionné peut ne pas l'être.) */
+function hereNow(tr: Track): boolean {
+  return tracksNow.value.some((t) => t.id === tr.id);
+}
 const shownHere = computed(() => tracksHere.value.filter((tr) => matchesKind(tr, filter.value)));
 function countOf(f: KindFilter): number {
   return tracksHere.value.filter((tr) => matchesKind(tr, f)).length;
@@ -150,18 +162,24 @@ async function extend(tr: Track, side: "extend_before_s" | "extend_after_s", del
   const value = Math.max(0, Math.round(((tr[side] ?? general) + delta) * 100) / 100);
   await patchTrack(current.value!.clip.id, tr.id, { [side]: value });
 }
+/** « Début = cette image » / « Fin = cette image » d'un flou posé à la main. Un flou fixe se
+ *  rallonge ou se raccourcit ; un flou qui suit ce qu'on a entouré ne peut qu'être raccourci. */
 async function setEdge(tr: Track, edge: "start" | "end"): Promise<void> {
-  if (!tr.keyframes || !current.value) return;
+  const s = current.value;
+  if (!s) return;
   const t = sourceTime.value;
-  const frames = tr.keyframes.map((k) => [...k]);
-  const inside = edge === "start" ? frames.filter((k) => k[0] > t) : frames.filter((k) => k[0] < t);
-  const anchor = edge === "start" ? frames[0] : frames[frames.length - 1];
-  if (!inside.length) {
-    notify(edge === "start" ? "Le début doit être avant la fin du flou." : "La fin doit être après le début du flou.");
-    return;
+  const half = 0.5 / s.fps;
+  if (edge === "start" && t > tr.end - half) return notify("Le début doit être avant la fin du flou.");
+  if (edge === "end" && t < tr.start + half) return notify("La fin doit être après le début du flou.");
+  if (tr.source === "tracker" && (t < tr.start - half || t > tr.end + half)) {
+    return notify("Ce flou suit ce que vous avez entouré : il ne peut qu'être raccourci. Placez-vous sur une image où il est présent.");
   }
-  const moved = [t, ...anchor.slice(1)];
-  await saveManual(current.value.clip.id, edge === "start" ? [moved, ...inside] : [...inside, moved], tr.id);
+  await setBlurSpan(s.clip.id, tr.id, edge === "start" ? t : tr.start, edge === "end" ? t : tr.end);
+}
+/** « 0:12,4 » : instant du clip, au dixième de seconde. */
+function precise(x: number): string {
+  const tenths = Math.round(x * 10);
+  return `${Math.floor(tenths / 600)}:${String(Math.floor((tenths % 600) / 10)).padStart(2, "0")},${tenths % 10}`;
 }
 function redraw(tr: Track): void {
   select(tr);
@@ -171,6 +189,34 @@ function seconds(x: number): string {
   return `${x.toFixed(1).replace(".", ",")} s`;
 }
 const mutesList = computed(() => (project.value?.mutes ?? []).map((m, index) => ({ ...m, index, name: clipById(m.clip)?.name ?? m.clip })));
+
+// --- Flous automatiques : visages, plaques, ou aucun (tout se pose à la main) ---
+// Retirer une catégorie fait disparaître ses flous automatiques : on le dit et on demande avant.
+const kindsAsk = ref<string[] | null>(null); // choix en attente de confirmation
+const shownKinds = computed(() => kindsAsk.value ?? autoKinds.value);
+/** Catégories qui disparaîtraient avec le choix en attente. */
+const kindsGone = computed(() => autoKinds.value.filter((k) => !(kindsAsk.value ?? autoKinds.value).includes(k)));
+/** « des visages et des plaques », « les plaques »… */
+function kindWords(kinds: string[], article: "des" | "les"): string {
+  return kinds.map((k) => `${article} ${k === "face" ? "visages" : "plaques"}`).join(" et ");
+}
+function hasAutoBlurs(kind: string): boolean {
+  return Object.values(project.value?.tracks ?? {}).some((list) => list.some((t) => t.source === "auto" && t.kind === kind));
+}
+/** Coche ou décoche une catégorie ("none" : les deux d'un coup). */
+function toggleKind(kind: "face" | "plate" | "none", on: boolean): void {
+  const wanted = kind === "none" ? [] : ["face", "plate"].filter((k) => (k === kind ? on : shownKinds.value.includes(k)));
+  if (wanted.join() === autoKinds.value.join()) return void (kindsAsk.value = null); // retour au choix du projet
+  if (autoKinds.value.some((k) => !wanted.includes(k) && hasAutoBlurs(k))) kindsAsk.value = wanted; // des flous vont disparaître
+  else void applyKinds(wanted);
+}
+async function applyKinds(wanted: string[]): Promise<void> {
+  kindsAsk.value = null;
+  if (!(await setAutoKinds(wanted))) return; // refusé : le message est affiché
+  if (!wanted.length) notify("Plus aucun flou automatique : vous posez tous les flous à la main. Pour revenir en arrière : Annuler (Ctrl+Z).");
+  else if (needsAnalysis.value) notify(`Choix enregistré. Relancez « Analyser » : l'analyse est à refaire pour ${kindWords(wanted, "les")}.`);
+}
+watch(() => project.value?.path, () => (kindsAsk.value = null));
 
 // --- Réglages ---
 const blur = reactive<Record<string, string | number | boolean>>({});
@@ -410,19 +456,36 @@ async function confirmProfile(): Promise<void> {
                   <template v-if="tr.disabled">retiré</template>
                   <template v-else-if="tr.kind === 'dash' && tr.source === 'manual'">flou fixe</template>
                   <template v-else-if="tr.source === 'manual'">ajouté à la main</template>
+                  <template v-else-if="tr.source === 'tracker' && tr.reacquired">après une coupure ou une perte : peut-être pas le bon objet</template>
                   <template v-else-if="tr.source === 'tracker'">suit ce que vous avez entouré</template>
                   <span v-if="tr.forced" class="tag" title="Flouté bien que le logiciel soit peu sûr">flouté quand même</span>
+                  <span v-if="!hereNow(tr)" class="tag" title="Ce flou n'est pas présent à l'image affichée. Il reste listé tant qu'il est sélectionné, pour régler son début ou sa fin.">pas sur cette image</span>
                 </span>
               </BlurRow>
+              <!-- morceau qu'une ancienne recherche automatique a « retrouvé » : une supposition, à retirer d'un clic si elle est fausse -->
+              <button
+                v-if="tr.reacquired && !tr.disabled" class="small danger" data-reacquired :disabled="busy"
+                title="Le logiciel a cru retrouver l'objet ici, tout seul, après une coupure ou une perte. S'il s'est trompé d'objet, retirez ce flou."
+                :aria-label="`Retirer le flou ${displayName(tr)}, retrouvé par le logiciel`" @click.stop="patchTrack(current!.clip.id, tr.id, { disabled: true })"
+              >Retirer</button>
             </div>
             <div v-if="isSelected(tr)" class="actions">
+              <!-- flou posé à la main : son début et sa fin, réglés d'après l'image affichée -->
+              <p v-if="spanEditable(tr)" class="span-line" data-span>
+                Commence à <span class="mono">{{ precise(tr.start) }}</span>, finit à <span class="mono">{{ precise(tr.end) }}</span>
+                <small v-if="tr.source === 'tracker'">Ce flou suit ce que vous avez entouré : il ne peut qu'être raccourci.</small>
+              </p>
               <template v-if="tr.source === 'manual'">
-                <button :disabled="busy" title="Le flou commence à l'image affichée" @click.stop="setEdge(tr, 'start')">Début = cette image</button>
-                <button :disabled="busy" title="Le flou finit à l'image affichée" @click.stop="setEdge(tr, 'end')">Fin = cette image</button>
+                <button :disabled="busy" data-span-start title="Le flou commence à l'image affichée" @click.stop="setEdge(tr, 'start')">Début = cette image</button>
+                <button :disabled="busy" data-span-end title="Le flou finit à l'image affichée" @click.stop="setEdge(tr, 'end')">Fin = cette image</button>
                 <button :disabled="busy" title="Retracer le rectangle sur l'image affichée : le flou se déplacera progressivement jusqu'ici" @click.stop="redraw(tr)">Déplacer ici…</button>
                 <button class="danger" :disabled="busy" @click.stop="deleteTrack(current!.clip.id, tr.id)"><Icon name="trash" />Supprimer</button>
               </template>
               <template v-else>
+                <template v-if="spanEditable(tr)">
+                  <button :disabled="busy || !hereNow(tr)" data-span-start title="Le flou commence à l'image affichée (il ne peut qu'être raccourci)" @click.stop="setEdge(tr, 'start')">Début = cette image</button>
+                  <button :disabled="busy || !hereNow(tr)" data-span-end title="Le flou finit à l'image affichée (il ne peut qu'être raccourci)" @click.stop="setEdge(tr, 'end')">Fin = cette image</button>
+                </template>
                 <div class="stepper" title="Le flou commence un peu avant que l'objet soit vu"><span class="stepper-label">Avant</span>
                   <button :disabled="busy" aria-label="Commencer le flou plus tard" @click.stop="extend(tr, 'extend_before_s', -0.5)">−</button>
                   <span class="mono">{{ seconds(tr.extend_before_s ?? Number(blur.extend_s)) }}</span>
@@ -481,6 +544,24 @@ async function confirmProfile(): Promise<void> {
       </section>
 
       <section v-else key="settings" class="pane settings">
+        <!-- ce que le logiciel floute tout seul : visages, plaques, ou rien (tout se pose à la main) -->
+        <h4>Flous automatiques</h4>
+        <p class="help">Ce que le logiciel cherche et floute tout seul pendant l'analyse.</p>
+        <label>Visages <input type="checkbox" data-auto="face" :checked="shownKinds.includes('face')" :disabled="busy" @change="toggleKind('face', ($event.target as HTMLInputElement).checked)" /></label>
+        <label>Plaques <input type="checkbox" data-auto="plate" :checked="shownKinds.includes('plate')" :disabled="busy" @change="toggleKind('plate', ($event.target as HTMLInputElement).checked)" /></label>
+        <div v-if="kindsAsk" class="profile-ask" role="alert" data-auto-ask>
+          <p>Les flous automatiques {{ kindWords(kindsGone, "des") }} seront retirés du projet. Si vous recochez la case plus tard, l'analyse sera à refaire.{{ kindsAsk.length ? ` L'analyse est aussi à refaire pour ${kindWords(kindsAsk, "les")}.` : "" }}</p>
+          <p v-if="!kindsAsk.length"><strong>{{ MANUAL_WARNING }}</strong></p>
+          <span class="row">
+            <button class="small attention" data-auto-confirm :disabled="busy" @click="applyKinds(kindsAsk)">Retirer ces flous</button>
+            <button class="small" data-auto-cancel @click="kindsAsk = null">Annuler</button>
+          </span>
+        </div>
+        <p v-else-if="manualOnly" class="note warn" data-auto-none>
+          <Icon name="alert" /><span><strong>Aucun : je pose tout à la main.</strong> {{ MANUAL_WARNING }} Les flous s'ajoutent avec « Ajouter un flou », dans l'onglet « Flous » ou « Vérification ».</span>
+        </p>
+        <button v-else class="wrap" data-auto-off :disabled="busy" title="Plus rien n'est cherché automatiquement : seul ce que vous entourez est flouté. Évite les flous posés à tort (arbre, reflet…)." @click="toggleKind('none', false)">Aucun : je pose tout à la main</button>
+
         <h4>Flou</h4>
         <p class="help">Appliqué au prochain export, sans refaire l'analyse.</p>
         <label>Type de flou
@@ -547,6 +628,15 @@ async function confirmProfile(): Promise<void> {
               <option value="largest">la plus grande résolution et fréquence</option>
             </select>
           </label>
+        </template>
+        <!-- objets suivis (compteur, téléphone…) : le logiciel les cherche-t-il seul après une coupure ? -->
+        <template v-if="project?.settings.blur.dash_reacquire !== undefined">
+          <h4>Objets suivis</h4>
+          <label>Rechercher l'objet tout seul après une coupure <input v-model="blur.dash_reacquire" type="checkbox" data-reacquire aria-describedby="reacquire-help" :disabled="busy" @change="saveBlur" /></label>
+          <p id="reacquire-help" class="help">
+            <strong>Décoché (conseillé)</strong> : quand l'objet suivi disparaît ou après un changement de plan, le flou s'arrête et une alerte vous demande de le remontrer.
+            <strong>Coché</strong> : le logiciel essaie de le retrouver tout seul, mais il peut se tromper d'objet (un rétroviseur pris pour le compteur). Les morceaux retrouvés ainsi sont marqués « retrouvé par le logiciel » dans la liste des flous. S'applique aux prochains suivis.
+          </p>
         </template>
         <h4>Analyse</h4>
         <PresetChoice />
@@ -647,6 +737,13 @@ async function confirmProfile(): Promise<void> {
 /* régler d'après mes corrections : la proposition, en clair */
 .tune-ask p[title] { cursor: help; }
 .tune-ask p.dim { color: var(--dim); }
+
+/* flou posé à la main sélectionné : son début et sa fin */
+.zones .actions .span-line { flex: 1 0 100%; margin: 0; color: var(--dim); font-size: 12px; line-height: 1.45; }
+.span-line .mono { color: var(--text); }
+.span-line small { display: block; color: var(--faint); font-size: 11.5px; }
+.zones .head > button.small { flex: none; margin-top: 4px; }
+.settings .help strong { color: var(--text); font-weight: 600; }
 
 /* === nouveau flux : endroits à ne jamais flouter === */
 .ignore-tool { align-self: stretch; }

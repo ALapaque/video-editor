@@ -24,6 +24,7 @@ export const state = reactive({
   selected: -1, // passage sélectionné dans la timeline
   selectedTrack: null as { clip: string; id: number } | null,
   tool: "none" as "none" | "manual" | "dash" | "redraw",
+  toolHint: "", // consigne affichée sur l'image pendant le tracé, à la place de la consigne habituelle (mode simple)
   preview: "boxes" as "boxes" | "blur" | "off",
   muteIn: null as number | null, // début d'un passage muet en cours de pose (temps du montage)
   toast: "",
@@ -200,12 +201,14 @@ export function apply(next: State): void {
     // nouveau traitement : le dialogue de progression s'ouvre, même s'il avait été réduit avant
     // (en mode simple, la progression s'affiche dans la page de l'assistant, sans dialogue)
     // (la file d'attente a son propre dialogue, dans les deux modes : voir batch.ts)
-    state.jobOpen = state.mode !== "simple" && next.job?.kind !== "batch";
+    // (un traitement discret, comme l'aperçu net, ne l'ouvre pas : la lecture continue)
+    state.jobOpen = state.mode !== "simple" && next.job?.kind !== "batch" && !quiet;
     state.jobFinished = false;
   } else if (was && !now && next.job) {
     // un aperçu prêt n'a rien à dire : son dialogue se ferme seul ; sinon le résultat reste affiché,
     // ou attend dans l'indicateur si le dialogue était réduit
-    if (next.job.kind === "proxy" && next.job.state === "done") state.jobOpen = false;
+    if (quiet) state.jobOpen = false; // celui qui l'a lancé dit lui-même comment il a fini
+    else if (next.job.kind === "proxy" && next.job.state === "done") state.jobOpen = false;
     else if (next.job.kind === "batch") state.jobOpen = false; // son dialogue montre le résultat
     else if (!state.jobOpen) state.jobFinished = true;
   } else if (!next.job) {
@@ -236,9 +239,10 @@ export async function refresh(): Promise<void> {
     state.loaded = true;
     const job = next.job;
     // dialogue de progression ouvert : il affiche lui-même le résultat ; réduit : message habituel
-    if (before === "running" && job && job.state !== "running" && job.message && !state.jobOpen && state.mode !== "simple" && job.kind !== "batch") {
+    if (before === "running" && job && job.state !== "running" && job.message && !state.jobOpen && state.mode !== "simple" && job.kind !== "batch" && !quiet) {
       notify(job.message, job.state === "error" ? "error" : "info", true); // reste affiché jusqu'au clic
     }
+    if (job?.state !== "running") quiet = false;
     if (next.project && !job?.state.startsWith("run") && next.project.clips.some((c) => !c.proxy && !c.missing)) {
       if (job?.state !== "error" && job?.state !== "cancelled") await send("POST", "/api/proxies");
     }
@@ -256,6 +260,18 @@ export async function refresh(): Promise<void> {
 
 export async function start(url: string, body?: unknown): Promise<void> {
   if (await send("POST", url, body ?? {})) void refresh();
+}
+
+/** Traitement discret en cours : lancé sans dialogue de progression, sans message de fin. */
+let quiet = false;
+/** Lance un traitement discret (aperçu net) : aucun dialogue ne s'ouvre et la lecture continue ;
+ *  celui qui le lance suit lui-même son avancement et sa fin. Vrai s'il a démarré. */
+export async function startQuiet(url: string, body?: unknown): Promise<boolean> {
+  quiet = true;
+  const started = !!(await send("POST", url, body ?? {}));
+  if (started) void refresh();
+  else quiet = false;
+  return started;
 }
 
 // --- Montage ----------------------------------------------------------------
