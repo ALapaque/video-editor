@@ -189,7 +189,7 @@ def test_tracking_stops_at_a_cut_finds_the_object_again_and_never_follows_the_mi
     project, truth = shots
     clip = project.clips[0]
     f = clip.video.frame_pts
-    tracks = dash.track_from_click(project, clip, round(10 * f), truth[10])
+    tracks = dash.track_from_click(project, clip, round(10 * f), truth[10], reacquire=True)
     by_frame = {round(o[0] / f): o for t in tracks for o in t.obs}
     # plan A : suivi correct
     assert all(_iou(by_frame[i][1:5], truth[i]) > 0.6 for i in range(0, 30)), "plan A"
@@ -235,3 +235,52 @@ def test_designating_again_corrects_only_that_shot(shots, tracker_available):
     assert after == before
     covered = {round(o[0] / f) for t in dash.dash_tracks(project, clip, "tracker") for o in t.obs}
     assert set(range(30, 60)) <= covered
+
+
+def test_by_default_nothing_is_guessed_after_a_cut(shots, tracker_available):
+    """Sans recherche automatique : le suivi s'arrête à la coupure, rien n'est flouté au hasard
+    dans le plan suivant (ni le compteur, ni le rétroviseur), et une alerte le signale."""
+    project, truth = shots
+    clip = project.clips[0]
+    f = clip.video.frame_pts
+    assert project.blur_settings.dash_reacquire is False
+    tracks = dash.track_from_click(project, clip, round(10 * f), truth[10])
+    assert len(tracks) == 1 and tracks[0].reacquired_at is None
+    frames = sorted(round(o[0] / f) for o in tracks[0].obs)
+    assert frames[0] == 0 and frames[-1] == 29  # tout le plan A, pas au-delà
+    assert all(_iou(o[1:5], truth[round(o[0] / f)]) > 0.6 for o in tracks[0].obs)
+    assert tracks[0].extend_after_s == 0.0
+    from moto_blur.postprocess import ZoneIndex
+
+    index = ZoneIndex(project.analysis[clip.id].tracks, project.blur_settings, clip.video)
+    assert all(not index.shaped(round(i * f)) for i in range(31, 90))  # plans B et C : aucun flou
+    review = dash.build_dash_review(clip, project.analysis[clip.id].tracks)
+    assert len(review) == 1 and review[0]["risk"] is True
+    assert review[0]["reasons"][0].startswith("objet « compteur » non suivi")
+    assert round(review[0]["start_pts"] / f) <= 31 and round(review[0]["end_pts"] / f) >= 88
+    assert dash.missing_span(project, clip) == []  # le reste est noté comme parcouru
+    text = dash.describe("compteur", tracks, clip)
+    assert "non suivi (et donc non flouté)" in text and "alerte" in text
+    # l'utilisateur le remontre dans le plan B : ce plan seulement est suivi, l'alerte se réduit au plan C
+    created = dash.track_from_click(project, clip, round(45 * f), truth[45])
+    covered = sorted(round(o[0] / f) for t in created for o in t.obs)
+    assert covered[0] >= 30 and covered[-1] <= 59
+    review = dash.build_dash_review(clip, project.analysis[clip.id].tracks)
+    assert [r["reasons"][0][:28] for r in review] == ["objet « compteur » non suivi"]
+    assert round(review[0]["start_pts"] / f) >= 59
+
+
+def test_a_guessed_piece_can_be_removed_and_becomes_an_alert(shots, tracker_available):
+    """Un morceau « retrouvé » par le logiciel se retire ; l'endroit redevient une alerte."""
+    project, truth = shots
+    clip = project.clips[0]
+    f = clip.video.frame_pts
+    tracks = dash.track_from_click(project, clip, round(10 * f), truth[10], reacquire=True)
+    guessed = next(t for t in tracks if t.reacquired_at is not None)
+    guessed.disabled = True
+    from moto_blur.postprocess import ZoneIndex
+
+    index = ZoneIndex(project.analysis[clip.id].tracks, project.blur_settings, clip.video)
+    assert not index.shaped(round(45 * f))  # plus de flou dans le plan B
+    reasons = [r["reasons"][0] for r in dash.build_dash_review(clip, project.analysis[clip.id].tracks)]
+    assert len(reasons) == 1 and reasons[0].startswith("objet « compteur » non suivi")

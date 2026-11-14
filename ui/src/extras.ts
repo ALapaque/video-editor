@@ -374,7 +374,9 @@ export const beforeExport = computed(() => ({
 export async function removeBlur(clip: string, id: number, group: number[] = []): Promise<void> {
   const track = trackById(clip, id);
   if (!track || track.disabled) return;
-  if (track.source !== "auto") {
+  // Un flou que vous avez posé vous-même ne part pas d'un clic ; un morceau que le logiciel a
+  // « retrouvé » tout seul (une supposition), si.
+  if (track.source !== "auto" && !track.reacquired) {
     notify("Ce flou a été ajouté par vous : supprimez-le depuis la liste des flous.");
     return;
   }
@@ -382,7 +384,7 @@ export async function removeBlur(clip: string, id: number, group: number[] = [])
   // en une seule action, pour que « cliquez dessus, il disparaît » soit vrai.
   const others = group.filter((g) => {
     const t = trackById(clip, g);
-    return g !== id && !!t && t.source === "auto" && !t.disabled;
+    return g !== id && !!t && (t.source === "auto" || !!t.reacquired) && !t.disabled;
   });
   if (!(await send("PATCH", "/api/tracks", { clip, ids: [id, ...others], disabled: true }))) return;
   let similar: number[] = [];

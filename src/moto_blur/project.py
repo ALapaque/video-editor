@@ -149,6 +149,10 @@ class BlurSettings:
     dash_shape: str = "rounded"
     # Marge du compteur suivi : plus faible, c'est un grand objet dont la boîte est fiable.
     dash_margin: float = 0.08
+    # Après une coupure ou une perte, rechercher l'objet suivi dans toute l'image d'après son
+    # aspect. Coupé par défaut : la recherche peut se tromper d'objet (un rétroviseur pris pour
+    # le compteur). Sans elle, le flou s'arrête et une alerte demande de remontrer l'objet.
+    dash_reacquire: bool = False
     # Largeur du bord adouci des ellipses, en fraction de leur rayon.
     feather: float = 0.12
     # Score minimal qu'une piste détectée doit atteindre au moins une fois pour être floutée.

@@ -280,7 +280,8 @@ def cmd_dash(args: argparse.Namespace) -> int:
         total = round((span[1] - span[0]) * clip.video.tb * clip.video.fps_fraction)
         name = dash.object_name(args.name)
         progress = Progress(f"Suivi de « {name} » {clip.id}", total, float(clip.video.fps_fraction))
-        tracks = dash.track_from_click(project, clip, seed, box, args.direction, progress, name, args.scope)
+        tracks = dash.track_from_click(project, clip, seed, box, args.direction, progress, name, args.scope,
+                                       args.reacquire or project.blur_settings.dash_reacquire)
         print(progress.close())
         print(dash.describe(name, tracks, clip))
     refresh_review(project)
@@ -465,6 +466,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scope", choices=["auto", "all", "shot"], default="auto",
                    help="all : tout le clip, en retrouvant l'objet après chaque changement de plan ; "
                    "shot : seulement le plan de l'image donnée (correction) ; auto (défaut) : shot si l'objet est déjà suivi")
+    p.add_argument("--reacquire", action="store_true",
+                   help="rechercher l'objet après une coupure ou une perte (peut se tromper d'objet ; coupé par défaut)")
     p.add_argument("--fixed", action="store_true", help="zone fixe sur tout le clip, sans suivi")
     p.add_argument("--direction", choices=["both", "forward", "backward"], default="both", help="sens du suivi à partir de l'image donnée")
     p.add_argument("--clear", action="store_true", help="supprimer les zones de l'objet nommé (ou de tous les objets sans --name)")
