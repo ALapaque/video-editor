@@ -111,9 +111,19 @@ class AnalysisSettings:
     detect_every: int = 1
     # Durée maximale pendant laquelle une piste perdue peut être retrouvée (trou comblé).
     max_gap_s: float = 1.0
+    # Tuiles fines une image sur N ; la passe d'ensemble (image entière) reste faite sur toutes.
+    # 1 = tuiles sur chaque image. 2 : presque deux fois plus rapide ; un petit objet lointain,
+    # que seules les tuiles voient, doit alors rester à l'écran un peu plus longtemps pour être vu.
+    tile_every: int = 1
 
     def signature(self) -> str:
-        blob = json.dumps(asdict(self), sort_keys=True).encode()
+        values = asdict(self)
+        # Réglages ajoutés après coup : absents de l'empreinte tant qu'ils gardent leur valeur
+        # d'origine, pour qu'un projet analysé avant leur existence ne soit pas réanalysé.
+        for name, default in (("tile_every", 1),):
+            if values.get(name) == default:
+                del values[name]
+        blob = json.dumps(values, sort_keys=True).encode()
         return hashlib.sha1(blob).hexdigest()[:12]
 
 

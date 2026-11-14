@@ -173,6 +173,51 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_measure(args: argparse.Namespace) -> int:
+    """Compare un autre réglage d'analyse au projet corrigé, ou propose des seuils de flou."""
+    from . import tuning
+    from .analyze import apply_preset
+
+    project = pj.load(Path(args.project_file))
+    facts = tuning.truth(project)
+    print(f"Projet corrigé : {len(facts['right'])} flous gardés, {len(facts['wrong'])} retirés par vous, "
+          f"{len(facts['added'])} ajoutés par vous, {len(facts['unknown'])} objets vus mais non floutés.")
+    if not (args.preset or args.face_model or args.plate_model or args.tile_every or args.detect_every):
+        s = tuning.suggest(project)
+        if not s["usable"]:
+            print(s["reason"])
+            return 0
+        print("Seuils de flou proposés (rien n'est réanalysé) :", ", ".join(f"{k} = {v}" for k, v in s["settings"].items()))
+        print(f"  faux flous que vous aviez retirés et qui ne seraient plus produits : {s['best']['wrong_avoided']} sur {s['corrections']} "
+              f"(aujourd'hui : {s['now']['wrong_avoided']})")
+        print(f"  flous gardés perdus : {s['best']['lost']} ; nouveaux flous jamais regardés : {s['best']['new']}")
+        return 0
+
+    def change(trial: pj.Project) -> None:
+        if args.preset:
+            apply_preset(trial, args.preset)
+        a = trial.analysis_settings
+        for name in ("face_model", "plate_model", "tile_every", "detect_every"):
+            if getattr(args, name):
+                setattr(a, name, getattr(args, name))
+
+    print("Réanalyse avec les réglages demandés (le projet n'est pas modifié)…")
+    print(tuning.describe(tuning.measure(project, change, device=args.device)))
+    return 0
+
+
+def cmd_batch(args: argparse.Namespace) -> int:
+    """Analyse plusieurs vidéos à la suite, chacune dans son propre projet."""
+    from . import batch
+
+    def on_item(index: int, total: int, name: str) -> None:
+        print(f"\n=== Vidéo {index + 1} sur {total} : {name} ===")
+
+    results = batch.run_batch([Path(p) for p in args.inputs], args.preset, args.profile, args.device, on_item)
+    print("\n" + batch.summary(results, len(args.inputs)))
+    return 0 if all(r["ok"] for r in results) else 1
+
+
 def cmd_dataset(args: argparse.Namespace) -> int:
     from .training import export_dataset
 
@@ -357,6 +402,23 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="afficher les passages à vérifier")
     p.add_argument("project_file", metavar="PROJET")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("batch", help="analyser plusieurs vidéos à la suite (file d'attente), chacune dans son propre projet")
+    p.add_argument("inputs", nargs="+", metavar="VIDEO|PROJET")
+    p.add_argument("--preset", choices=["normal", "difficile", "rapide"], help="préréglage d'analyse pour toutes les vidéos")
+    p.add_argument("--profile", action="store_true", help="reprendre le profil « ma moto » (réglages et objets suivis) pour les vidéos neuves")
+    p.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto")
+    p.set_defaults(func=cmd_batch)
+
+    p = sub.add_parser("measure", help="mesurer un réglage sur un projet corrigé : seuils de flou proposés, ou comparaison après réanalyse")
+    p.add_argument("project_file", metavar="PROJET")
+    p.add_argument("--preset", choices=["normal", "difficile", "rapide"], help="préréglage d'analyse à essayer")
+    p.add_argument("--face-model", help="modèle de visages à essayer")
+    p.add_argument("--plate-model", help="modèle de plaques à essayer (un modèle personnel, par exemple)")
+    p.add_argument("--tile-every", type=int, help="tuiles fines une image sur N (la passe d'ensemble reste sur toutes)")
+    p.add_argument("--detect-every", type=int, help="détecter une image sur N")
+    p.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto")
+    p.set_defaults(func=cmd_measure)
 
     p = sub.add_parser("dataset", help="exporter des images d'entraînement (plaques) à partir d'un projet vérifié")
     p.add_argument("project_file", metavar="PROJET")

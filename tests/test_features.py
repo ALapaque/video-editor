@@ -850,3 +850,121 @@ def test_context_detector_finds_people_and_vehicles():
     assert len(boxes) == len(scores) == len(classes) == 0
     assert context.score(detector, np.full((360, 640, 3), 120, dtype=np.uint8), "face", (300, 100, 330, 140)) == 0.0
     assert context.score(detector, np.full((360, 640, 3), 120, dtype=np.uint8), "plate", (300, 200, 380, 220)) == 0.0
+
+
+# --- Mesurer un réglage sur un projet corrigé -------------------------------------------------
+
+
+def _corrected_project(video_info):
+    """12 vrais visages gardés (score 0,55), 6 faux retirés par l'utilisateur (0,42, brefs),
+    1 flou forcé (0,22), 2 objets vus mais non floutés."""
+    def track(i, score, frames, **more):
+        return pj.Track(i, "face", [[k * F, 40 * i, 100, 40 * i + 30, 140, score] for k in range(frames)], **more)
+
+    tracks = [track(i, 0.55, 20) for i in range(1, 13)]
+    tracks += [track(i, 0.42, 4, disabled=True) for i in range(13, 19)]
+    tracks += [track(19, 0.22, 20, forced=True), track(20, 0.30, 20), track(21, 0.25, 20)]
+    p = pj.Project(clips=[pj.Clip("c1", "a.mp4", "x", video_info)], timeline=[pj.Segment("c1", 0, 5)])
+    p.analysis["c1"] = pj.ClipAnalysis("s", [], tracks)
+    return p
+
+
+def test_thresholds_suggested_from_corrections(video_info):
+    from moto_blur import tuning
+
+    p = _corrected_project(video_info)
+    facts = tuning.truth(p)
+    assert (len(facts["right"]), len(facts["wrong"]), len(facts["unknown"])) == (13, 6, 2)
+    now = tuning.evaluate(p, p.blur_settings)
+    assert now == {"kept": 12, "lost": 1, "wrong_avoided": 0, "wrong_left": 6, "new": 0}  # le forcé ne tient que par vous
+    s = tuning.suggest(p)
+    # impossible de garder le flou forcé (0,22) et d'écarter les faux (0,42) par le score seul :
+    # c'est le nombre d'images exigées qui les sépare (les faux ne durent que 4 images)
+    assert s["usable"] and s["best"]["lost"] == 0 and s["best"]["wrong_left"] == 0
+    assert s["settings"].get("min_hits", p.blur_settings.min_hits) >= 5 and s["settings"]["face_min_score"] <= 0.22
+    assert "plate_min_score" not in s["settings"]  # aucune plaque dans les corrections : on n'y touche pas
+    # sans correction, rien à apprendre
+    for t in p.analysis["c1"].tracks:
+        t.disabled = False
+    assert tuning.suggest(p)["usable"] is False
+
+
+def test_comparison_with_another_analysis(video_info):
+    from moto_blur import tuning
+
+    reference = _corrected_project(video_info)
+    candidate = _corrected_project(video_info)
+    tracks = candidate.analysis["c1"].tracks
+    for t in tracks:
+        t.disabled = t.forced = False
+    # le candidat ne voit plus deux des vrais visages, et ne produit plus trois des faux
+    candidate.analysis["c1"].tracks = [t for t in tracks if t.id not in (3, 7, 13, 14, 15)]
+    result = tuning.compare(reference, candidate)
+    assert result["lost"] == 3 and sorted(result["lost_ids"]) == [3, 7, 19]  # 19 : forcé par vous, trop peu sûr seul
+    assert result["kept"] == 10 and result["wrong_gone"] == 3 and result["wrong_back"] == 3  # trois faux flous reviennent
+    assert "PERDUS" in tuning.describe(result)
+
+
+# --- Tuiles fines une image sur deux ----------------------------------------------------------
+
+
+def test_fine_tiles_every_other_frame(tmp_path):
+    project = make_project(tmp_path, make_video(tmp_path / "v.mp4", frames=30))
+    assert pj.AnalysisSettings().signature() == pj.AnalysisSettings(tile_every=1).signature()
+    calls = {"full": 0, "light": 0}
+    inner = FakeDetector()
+
+    def detect(rgb):
+        calls["full"] += 1
+        return inner(rgb)
+
+    def light(rgb):
+        calls["light"] += 1
+        return inner(rgb)
+
+    detect.light = light
+    project.analysis_settings.tile_every = 2
+    analyze_project(project, detect_fn=detect)
+    assert calls == {"full": 15, "light": 15}
+    (track,) = project.analysis["c1"].tracks
+    assert len(track.obs) == 30
+    assert pj.load(project.path).analysis_settings.tile_every == 2
+    # réglage d'origine : la passe allégée n'est jamais appelée
+    calls.update(full=0, light=0)
+    project.analysis_settings.tile_every = 1
+    analyze_project(project, detect_fn=detect)
+    assert calls == {"full": 30, "light": 0}
+
+
+# --- File d'attente ---------------------------------------------------------------------------
+
+
+def test_queue_analyses_each_video_in_its_own_project(tmp_path):
+    from moto_blur import batch
+
+    a = make_video(tmp_path / "a.mp4", frames=30)
+    b = make_video(tmp_path / "b.mp4", frames=20)
+    (tmp_path / "abimee.mp4").write_bytes(b"pas une video")
+    seen = []
+    results = batch.run_batch(
+        [a, tmp_path / "abimee.mp4", b, tmp_path / "absente.mp4"], preset="rapide",
+        on_item=lambda i, n, name: seen.append((i, n, name)), detect_fn=FakeDetector(),
+    )
+    assert [r["ok"] for r in results] == [True, False, True, False]
+    assert "illisible" in results[1]["message"] and "introuvable" in results[3]["message"]
+    assert seen == [(0, 4, "a.mp4"), (1, 4, "abimee.mp4"), (2, 4, "b.mp4"), (3, 4, "absente.mp4")]
+    for name in ("a", "b"):
+        project = pj.load(tmp_path / f"{name}.motoblur.json")
+        assert project.preset == "rapide" and len(project.analysis["c1"].tracks) == 1
+        assert not needed_after(project)
+    assert [r["name"] for r in library.recent()] == ["b", "a"]
+    assert batch.summary(results, 4).startswith("2 vidéos analysées sur 4.")
+    # relancer la file ne refait rien
+    again = batch.run_batch([a, b], preset="rapide", detect_fn=FakeDetector(skip=set(range(1000))))
+    assert all(r["ok"] for r in again) and len(pj.load(tmp_path / "a.motoblur.json").analysis["c1"].tracks) == 1
+
+
+def needed_after(project):
+    from moto_blur.analyze import needed_intervals
+
+    return any(needed_intervals(project, c) for c in project.clips)
